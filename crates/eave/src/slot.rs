@@ -1,7 +1,6 @@
 //! The wrapper around every bar item. It turns clicks and scrolls the content didn't handle into
-//! messages, and reports where the item is, so a popover can open under it. A primary click counts
-//! on release, and only if it was short: a long press is for playing with the island, not for
-//! opening things.
+//! messages. A primary click counts on release, and only if it was short: a long press is for
+//! playing with the island, not for opening things.
 
 use std::time::Instant;
 
@@ -9,12 +8,9 @@ use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::{Element, Event, Length, Rectangle, Size, Vector};
 
-/// Item bounds plus the width of the bar it sits in, both in logical pixels.
-pub type OnPress<'a, M> = Box<dyn Fn(Rectangle, f32) -> M + 'a>;
-
 pub struct Slot<'a, M> {
     content: Element<'a, M>,
-    on_press: Option<OnPress<'a, M>>,
+    on_press: Option<M>,
     /// Sent when the content itself handles a primary click, e.g. a button inside the item.
     on_inner_press: Option<M>,
     on_secondary: Option<M>,
@@ -57,8 +53,8 @@ impl<'a, M> Slot<'a, M> {
         }
     }
 
-    pub fn on_press(mut self, f: impl Fn(Rectangle, f32) -> M + 'a) -> Self {
-        self.on_press = Some(Box::new(f));
+    pub fn on_press(mut self, message: M) -> Self {
+        self.on_press = Some(message);
         self
     }
 
@@ -171,7 +167,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slot<'_, M> {
             && cursor.is_over(layout.bounds())
             && let Some(on_press) = &self.on_press
         {
-            shell.publish(on_press(layout.bounds(), viewport.width));
+            shell.publish(on_press.clone());
             shell.capture_event();
             return;
         }

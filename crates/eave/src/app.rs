@@ -1,22 +1,20 @@
-//! The host: holds the widget instances, routes their messages, and owns every surface (the bar
-//! and the popover).
+//! The host: holds the widget instances, routes their messages, and owns the bar surfaces. A
+//! popover isn't a surface of its own: the island holding its item morphs into it, and the bar
+//! surface grows to make room while it's there.
 
 use eave_api::Registry;
 use eave_api::erased::{AnyMessage, ErasedWidget, PopoverRequest};
 use iced::alignment::Horizontal;
-use iced::widget::{Space, container, row, text};
+use iced::widget::{Space, container, row};
 use iced::{
-    Color, Element, Event, Length, Padding, Rectangle, Size, Subscription, Task, Theme, mouse,
-    theme, window,
+    Color, Element, Event, Length, Padding, Rectangle, Subscription, Task, Theme, mouse, theme,
+    window,
 };
-use iced_layershell::reexport::{
-    Anchor as Edge, KeyboardInteractivity, Layer, NewLayerShellSettings,
-};
+use iced_layershell::actions::ActionCallback;
 use iced_layershell::to_layer_message;
 
 use crate::config::{Config, Entry, Zone};
-use crate::island::Island;
-use crate::measure::Measure;
+use crate::island::{self, Island};
 use crate::slot::Slot;
 use crate::{kit, theme as style, watch};
 
@@ -28,9 +26,10 @@ pub struct Bar {
     /// Instances are addressed by id, not position, so a reload can't route a stale message to
     /// whichever widget now sits at the old index.
     next_id: u64,
-    popover: Option<Popover>,
-    /// Whether the pointer is over one of our surfaces (the bar or the popover), so a click that
-    /// Hyprland reports is ours to handle, not an outside one. Tracked only while a popover is open.
+    /// At most one open, plus any still morphing back into their islands.
+    popovers: Vec<Popover>,
+    /// Whether the pointer is over the bar, so a click that Hyprland reports is ours to handle,
+    /// not an outside one. Tracked only while a popover is open.
     pointer_inside: bool,
 }
 
@@ -41,39 +40,39 @@ struct Instance {
     widget: Box<dyn ErasedWidget>,
     /// Cached after every update, so drawing the bar never builds a popover just to ask.
     has_popover: bool,
-    /// Where the item was when last clicked, to place its popover.
-    anchor: Option<Anchor>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Anchor {
-    bounds: Rectangle,
-    bar_width: f32,
+    /// The bar the item was last clicked on, where its popover opens.
+    window: Option<window::Id>,
 }
 
 struct Popover {
     /// The id of the instance it belongs to.
     instance: u64,
+    /// The bar surface whose island it grows out of.
     window: window::Id,
-    /// Known once the panel has been measured. Until then the surface is 1×1 and nothing is drawn.
-    size: Option<Size>,
+    /// False while it morphs back into its island, until the island says it's done.
+    open: bool,
+    /// Where the island put it, in surface coordinates. The surface grows to fit it.
+    rect: Option<Rectangle>,
 }
 
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
     Widget(u64, AnyMessage),
-    /// A primary click on an item: its bounds, the bar width, and the item's own `on_press`.
-    Pressed(u64, Rectangle, f32, Option<AnyMessage>),
+    /// A primary click on an item: the bar it's on, and the item's own `on_press`.
+    Pressed(window::Id, u64, Option<AnyMessage>),
     /// A primary click on an item that something inside it handled, e.g. a workspace button.
     InnerPressed(u64),
     /// A primary click on the bar that nothing handled: empty space, or a plain item.
-    BarPressed(window::Id),
+    BarPressed,
     /// Hyprland saw a primary click somewhere ([`eave_hyprland::report_clicks`]).
     Clicked,
     PointerEntered,
     PointerLeft,
-    PopoverMeasured(Size),
+    /// An island placed the popover it's turning into.
+    PopoverPlaced(u64, Rectangle),
+    /// An island finished turning back from a popover.
+    PopoverClosed(u64),
     WindowClosed(window::Id),
     /// `config.toml` changed on disk: the new contents, or why they couldn't be loaded.
     ConfigChanged(Result<Config, String>),
@@ -86,7 +85,7 @@ impl Bar {
             config: Config::default(),
             instances: Vec::new(),
             next_id: 0,
-            popover: None,
+            popovers: Vec::new(),
             pointer_inside: false,
         };
         let task = bar.apply(config);
@@ -124,18 +123,19 @@ impl Bar {
                         entry: entry.clone(),
                         has_popover: widget.popover().is_some(),
                         widget,
-                        anchor: None,
+                        window: None,
                     });
                 }
                 Err(error) => eprintln!("eave: widget `{}`: {error}, skipping it", entry.widget),
             }
         }
 
-        if let Some(popover) = &self.popover
-            && self.find(popover.instance).is_none()
-        {
-            tasks.push(self.close_popover());
-        }
+        // A popover whose instance is gone has no island left to morph back into.
+        let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.popovers)
+            .into_iter()
+            .partition(|popover| self.find(popover.instance).is_some());
+        self.popovers = kept;
+        tasks.extend(gone.iter().map(|popover| self.fit(popover.window)));
         self.config = config;
         Task::batch(tasks)
     }
@@ -148,72 +148,111 @@ impl Bar {
         self.instances.iter_mut().find(|instance| instance.id == id)
     }
 
-    fn open_popover(&mut self, id: u64) -> Task<Message> {
+    fn open_popover(&mut self, id: u64) {
         let Some(instance) = self.find(id) else {
-            return Task::none();
+            return;
         };
         if !instance.has_popover {
-            return Task::none();
+            return;
         }
-        let Some(anchor) = instance.anchor else {
+        let Some(window) = instance.window else {
             eprintln!(
                 "eave: a widget asked for its popover before its item was ever clicked; not opening it"
             );
-            return Task::none();
+            return;
         };
+        let zone = instance.entry.zone;
 
-        let close = self.close_popover();
+        self.close_popover();
         // Popovers open from a click on the bar, so that's where the pointer is.
         self.pointer_inside = true;
-        let window = window::Id::unique();
-        self.popover = Some(Popover {
-            instance: id,
-            window,
-            size: None,
+        // An island turns into one popover at a time: one still closing in it gives way.
+        let instances = &self.instances;
+        self.popovers.retain(|popover| {
+            let same_island = popover.window == window
+                && instances
+                    .iter()
+                    .any(|other| other.id == popover.instance && other.entry.zone == zone);
+            popover.instance == id || !same_island
         });
-        // Start at 1×1 and invisible; `PopoverMeasured` gives the real size and position.
-        let open = Task::done(Message::NewLayerShell {
-            settings: NewLayerShellSettings {
-                size: Some((1, 1)),
-                layer: Layer::Overlay,
-                anchor: Edge::Top | Edge::Left,
-                // Zero exclusive zone: the compositor places us below the bar, not over it.
-                exclusive_zone: None,
-                // Top, right, bottom, left (wlr-layer-shell order, despite the macro's doc comment).
-                margin: Some((popover_top(), 0, 0, anchor.bounds.x as i32)),
-                keyboard_interactivity: KeyboardInteractivity::None,
-                namespace: Some("eave-popover".into()),
-                ..NewLayerShellSettings::default()
-            },
-            id: window,
-        });
-        Task::batch([close, open])
-    }
-
-    fn close_popover(&mut self) -> Task<Message> {
-        match self.popover.take() {
-            Some(popover) => Task::done(Message::RemoveWindow(popover.window)),
-            None => Task::none(),
+        match self
+            .popovers
+            .iter_mut()
+            .find(|popover| popover.instance == id)
+        {
+            Some(popover) => popover.open = true,
+            None => self.popovers.push(Popover {
+                instance: id,
+                window,
+                open: true,
+                rect: None,
+            }),
         }
     }
 
-    fn is_popover(&self, window: window::Id) -> bool {
-        self.popover
-            .as_ref()
-            .is_some_and(|popover| popover.window == window)
+    /// Starts closing whatever is open. It stays until its island has morphed back.
+    fn close_popover(&mut self) {
+        for popover in &mut self.popovers {
+            popover.open = false;
+        }
+    }
+
+    fn is_open(&self) -> bool {
+        self.popovers.iter().any(|popover| popover.open)
     }
 
     fn popover_of(&self, id: u64) -> Option<&Popover> {
-        self.popover
-            .as_ref()
-            .filter(|popover| popover.instance == id)
+        self.popovers
+            .iter()
+            .find(|popover| popover.instance == id && popover.open)
+    }
+
+    /// Sizes a bar surface to fit its popovers, and lets the pointer through everywhere else: the
+    /// bar itself takes input across its whole strip, a popover only over its shape.
+    fn fit(&self, window: window::Id) -> Task<Message> {
+        let rects: Vec<Rectangle> = self
+            .popovers
+            .iter()
+            .filter(|popover| popover.window == window)
+            .filter_map(|popover| popover.rect)
+            .collect();
+        let height = rects
+            .iter()
+            .map(|rect| (rect.y + rect.height).ceil() as u32 + u32::from(style::EDGE_GAP))
+            .fold(style::BAR_HEIGHT, u32::max);
+        let callback = ActionCallback::new(move |region| {
+            // iced_layershell reuses one region and only clears the surface's current size, which
+            // may be the old one: clear all of it, so no earlier popover's rect is left behind.
+            region.subtract(0, 0, i32::MAX, i32::MAX);
+            region.add(0, 0, i32::MAX, style::BAR_HEIGHT as i32);
+            for rect in &rects {
+                region.add(
+                    rect.x.floor() as i32,
+                    rect.y.floor() as i32,
+                    rect.width.ceil() as i32,
+                    rect.height.ceil() as i32,
+                );
+            }
+        });
+        Task::batch([
+            // Width 0: stretched between the left and right anchors. The exclusive zone stays
+            // the bar's, so windows never move.
+            Task::done(Message::SizeChange {
+                id: window,
+                size: (0, height),
+            }),
+            Task::done(Message::SetInputRegion {
+                id: window,
+                callback,
+            }),
+        ])
     }
 }
 
 pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
-    let was_open = bar.popover.is_some();
+    let was_open = bar.is_open();
     let task = handle(bar, message);
-    let open = bar.popover.is_some();
+    let open = bar.is_open();
     if open == was_open {
         return task;
     }
@@ -236,37 +275,52 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             let (task, request) = instance.widget.update(message).into_parts();
             instance.has_popover = instance.widget.popover().is_some();
             let has_popover = instance.has_popover;
-            let task = task.map(move |message| Message::Widget(id, message));
 
-            let popover = match request {
+            match request {
                 Some(PopoverRequest::Open) => bar.open_popover(id),
                 Some(PopoverRequest::Close) if bar.popover_of(id).is_some() => bar.close_popover(),
                 // A widget that stops offering a popover closes it.
                 _ if bar.popover_of(id).is_some() && !has_popover => bar.close_popover(),
-                _ => Task::none(),
-            };
-            Task::batch([task, popover])
+                _ => {}
+            }
+            task.map(move |message| Message::Widget(id, message))
         }
-        Message::Pressed(id, bounds, bar_width, on_press) => {
+        Message::Pressed(window, id, on_press) => {
             let Some(instance) = bar.find_mut(id) else {
                 return Task::none();
             };
-            instance.anchor = Some(Anchor { bounds, bar_width });
+            instance.window = Some(window);
             match on_press {
                 // Any other item's popover closes, as on a click anywhere else.
-                Some(message) if bar.popover_of(id).is_none() => {
-                    let close = bar.close_popover();
-                    Task::batch([close, handle(bar, Message::Widget(id, message))])
+                Some(message) => {
+                    if bar.popover_of(id).is_none() {
+                        bar.close_popover();
+                    }
+                    handle(bar, Message::Widget(id, message))
                 }
-                Some(message) => handle(bar, Message::Widget(id, message)),
-                None if bar.popover_of(id).is_some() => bar.close_popover(),
-                None => bar.open_popover(id),
+                None if bar.popover_of(id).is_some() => {
+                    bar.close_popover();
+                    Task::none()
+                }
+                None => {
+                    bar.open_popover(id);
+                    Task::none()
+                }
             }
         }
-        Message::InnerPressed(id) if bar.popover_of(id).is_none() => bar.close_popover(),
-        Message::BarPressed(window) if !bar.is_popover(window) => bar.close_popover(),
+        Message::InnerPressed(id) if bar.popover_of(id).is_none() => {
+            bar.close_popover();
+            Task::none()
+        }
         // Clicks on our own surfaces are handled where they land.
-        Message::Clicked if !bar.pointer_inside => bar.close_popover(),
+        Message::BarPressed => {
+            bar.close_popover();
+            Task::none()
+        }
+        Message::Clicked if !bar.pointer_inside => {
+            bar.close_popover();
+            Task::none()
+        }
         Message::PointerEntered => {
             bar.pointer_inside = true;
             Task::none()
@@ -275,33 +329,31 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             bar.pointer_inside = false;
             Task::none()
         }
-        Message::PopoverMeasured(size) => {
-            let Some(anchor) = bar
-                .popover
-                .as_ref()
-                .and_then(|popover| bar.find(popover.instance)?.anchor)
+        Message::PopoverPlaced(id, rect) => {
+            let Some(popover) = bar
+                .popovers
+                .iter_mut()
+                .find(|popover| popover.instance == id)
             else {
                 return Task::none();
             };
-            let Some(popover) = &mut bar.popover else {
+            popover.rect = Some(rect);
+            let window = popover.window;
+            bar.fit(window)
+        }
+        Message::PopoverClosed(id) => {
+            let Some(position) = bar
+                .popovers
+                .iter()
+                .position(|popover| popover.instance == id && !popover.open)
+            else {
                 return Task::none();
             };
-            popover.size = Some(size);
-            let id = popover.window;
-            let x = popover_x(anchor, size.width);
-            let size = (size.width.ceil() as u32, size.height.ceil() as u32);
-            Task::batch([
-                Task::done(Message::SizeChange { id, size }),
-                Task::done(Message::MarginChange {
-                    id,
-                    margin: (popover_top(), 0, 0, x),
-                }),
-            ])
+            let popover = bar.popovers.remove(position);
+            bar.fit(popover.window)
         }
         Message::WindowClosed(window) => {
-            if bar.is_popover(window) {
-                bar.popover = None;
-            }
+            bar.popovers.retain(|popover| popover.window != window);
             Task::none()
         }
         Message::ConfigChanged(config) => match config {
@@ -318,53 +370,40 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
     }
 }
 
-/// The popover's top margin. The compositor already puts it below the bar's exclusive zone, which
-/// ends `DRAG_ROOM` below the islands, so this keeps the visible gap at `PANEL_GAP`.
-fn popover_top() -> i32 {
-    (style::PANEL_GAP - i32::from(style::DRAG_ROOM)).max(0)
-}
-
-/// Centered under the item, kept on screen.
-fn popover_x(anchor: Anchor, width: f32) -> i32 {
-    let gap = style::PANEL_GAP as f32;
-    let centered = anchor.bounds.center_x() - width / 2.0;
-    let max = (anchor.bar_width - width - gap).max(gap);
-    centered.clamp(gap, max).round() as i32
-}
-
+/// Every surface is a bar.
 pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
-    match &bar.popover {
-        Some(popover) if popover.window == window => popover_view(bar, popover),
-        // Every other surface is a bar.
-        _ => bar_view(bar),
-    }
-}
-
-fn bar_view(bar: &Bar) -> Element<'_, Message> {
     // Each zone is an island as wide as its items. A zone with nothing to show draws nothing, but
     // still takes its share of the width, so the center island stays centered on screen.
     let zone = |zone: Zone, align: Horizontal| {
-        let items: Vec<_> = bar
-            .instances
-            .iter()
-            .filter(|instance| instance.entry.zone == zone)
-            .filter_map(item_view)
+        let instances = || {
+            bar.instances
+                .iter()
+                .filter(move |instance| instance.entry.zone == zone)
+        };
+        let items: Vec<_> = instances()
+            .filter_map(|instance| Some((instance.id, item_view(instance, window)?)))
             .collect();
-        let island: Element<'_, Message> = if items.is_empty() {
+        // The open one wins over one still closing in the same island.
+        let popover = bar
+            .popovers
+            .iter()
+            .filter(|popover| popover.window == window)
+            .filter(|popover| instances().any(|instance| instance.id == popover.instance))
+            .max_by_key(|popover| popover.open);
+
+        let island: Element<'_, Message> = if items.is_empty() && popover.is_none() {
             Space::new().into()
         } else {
-            Island::new(
-                container(row(items).spacing(style::ITEM_SPACING).height(Length::Fill))
-                    .height(Length::Fixed(style::ISLAND_HEIGHT as f32))
-                    .padding([0, style::ISLAND_PADDING]),
-            )
-            .into()
+            Island::new(items)
+                .align(align)
+                .popover(popover.map(|popover| popover_view(bar, popover)))
+                .into()
         };
         container(island).width(Length::Fill).align_x(align)
     };
 
     // No background of its own: the surface is transparent around and between the islands, and
-    // below them, where a dragged island has room to move.
+    // below them, where a dragged island has room to move and popovers grow.
     container(row![
         zone(Zone::Left, Horizontal::Left),
         zone(Zone::Center, Horizontal::Center),
@@ -379,7 +418,7 @@ fn bar_view(bar: &Bar) -> Element<'_, Message> {
     .into()
 }
 
-fn item_view(instance: &Instance) -> Option<Element<'_, Message>> {
+fn item_view(instance: &Instance, window: window::Id) -> Option<Element<'_, Message>> {
     let id = instance.id;
     let parts = instance.widget.item().into_parts();
     let on_press = parts.on_press;
@@ -394,29 +433,25 @@ fn item_view(instance: &Instance) -> Option<Element<'_, Message>> {
         .on_secondary(parts.on_secondary.map(wrap))
         .on_scroll(parts.on_scroll.map(|(up, down)| (wrap(up), wrap(down))));
     if on_press.is_some() || instance.has_popover {
-        slot = slot
-            .on_press(move |bounds, width| Message::Pressed(id, bounds, width, on_press.clone()));
+        slot = slot.on_press(Message::Pressed(window, id, on_press));
     }
     Some(slot.into())
 }
 
-fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> Element<'a, Message> {
+fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Message> {
     let id = popover.instance;
-    let content = match bar.find(id).and_then(|instance| instance.widget.popover()) {
-        Some(panel) => kit::node(panel.into_node()),
-        None => text("").into(),
-    };
-    let panel: Element<'_, AnyMessage> = container(content)
-        .padding(style::PANEL_PADDING)
-        .style(kit::panel_style)
-        .into();
-
-    Measure::new(
-        panel.map(move |message| Message::Widget(id, message)),
-        Message::PopoverMeasured,
-        popover.size.is_some(),
-    )
-    .into()
+    // A widget can stop offering its popover while it closes: the island morphs back empty.
+    let content: Element<'_, AnyMessage> =
+        match bar.find(id).and_then(|instance| instance.widget.popover()) {
+            Some(panel) => kit::node(panel.into_node()),
+            None => Space::new().into(),
+        };
+    island::Popover {
+        content: content.map(move |message| Message::Widget(id, message)),
+        open: popover.open,
+        on_placed: Box::new(move |rect| Message::PopoverPlaced(id, rect)),
+        on_closed: Message::PopoverClosed(id),
+    }
 }
 
 pub fn subscription(bar: &Bar) -> Subscription<Message> {
@@ -432,21 +467,22 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
     subscriptions.push(watch::config_changes().map(Message::ConfigChanged));
     // Pointer and click tracking only while a popover is open: otherwise every hover over the bar
     // would wake us.
-    if bar.popover.is_some() {
+    if bar.is_open() {
         subscriptions.push(iced::event::listen_with(popover_event));
         subscriptions.push(Subscription::run(hyprland_events).filter_map(clicked));
     }
     Subscription::batch(subscriptions)
 }
 
-fn popover_event(event: Event, status: iced::event::Status, window: window::Id) -> Option<Message> {
+fn popover_event(event: Event, status: iced::event::Status, _: window::Id) -> Option<Message> {
     match event {
         // The bar never takes keyboard focus, so clicks on it are caught here instead. Handled
-        // clicks on items arrive as `Pressed` or `InnerPressed`.
+        // clicks on items arrive as `Pressed` or `InnerPressed`, and the popover's island takes
+        // the ones on it.
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
             if status == iced::event::Status::Ignored =>
         {
-            Some(Message::BarPressed(window))
+            Some(Message::BarPressed)
         }
         Event::Mouse(mouse::Event::CursorEntered) => Some(Message::PointerEntered),
         Event::Mouse(mouse::Event::CursorLeft) => Some(Message::PointerLeft),
@@ -469,8 +505,8 @@ fn clicked(update: eave_hyprland::Update<()>) -> Option<Message> {
     }
 }
 
-/// Surfaces are transparent: the bar and the popover panel draw their own backgrounds, so a
-/// popover can have rounded corners.
+/// Surfaces are transparent: the islands draw their own backgrounds, so they can have rounded
+/// corners and the wallpaper shows around them.
 pub fn style(_: &Bar, _: &Theme) -> theme::Style {
     theme::Style {
         background_color: Color::TRANSPARENT,
@@ -573,22 +609,24 @@ mod tests {
         }
     }
 
-    /// A bar with one `WithPopover` (id 0) and one `Dummy` (id 1), and 0's popover open and measured.
+    /// A bar with `WithPopover`s 0 (left) and 2 (right) and a `Dummy` 1 (left), and 0's popover
+    /// open and placed.
     fn open_bar() -> Bar {
         let mut registry = Registry::new();
         registry.widget::<WithPopover>("p");
         registry.widget::<Dummy>("d");
         let (mut bar, _) = Bar::new(
             registry,
-            config("[[left]]\nwidget = \"p\"\n[[left]]\nwidget = \"d\""),
+            config("[[left]]\nwidget = \"p\"\n[[left]]\nwidget = \"d\"\n[[right]]\nwidget = \"p\""),
         );
-        let _ = update(
-            &mut bar,
-            Message::Pressed(0, anchor(0.0, 40.0).bounds, 1000.0, None),
-        );
-        let _ = update(&mut bar, Message::PopoverMeasured(Size::new(200.0, 100.0)));
+        let _ = update(&mut bar, Message::Pressed(window::Id::unique(), 0, None));
+        let _ = update(&mut bar, Message::PopoverPlaced(0, placed()));
         assert!(bar.popover_of(0).is_some());
         bar
+    }
+
+    fn placed() -> Rectangle {
+        Rectangle::new(iced::Point::new(6.0, 6.0), iced::Size::new(200.0, 100.0))
     }
 
     #[test]
@@ -596,49 +634,59 @@ mod tests {
         let mut bar = open_bar();
         // Still on the bar, where the click that opened it happened: ours, not outside.
         let _ = update(&mut bar, Message::Clicked);
-        assert!(bar.popover.is_some());
+        assert!(bar.is_open());
         let _ = update(&mut bar, Message::PointerLeft);
         let _ = update(&mut bar, Message::Clicked);
-        assert!(bar.popover.is_none());
+        assert!(!bar.is_open());
     }
 
     #[test]
     fn clicks_elsewhere_on_the_bar_close_the_popover() {
         let mut bar = open_bar();
-        let popover = bar.popover.as_ref().unwrap().window;
-        // Inside the popover: stays.
-        let _ = update(&mut bar, Message::BarPressed(popover));
-        assert!(bar.popover.is_some());
         // Its own item handling a click inside it: stays.
         let _ = update(&mut bar, Message::InnerPressed(0));
-        assert!(bar.popover.is_some());
+        assert!(bar.is_open());
         // Another item: closes.
         let _ = update(&mut bar, Message::InnerPressed(1));
-        assert!(bar.popover.is_none());
+        assert!(!bar.is_open());
 
         let mut bar = open_bar();
-        let _ = update(&mut bar, Message::BarPressed(window::Id::unique()));
-        assert!(bar.popover.is_none());
-    }
-
-    fn anchor(x: f32, width: f32) -> Anchor {
-        Anchor {
-            bounds: Rectangle::new(iced::Point::new(x, 0.0), Size::new(width, 32.0)),
-            bar_width: 1000.0,
-        }
+        let _ = update(&mut bar, Message::BarPressed);
+        assert!(!bar.is_open());
     }
 
     #[test]
-    fn popover_centers_under_item() {
-        assert_eq!(popover_x(anchor(450.0, 100.0), 200.0), 400);
+    fn a_closing_popover_stays_until_its_island_is_back() {
+        let mut bar = open_bar();
+        let _ = update(&mut bar, Message::BarPressed);
+        assert_eq!(bar.popovers.len(), 1, "still morphing back");
+        // Reopened before the island got back: the same popover turns around.
+        let window = bar.popovers[0].window;
+        let _ = update(&mut bar, Message::Pressed(window, 0, None));
+        assert!(bar.popover_of(0).is_some());
+        // The island reporting it's back while it's open again changes nothing.
+        let _ = update(&mut bar, Message::PopoverClosed(0));
+        assert_eq!(bar.popovers.len(), 1);
+
+        let _ = update(&mut bar, Message::BarPressed);
+        let _ = update(&mut bar, Message::PopoverClosed(0));
+        assert!(bar.popovers.is_empty());
     }
 
     #[test]
-    fn popover_stays_on_screen() {
-        let gap = style::PANEL_GAP;
-        assert_eq!(popover_x(anchor(0.0, 40.0), 200.0), gap);
-        assert_eq!(popover_x(anchor(960.0, 40.0), 200.0), 1000 - 200 - gap);
-        // Wider than the bar: pinned to the left edge.
-        assert_eq!(popover_x(anchor(500.0, 40.0), 2000.0), gap);
+    fn another_islands_popover_opens_while_the_first_closes() {
+        let mut bar = open_bar();
+        let window = bar.popovers[0].window;
+        let _ = update(&mut bar, Message::Pressed(window, 2, None));
+        assert!(bar.popover_of(2).is_some());
+        assert!(bar.popover_of(0).is_none());
+        assert_eq!(bar.popovers.len(), 2, "0 is still morphing back");
+    }
+
+    #[test]
+    fn a_reload_that_drops_the_instance_drops_its_popover() {
+        let mut bar = open_bar();
+        let _ = bar.apply(config("[[left]]\nwidget = \"d\""));
+        assert!(bar.popovers.is_empty());
     }
 }

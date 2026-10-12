@@ -98,14 +98,3 @@ fn button_style(_: &Theme, status: button::Status) -> button::Style {
         ..button::Style::default()
     }
 }
-
-pub fn panel_style(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(theme::PANEL_BG)),
-        border: Border::default()
-            .rounded(theme::PANEL_RADIUS)
-            .width(1)
-            .color(theme::PANEL_BORDER),
-        ..container::Style::default()
-    }
-}

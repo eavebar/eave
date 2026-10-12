@@ -47,17 +47,18 @@ Core plugins depend only on Hyprland and the kernel, plus an audio server for vo
 - Each widget instance's `subscription()` is tagged with the instance's stable id and mapped to `Message::Widget(id, AnyMessage)` ([D-15](decisions.md)). `update` hands the message to that instance only. Messages for an id that no longer exists (removed by a reload) are dropped.
 - `config.toml` is watched with inotify. When it changes, the host re-reads it and rebuilds only the instances whose entry changed ([D-21](decisions.md)).
 - A widget's `update` returns an `Effect`: a `Task` for async work, plus optional requests to open or close its popover. `update` never does I/O.
-- `view(window)` is pure. For the bar it lays out the left, center and right zones from `config.toml`, each as a squircle island only as wide as its items. A zone with nothing to show has no island ([D-24](decisions.md)). Pressing an island squeezes it; dragging pulls it a few pixels with a rubber band, and it springs back on release ([D-26](decisions.md)). Each item is wrapped in a `Slot`, which turns unhandled clicks and scroll steps into messages and reports the item's bounds. For a popover window it renders the widget's `Panel`.
+- `view(window)` is pure. For the bar it lays out the left, center and right zones from `config.toml`, each as a squircle island only as wide as its items. A zone with nothing to show has no island ([D-24](decisions.md)). When items come or go, the island morphs: its edges spring to the new size, items slide to their new places and new ones fade in ([D-27](decisions.md)). Pressing an island squeezes it; dragging pulls it a few pixels with a rubber band, and it springs back on release ([D-26](decisions.md)). Each item is wrapped in a `Slot`, which turns unhandled clicks and scroll steps into messages. An open popover's `Panel` is drawn by the island it grew out of.
 - Nothing is drawn when no message arrives. Pointer tracking is only subscribed while a popover is open, so hovering over the bar wakes nothing.
 
 ## Popovers
 
-A click on an item that has a popover and no `on_press`:
+A popover isn't a surface of its own: the island holding the item turns into it ([D-28](decisions.md)). A click on an item that has a popover and no `on_press`:
 
-1. The host records the item's bounds and the bar width, then asks for a new layer surface: `overlay` layer, anchored top-left, zero exclusive zone (so it sits under the bar), 1×1, namespace `eave-popover`.
-2. `Measure` lays the panel out at its natural size, draws nothing yet, and reports the size.
-3. The host resizes the surface and sets its margin so it's centered under the item, clamped to the screen. Then the panel becomes visible.
-4. It closes on a second click on the item, when the widget returns `close_popover()` or stops offering a popover. It also closes on a click anywhere else. While a popover is open, a non-consuming Hyprland bind reports every left click on socket2, and the host ignores the ones that land on its own surfaces. Clicks on the bar are handled by the bar itself ([D-14](decisions.md)).
+1. The host records which bar was clicked and marks the popover open. `view` hands the panel to that zone's island.
+2. The island lays the panel out at its natural size in an iced overlay and places it: top edge on the island, growing from the island's left edge, right edge or center (by zone), never narrower than the island, `EDGE_GAP` from the screen sides. It reports the place (`PopoverPlaced`).
+3. The host grows the bar surface to fit (`SizeChange`, exclusive zone unchanged, so windows don't move) and sets an input region of the bar strip plus the panel, so the pointer still reaches windows beside and below it.
+4. Once the surface is tall enough, the island morphs into the panel: its edges spring to the panel's, its items fade out, and the panel's content fades in once the shape is halfway there.
+5. It closes on a second click on the item, when the widget returns `close_popover()` or stops offering a popover, or on a click anywhere else. While a popover is open, a non-consuming Hyprland bind reports every left click on socket2, and the host ignores the ones that land on the bar. Clicks on the bar are handled by the bar itself, and the island captures presses on its panel ([D-14](decisions.md)). Closing runs the morph backwards. When the island is back, it reports `PopoverClosed` and the host shrinks the surface again.
 
 ## Data sources by widget
 
@@ -88,15 +89,15 @@ crates/eave-api/           the plugin SDK: what plugin authors depend on
 crates/eave/               the host, as a library (`eave::run`) plus the default binary
   src/main.rs              default binary: host + built-in plugins
   src/lib.rs               run(): registry, layer-shell settings, daemon
-  src/app.rs               state, Message, update/view/subscription, popover lifecycle, reload
+  src/app.rs               state, Message, update/view/subscription, popover lifecycle, surface fit, reload
   src/config.rs            config.toml → zone entries
   src/watch.rs             inotify watch on the config directory
   src/kit.rs               ui nodes → iced elements, styled
   src/theme.rs             every color, size and font
-  src/island.rs            island: squircle background, press squeeze and drag springs
-  src/slot.rs              item wrapper: clicks, scroll steps and bounds
+  src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay
+  src/squircle.rs          the squircle path
+  src/slot.rs              item wrapper: clicks and scroll steps
   src/switcher.rs          switcher: row of options with a sliding, frame-paced mark
-  src/measure.rs           popover sizing
 crates/eave-build/         builds a binary with the plugins from plugins.toml, installs, restarts
 crates/eave-dbus/          service: shared system bus, snapshot-on-PropertiesChanged watcher
 crates/eave-net/           service: network state from the kernel over netlink (one event thread)
@@ -117,8 +118,8 @@ The rule: **split a file when it gets a second responsibility, not before.** Eac
 
 ## Things to keep in mind
 
-- `#[to_layer_message(multi)]` on `Message` adds the variants `iced_layershell` uses to create and control surfaces (`NewLayerShell`, `SizeChange`, `MarginChange`, `RemoveWindow`, …). `update` must handle them with a catch-all arm.
+- `#[to_layer_message(multi)]` on `Message` adds the variants `iced_layershell` uses to create and control surfaces (`SizeChange`, `SetInputRegion`, `NewLayerShell`, `RemoveWindow`, …). `update` must handle them with a catch-all arm.
 - Margin tuples are `(top, right, bottom, left)`, despite the macro's doc comment.
-- Surfaces are transparent. The bar's islands and the popover panel draw their own backgrounds, which is what gives them rounded corners and lets the wallpaper show around the islands. With the CPU renderer that needs our patched softbuffer ([D-25](decisions.md)).
-- `KeyboardInteractivity::None` everywhere: the bar and its popovers never steal keyboard focus. Something that needs typing (a launcher) will need its own settings.
-- The bar opens on the active output (`StartMode` default). In daemon mode, every window that isn't a popover is drawn as a bar, so one bar per monitor (`StartMode::AllScreens`) mostly needs per-output state.
+- Surfaces are transparent. The islands (popovers included) draw their own backgrounds, which is what gives them rounded corners and lets the wallpaper show around the islands. With the CPU renderer that needs our patched softbuffer ([D-25](decisions.md)).
+- `KeyboardInteractivity::None`: the bar and its popovers never steal keyboard focus. Something that needs typing (a launcher) will need its own settings.
+- The bar opens on the active output (`StartMode` default). In daemon mode, every window is drawn as a bar, and popovers remember which bar they grew on, so one bar per monitor (`StartMode::AllScreens`) mostly needs per-output state.
