@@ -16,7 +16,7 @@ use iced::widget::canvas::{self, Frame, Geometry, LineCap, LineJoin, Path, Strok
 use iced::{Color, Element, Event, Point, Radians, Rectangle, Renderer, Size, Theme, Vector};
 use iced::{mouse, window};
 
-use crate::theme;
+use crate::{squish, theme};
 
 /// The grid icons are drawn on, in units.
 const GRID: f32 = 16.0;
@@ -148,7 +148,16 @@ impl<M> canvas::Program<M> for Glyph {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
+        let squish = squish::current();
+        let mut frame = if squish.is_none() {
+            Frame::new(renderer, bounds.size())
+        } else {
+            // Squished by its island, about its middle, with room to spill out a little.
+            let room = Rectangle::with_size(bounds.size());
+            let mut frame = Frame::with_bounds(renderer, room.expand(bounds.width));
+            squish.apply(&mut frame, room.center());
+            frame
+        };
         frame.scale(theme::ICON_SIZE / GRID);
         let gulp = pour.gulp();
         if let Icon::Battery { charging: true, .. } = self.icon {

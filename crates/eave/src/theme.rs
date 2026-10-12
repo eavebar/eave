@@ -52,22 +52,48 @@ pub const MORPH_DAMPING: f32 = 0.9;
 /// fades in on (and back). Critically damped, so a fade never overshoots.
 pub const FADE_STIFFNESS: f32 = 1500.0;
 pub const FADE_DAMPING: f32 = 1.0;
-/// The spring a nudged island and its bump move back on: damped nearly to critical, so they come
+/// The spring a popover's squish and splat ride on, on top of its morph. Just under critical, so one kick
+/// squashes the shape and it eases back, without a visible bounce.
+pub const SQUISH_STIFFNESS: f32 = 250.0;
+pub const SQUISH_DAMPING: f32 = 0.75;
+/// How hard an opening popover is squeezed in from the sides as it sets off, per second, as a
+/// share of the panel's width: about 5 % narrower at the peak (and taller, by the bulge), easing
+/// back as it grows.
+pub const SQUISH_OPEN_SQUEEZE: f32 = 2.0;
+/// How hard a closing popover's island splats against the top, in logical pixels per second:
+/// about 1.5 px flatter and 3.5 px wider at the peak, before the bulge. Wider stays inside the
+/// `EDGE_GAP` from the screen's sides.
+pub const SQUISH_CLOSE_FLATTEN: f32 = 50.0;
+pub const SQUISH_CLOSE_WIDEN: f32 = 125.0;
+/// How close, in logical pixels, a closing popover's bottom edge comes to its island's before it
+/// splats. The splat peaks about four frames after, as the shape arrives.
+pub const SQUISH_LAND: f32 = 5.0;
+/// How much stretching along one axis pulls the other in, per pixel stretched.
+pub const SQUISH_BULGE: f32 = 0.5;
+/// The spring a nudged island moves back on: damped nearly to critical, so it comes
 /// back without swinging past.
 pub const NUDGE_STIFFNESS: f32 = 600.0;
 pub const NUDGE_DAMPING: f32 = 0.85;
 /// How fast a nudge sets an island off, in logical pixels per second. A push sideways peaks at
-/// about 5 px. Up or down, the whole island moves about half a pixel, and the bump in its edge
-/// peaks at about 2 px.
+/// about 5 px. Up or down, the whole island moves about half a pixel.
 pub const NUDGE_PUSH_SPEED: f32 = 300.0;
 pub const NUDGE_LIFT_SPEED: f32 = 30.0;
-pub const NUDGE_BUMP_SPEED: f32 = 120.0;
-/// How much of its bump the nudged item moves with: it rides along, by less than the edge.
-pub const NUDGE_ITEM_FOLLOW: f32 = 0.5;
-/// How wide a bump in an island's edge is, end to end.
+/// The jelly an island's outline is made of ([`crate::jelly`]): how hard each piece of the edge
+/// is pulled back where it belongs, its damping ratio (just under critical, so it settles without
+/// wobbling), and how hard it's pulled toward its neighbors, which is what smooths a poke out.
+pub const JELLY_STIFFNESS: f32 = 600.0;
+pub const JELLY_DAMPING: f32 = 0.85;
+pub const JELLY_COUPLING: f32 = 1400.0;
+/// How hard a nudge pokes the jelly, outward in logical pixels per second. The bump: the edge
+/// over the nudged item, going up or down, about 2 px out at its peak. The lean: the end (or
+/// edge) the island is going toward swells and the one it's leaving flattens, about 1.5 px each
+/// way.
+pub const JELLY_BUMP: f32 = 150.0;
+pub const JELLY_LEAN: f32 = 120.0;
+/// How wide a nudge's bump in an island's edge is, end to end.
 pub const NUDGE_BUMP_WIDTH: f32 = 64.0;
-/// The furthest a bump reaches out of the island: it stays inside `EDGE_GAP` above and `DRAG_ROOM`
-/// below.
+/// The furthest the outline reaches out of the island: it stays inside `EDGE_GAP` above and at
+/// the sides, and `DRAG_ROOM` below.
 pub const NUDGE_BUMP_ROOM: f32 = 4.0;
 /// Horizontal padding inside each item, so its click target is wider than its text.
 pub const ITEM_PADDING: u16 = 6;

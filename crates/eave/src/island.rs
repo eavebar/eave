@@ -4,9 +4,11 @@
 //! little, dragging pulls it along with growing resistance, and letting go springs it back.
 //!
 //! An island can also become a popover. Given one, it morphs into the panel's shape, growing from
-//! where it sits, while its items fade out and the panel's content fades in. Closing runs that
-//! backwards, and reports when it's done. The panel lives in an overlay, so it's laid out against
-//! the whole surface, drawn over the other islands, and sees events first.
+//! where it sits, while its items fade out and the panel's content fades in. It squishes as it
+//! sets off, squeezed in from the sides, and eases back as it grows. Closing runs the morph
+//! backwards, lands like it hit the top (it splats into it, flatter and wider, then eases back),
+//! and reports when it's done. The panel lives in an overlay, so it's laid out against the whole
+//! surface, drawn over the other islands, and sees events first.
 //!
 //! It only watches pointer events on the items and never captures them, so the items work exactly
 //! as they would without it. Like the switcher, it steps one frame at a time when the compositor
@@ -22,11 +24,13 @@ use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::alignment::Horizontal;
 use iced::keyboard::{self, key};
-use iced::widget::canvas::{Cache, Stroke};
+use iced::widget::canvas::{Cache, Path, Stroke};
 use iced::{Color, Element, Event, Length, Point, Rectangle, Size, Transformation, Vector, window};
 
 use crate::field::AnyFocused;
-use crate::squircle::{Bump, Edge, squircle};
+use crate::jelly::{Jelly, Side};
+use crate::squircle::{squircle, warp};
+use crate::squish::{self, Squish};
 use crate::theme;
 
 pub struct Island<'a, M> {
@@ -91,11 +95,11 @@ impl<'a, M> Island<'a, M> {
 
 struct State {
     motion: Motion,
-    /// The squircle, rebuilt only when its size changes, or while it has a bump: at rest it's
+    /// The squircle, rebuilt only when its size changes, or while its jelly moves: at rest it's
     /// built once.
     shape: Cache,
-    /// The bump `shape` was last built with.
-    shape_bump: Cell<Option<Bump>>,
+    /// Whether `shape` was last built bent by the jelly.
+    shape_bent: Cell<bool>,
     /// The popover panel's widget state, while there is one.
     panel: Option<Tree>,
 }
@@ -129,6 +133,11 @@ const FADE: Feel = Feel {
     stiffness: theme::FADE_STIFFNESS,
     damping: theme::FADE_DAMPING,
 };
+/// A popover's overshoot: kicked once, it swings past rest and back.
+const SQUISH: Feel = Feel {
+    stiffness: theme::SQUISH_STIFFNESS,
+    damping: theme::SQUISH_DAMPING,
+};
 
 /// Where everything is going and how it's moving there. Positions are in logical pixels, in
 /// surface coordinates; fades go from 0 (hidden) to 1 (shown).
@@ -149,9 +158,12 @@ struct Motion {
     /// How far a nudge moved the whole island, on top of any drag.
     push_x: Spring,
     push_y: Spring,
-    /// How far a nudge pushed an edge out, at which item and on which edge.
-    bump: Spring,
-    bump_at: Option<(u64, Edge)>,
+    /// The outline, which a nudge pokes and which smooths the poke out by itself.
+    jelly: Jelly,
+    /// How many pixels a popover's overshoot adds to the shape's width and height (negative is
+    /// narrower or shorter), on top of its edges.
+    stretch_x: Spring,
+    stretch_y: Spring,
     /// The newest nudge already played, once the island has been laid out.
     seen: Option<u64>,
     /// The previous frame, while something is moving.
@@ -171,8 +183,9 @@ impl Default for Motion {
             popover: PopoverMotion::default(),
             push_x: Spring::new(0.0, NUDGE),
             push_y: Spring::new(0.0, NUDGE),
-            bump: Spring::new(0.0, NUDGE),
-            bump_at: None,
+            jelly: Jelly::default(),
+            stretch_x: Spring::new(0.0, SQUISH),
+            stretch_y: Spring::new(0.0, SQUISH),
             seen: None,
             last: None,
         }
@@ -262,6 +275,8 @@ struct PopoverMotion {
     reported: Option<Rectangle>,
     /// Whether the host has been told the island is back to itself.
     closed: bool,
+    /// Whether this way of the morph has had its squish (opening) or splat (closing).
+    squished: bool,
     /// How much the island's items show: they make way for the panel.
     items: Spring,
     /// How much the panel's content shows.
@@ -277,6 +292,7 @@ impl Default for PopoverMotion {
             fits: false,
             reported: None,
             closed: false,
+            squished: false,
             items: Spring::new(1.0, FADE),
             panel: Spring::new(0.0, FADE),
         }
@@ -312,9 +328,14 @@ impl Motion {
         self.inset.target = 0.0;
     }
 
-    /// Plays the nudges it hasn't seen yet. A new island only notes them: they happened before it.
-    /// A held island, or one with a popover, lets them pass.
-    fn nudges(&mut self, nudges: impl IntoIterator<Item = (u64, (u64, Nudge))>) {
+    /// Plays the nudges it hasn't seen yet, with where each item's center is across the island.
+    /// A new island only notes them: they happened before it. A held island, or one with a
+    /// popover, lets them pass.
+    fn nudges(
+        &mut self,
+        nudges: impl IntoIterator<Item = (u64, (u64, Nudge))>,
+        center: impl Fn(u64) -> Option<f32>,
+    ) {
         let seen = self.seen;
         let mut newest = seen.unwrap_or(0);
         for (key, (number, nudge)) in nudges {
@@ -323,39 +344,54 @@ impl Motion {
                 && self.press.is_none()
                 && !self.popover.present
             {
-                self.nudge(key, nudge);
+                self.nudge(nudge, center(key));
             }
         }
         self.seen = Some(newest);
     }
 
-    /// Sets the island off: sideways as a whole, or up or down half a pixel with a bump in that edge at
-    /// the item. The springs bring it back.
-    fn nudge(&mut self, key: u64, nudge: Nudge) {
+    /// Sets the island off: sideways as a whole, or up or down half a pixel. Its outline leans into
+    /// it, swelling on the side it's going toward and flattening on the side it's leaving, and up
+    /// or down the edge over the item (at `center`) bulges. The springs and the jelly bring it
+    /// back.
+    fn nudge(&mut self, nudge: Nudge, center: Option<f32>) {
         let (push, lift) = (theme::NUDGE_PUSH_SPEED, theme::NUDGE_LIFT_SPEED);
-        let edge = match nudge {
+        let lean = theme::JELLY_LEAN;
+        // From −1 at the start of a side to 1 at its end, eased at both.
+        let lean_toward_end = move |along: f32| lean * (std::f32::consts::PI * (along - 0.5)).sin();
+        match nudge {
             Nudge::Left | Nudge::Right => {
-                self.push_x.velocity = if nudge == Nudge::Left { -push } else { push };
-                return;
+                let way = if nudge == Nudge::Left { -1.0 } else { 1.0 };
+                self.push_x.velocity = way * push;
+                for side in [Side::Top, Side::Bottom] {
+                    self.jelly.kick(side, |along| way * lean_toward_end(along));
+                }
             }
-            Nudge::Up => {
-                self.push_y.velocity = -lift;
-                Edge::Top
+            Nudge::Up | Nudge::Down => {
+                let (way, edge) = if nudge == Nudge::Up {
+                    (-1.0, Side::Top)
+                } else {
+                    (1.0, Side::Bottom)
+                };
+                self.push_y.velocity = way * lift;
+                // Down the sides runs top to bottom, so going up swells the top.
+                for side in [Side::Left, Side::Right] {
+                    self.jelly.kick(side, |along| way * lean_toward_end(along));
+                }
+                let (Some(center), Some(island)) = (center, self.island) else {
+                    return;
+                };
+                if island.width < 1.0 {
+                    return;
+                }
+                let at = (center - island.x) / island.width;
+                let half = theme::NUDGE_BUMP_WIDTH / 2.0 / island.width;
+                self.jelly.kick(edge, |along| {
+                    let from = ((along - at) / half).clamp(-1.0, 1.0);
+                    theme::JELLY_BUMP * 0.5 * (1.0 + (std::f32::consts::PI * from).cos())
+                });
             }
-            Nudge::Down => {
-                self.push_y.velocity = lift;
-                Edge::Bottom
-            }
-        };
-        if !self.items.iter().any(|item| item.key == key) {
-            return;
         }
-        // A bump elsewhere, or on the other edge, starts over.
-        if self.bump_at != Some((key, edge)) {
-            self.bump = Spring::new(0.0, NUDGE);
-            self.bump_at = Some((key, edge));
-        }
-        self.bump.velocity = self.bump.velocity.max(theme::NUDGE_BUMP_SPEED);
     }
 
     /// Takes in where layout put the island and each item (by key, with its x), and whether it has
@@ -405,6 +441,10 @@ impl Motion {
                 if open && !popover_state.open {
                     popover_state.closed = false;
                 }
+                // Turning around squishes again.
+                if open != popover_state.open {
+                    popover_state.squished = false;
+                }
                 popover_state.open = open;
             }
             None if popover_state.present => {
@@ -439,6 +479,12 @@ impl Motion {
         match (popover.opening(), popover.rect) {
             (Some(panel), _) => {
                 self.edges.aim(panel);
+                // Squeezed in from the sides as it sets off, then eases back: a squish on the
+                // way, nothing to hit when it gets there.
+                if !popover.squished {
+                    popover.squished = true;
+                    self.stretch_x.velocity = -theme::SQUISH_OPEN_SQUEEZE * panel.width;
+                }
                 popover.items.target = 0.0;
                 popover.panel.target = if popover.items.value < REST_DISTANCE
                     && self.edges.progress(island, panel) > 0.5
@@ -450,6 +496,13 @@ impl Motion {
             }
             (None, Some(panel)) if popover.present => {
                 self.edges.aim(island);
+                // Splats against the top as it lands. Not while it's open and waiting for room.
+                let landing = self.edges.bottom.value - (island.y + island.height);
+                if !popover.open && !popover.squished && landing < theme::SQUISH_LAND {
+                    popover.squished = true;
+                    self.stretch_y.velocity = -theme::SQUISH_CLOSE_FLATTEN;
+                    self.stretch_x.velocity = theme::SQUISH_CLOSE_WIDEN;
+                }
                 popover.panel.target = 0.0;
                 popover.items.target = if popover.panel.value < REST_DISTANCE
                     && self.edges.progress(panel, island) > 0.5
@@ -481,7 +534,8 @@ impl Motion {
             &mut self.popover.panel,
             &mut self.push_x,
             &mut self.push_y,
-            &mut self.bump,
+            &mut self.stretch_x,
+            &mut self.stretch_y,
         ]
         .into_iter()
         .chain(
@@ -492,7 +546,7 @@ impl Motion {
     }
 
     fn at_rest(&mut self) -> bool {
-        self.springs().all(|spring| spring.at_rest())
+        self.jelly.at_rest() && self.springs().all(|spring| spring.at_rest())
     }
 
     /// Advances to `now`. Returns whether another frame is needed.
@@ -513,10 +567,12 @@ impl Motion {
         for spring in self.springs() {
             spring.advance(elapsed);
         }
+        self.jelly.advance(elapsed);
         // The fades wait on how far the shape has come.
         self.aim();
         if self.at_rest() {
             self.springs().for_each(Spring::settle);
+            self.jelly.settle();
             self.last = None;
             return false;
         }
@@ -533,27 +589,61 @@ impl Motion {
         false
     }
 
-    /// The bump in the shape right now, if any, at its item, with `x` measured from the shape's
-    /// left edge.
-    fn bump(&self, keys: &[u64], layout: Layout<'_>, shape: Rectangle) -> Option<Bump> {
-        let (key, edge) = self.bump_at?;
-        if self.bump.value.abs() < REST_DISTANCE {
-            return None;
+    /// The shape as it's drawn: its edges, splatting. Stretching along one axis pulls the other
+    /// in. It stretches about its center across, and down from its top, which it hit.
+    fn shape(&self) -> Rectangle {
+        let edges = self.edges.rect();
+        let (stretch_x, stretch_y) = (self.stretch_x.value, self.stretch_y.value);
+        if stretch_x == 0.0 && stretch_y == 0.0 {
+            return edges;
         }
-        let bounds = keys
-            .iter()
-            .zip(layout.children())
-            .find(|(k, _)| **k == key)?
-            .1
-            .bounds();
-        let (dx, _) = self.item(key, bounds.x);
-        let room = theme::NUDGE_BUMP_ROOM;
-        Some(Bump {
-            edge,
-            x: bounds.center_x() + dx - shape.x,
-            width: theme::NUDGE_BUMP_WIDTH,
-            amount: self.bump.value.clamp(-room, room),
-        })
+        let width = (edges.width + stretch_x - theme::SQUISH_BULGE * stretch_y).max(0.0);
+        let height = (edges.height + stretch_y - theme::SQUISH_BULGE * stretch_x).max(0.0);
+        Rectangle::new(
+            Point::new(edges.center_x() - width / 2.0, edges.y),
+            Size::new(width, height),
+        )
+    }
+
+    /// How much the overshoot stretches the shape, across and up and down.
+    fn squish(&self) -> Squish {
+        let (edges, shape) = (self.edges.rect(), self.shape());
+        if edges.width < 1.0 || edges.height < 1.0 || shape == edges {
+            return Squish::NONE;
+        }
+        Squish {
+            x: shape.width / edges.width,
+            y: shape.height / edges.height,
+        }
+    }
+
+    /// How far the overshoot moves something centered at `at`: to where the stretch takes that
+    /// point of the edges. What's there squishes itself, about its own center ([`squish`]).
+    fn follow(&self, at: Point) -> Vector {
+        let squish = self.squish();
+        if squish == Squish::NONE {
+            return Vector::ZERO;
+        }
+        let (edges, shape) = (self.edges.rect(), self.shape());
+        let to = Point::new(
+            shape.x + (at.x - edges.x) * squish.x,
+            shape.y + (at.y - edges.y) * squish.y,
+        );
+        to - at
+    }
+
+    /// How squished something centered at `x` in the drawn `shape` is, and how far down the jelly
+    /// moves it: by the shape's stretch, and by how much taller the jelly makes the shape there.
+    fn squish_at(&self, shape: Rectangle, x: f32) -> (Squish, f32) {
+        let squish = self.squish();
+        let (taller, down) = self.jelly.at(shape, x);
+        (
+            Squish {
+                x: squish.x,
+                y: squish.y * taller,
+            },
+            down,
+        )
     }
 
     fn offset(&self) -> Vector {
@@ -561,17 +651,6 @@ impl Motion {
             self.x.value + self.push_x.value,
             self.y.value + self.push_y.value,
         )
-    }
-
-    /// How far a nudge lifts the item (negative is up): it rides along with its bump, by less.
-    fn item_lift(&self, key: u64) -> f32 {
-        match self.bump_at {
-            Some((bumped, edge)) if bumped == key => {
-                let lift = self.bump.value * theme::NUDGE_ITEM_FOLLOW;
-                if edge == Edge::Top { -lift } else { lift }
-            }
-            _ => 0.0,
-        }
     }
 
     /// How far an item laid out at `x` is from where it's drawn, and how much it shows.
@@ -607,11 +686,11 @@ fn slots(widths: &[f32], groups: &[Option<&str>]) -> Vec<f32> {
 /// The longest step a single frame may take.
 const MAX_FRAME: Duration = Duration::from_millis(50);
 /// Springs are integrated in steps no longer than this, so they stay stable at any frame rate.
-const SUBSTEP: f32 = 1.0 / 480.0;
+pub(crate) const SUBSTEP: f32 = 1.0 / 480.0;
 /// Close enough to the target, and slow enough, to stop: well under a physical pixel, or a
 /// hundredth of a fade.
-const REST_DISTANCE: f32 = 0.01;
-const REST_SPEED: f32 = 0.5;
+pub(crate) const REST_DISTANCE: f32 = 0.01;
+pub(crate) const REST_SPEED: f32 = 0.5;
 
 /// A damped spring along one axis.
 #[derive(Debug, Clone, Copy)]
@@ -727,7 +806,7 @@ fn draw_island<M>(
 
     let motion = &state.motion;
     let shape = if motion.island.is_some() {
-        motion.edges.rect()
+        motion.shape()
     } else {
         layout.bounds()
     };
@@ -741,42 +820,46 @@ fn draw_island<M>(
         * Transformation::scale(scale)
         * Transformation::translate(-center.x, -center.y);
 
-    // The frame clips to its size: it has room above and below for a bump.
+    // The frame clips to its size: it has room all round for the jelly.
     let room = theme::NUDGE_BUMP_ROOM;
-    let bump = motion.bump(keys, layout, shape);
-    if state.shape_bump.replace(bump) != bump {
+    let bent = !motion.jelly.is_flat();
+    if state.shape_bent.replace(bent) || bent {
         state.shape.clear();
     }
 
     renderer.with_translation(motion.offset(), |renderer| {
         renderer.with_transformation(transformation, |renderer| {
-            let frame_size = Size::new(shape.width, shape.height + 2.0 * room);
+            let frame_size = Size::new(shape.width + 2.0 * room, shape.height + 2.0 * room);
             let geometry = state.shape.draw(renderer, frame_size, |frame| {
                 let size = shape.size();
                 let radius = theme::ISLAND_RADIUS;
                 let smoothing = theme::ISLAND_SMOOTHING;
+                let outline = Rectangle::new(Point::new(room, room), size);
+                // Bent by the jelly while it moves, both paths the same way.
+                let bend = |path: Path| {
+                    if bent {
+                        warp(&path, |at| motion.jelly.displace(outline, at))
+                    } else {
+                        path
+                    }
+                };
                 frame.fill(
-                    &squircle(
-                        Rectangle::new(Point::new(0.0, room), size),
-                        radius,
-                        smoothing,
-                        bump,
-                    ),
+                    &bend(squircle(outline, radius, smoothing)),
                     theme::ISLAND_BG,
                 );
                 // Half a pixel in, so the whole hairline lands inside the fill.
                 let inset = Rectangle::new(
-                    Point::new(0.5, room + 0.5),
+                    Point::new(room + 0.5, room + 0.5),
                     Size::new(size.width - 1.0, size.height - 1.0),
                 );
                 frame.stroke(
-                    &squircle(inset, radius - 0.5, smoothing, bump),
+                    &bend(squircle(inset, radius - 0.5, smoothing)),
                     Stroke::default()
                         .with_color(theme::ISLAND_BORDER)
                         .with_width(1.0),
                 );
             });
-            renderer.with_translation(Vector::new(shape.x, shape.y - room), |renderer| {
+            renderer.with_translation(Vector::new(shape.x - room, shape.y - room), |renderer| {
                 renderer.draw_geometry(geometry);
             });
 
@@ -792,10 +875,16 @@ fn draw_island<M>(
                     if shown < REST_DISTANCE {
                         continue;
                     }
-                    let moved = Vector::new(dx, motion.item_lift(*key));
+                    let (squished, down) = motion.squish_at(shape, bounds.center_x() + dx);
+                    let moved = Vector::new(dx, down);
+                    // It rides along with the jelly where it is, and with the overshoot, to where
+                    // the stretch takes its center. It squishes with both.
+                    let moved = moved + motion.follow(bounds.center() + moved);
                     renderer.with_translation(moved, |renderer| {
-                        item.as_widget()
-                            .draw(tree, renderer, theme, style, child, cursor, viewport);
+                        squish::with(squished, || {
+                            item.as_widget()
+                                .draw(tree, renderer, theme, style, child, cursor, viewport);
+                        });
                         // In the item's moved coordinates, the shape is the other way.
                         fade(renderer, bounds, shape - moved, shown);
                     });
@@ -854,7 +943,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         tree::State::new(State {
             motion: Motion::default(),
             shape: Cache::new(),
-            shape_bump: Cell::new(None),
+            shape_bent: Cell::new(false),
             panel: None,
         })
     }
@@ -1002,7 +1091,13 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             positions,
             self.popover.as_ref().map(|popover| popover.open),
         );
-        motion.nudges(self.nudges.iter().copied());
+        motion.nudges(self.nudges.iter().copied(), |key| {
+            self.keys
+                .iter()
+                .zip(layout.children())
+                .find(|(k, _)| **k == key)
+                .map(|(_, child)| child.bounds().center_x())
+        });
 
         match event {
             // Watched whether or not an item handled it: the island reacts to every press on it.
@@ -1395,7 +1490,8 @@ mod tests {
         });
         assert!(!panel_before_halfway, "the panel waits for the shape");
         assert!(!panel_while_items, "the panel waits for the items to go");
-        assert!(frames < 60, "settles in {frames} frames");
+        // The squash swings on a little after the shape arrives.
+        assert!(frames < 75, "settles in {frames} frames");
         assert_eq!(motion.edges.rect(), panel);
         assert_eq!(motion.item(1, 10.0), (0.0, 0.0), "the items made way");
         assert_eq!(motion.popover.panel.value, 1.0);
@@ -1436,7 +1532,53 @@ mod tests {
         popover(&mut motion, true, panel, true);
         run(&mut motion, start + FRAME * 5, |_| {});
         assert_eq!(motion.edges.rect(), panel);
+        assert_eq!(motion.shape(), panel);
         assert!(!motion.closing_done());
+    }
+
+    #[test]
+    fn opening_squishes_and_closing_splats_against_the_top() {
+        let island = rect(100.0, 120.0);
+        let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 200.0));
+        let mut motion = settled(island, &[1]);
+        let gap = f32::from(theme::EDGE_GAP);
+
+        // Opening: squeezed in from the sides on the way, from its top, and no bump at the end.
+        popover(&mut motion, true, panel, true);
+        let mut squeezed = false;
+        run(&mut motion, Instant::now(), |motion| {
+            let (shape, edges) = (motion.shape(), motion.edges.rect());
+            squeezed |= shape.width < edges.width - 4.0 && shape.height > edges.height;
+            assert_eq!(shape.y, edges.y, "the top stays on the bar");
+            assert!(
+                shape.width < edges.width + 1.0,
+                "never swings visibly wider"
+            );
+        });
+        assert!(squeezed, "squished on the way");
+        assert_eq!(motion.shape(), panel);
+
+        // Closing: the top stays on the bar; the bottom gives.
+        popover(&mut motion, false, panel, true);
+        let (mut splat, mut spread) = (false, false);
+        run(&mut motion, Instant::now(), |motion| {
+            let (shape, edges) = (motion.shape(), motion.edges.rect());
+            splat |= shape.height < island.height - 1.0 && shape.width > island.width + 1.0;
+            assert_eq!(shape.y, edges.y, "the top stays put");
+            assert!(
+                shape.width - edges.width < 2.0 * gap,
+                "stays on the surface"
+            );
+            // An item right of center moves right, and squishes wide and short.
+            let at = Point::new(island.x + island.width * 0.75, island.center_y());
+            let squish = motion.squish();
+            spread |= motion.follow(at).x > 0.5 && squish.x > 1.01 && squish.y < 0.99;
+        });
+        assert!(splat, "lands flatter and wider");
+        assert!(spread, "the items spread and squish with it");
+        assert_eq!(motion.squish(), Squish::NONE);
+        assert_eq!(motion.shape(), island);
+        assert!(motion.closing_done());
     }
 
     #[test]
@@ -1538,12 +1680,17 @@ mod tests {
         }
     }
 
+    /// Where `settled` puts each item's center: 30 px wide, at 10, 50, 90…
+    fn center(key: u64) -> Option<f32> {
+        Some(25.0 + 40.0 * (key - 1) as f32)
+    }
+
     /// An island at rest that has already noted the nudges so far.
     fn nudged(nudges: &[(u64, (u64, Nudge))]) -> Motion {
         let mut motion = settled(rect(0.0, 200.0), &[1, 2]);
-        motion.nudges([(1, (1, Nudge::Up))]);
+        motion.nudges([(1, (1, Nudge::Up))], center);
         assert!(motion.at_rest(), "a new island doesn't replay old nudges");
-        motion.nudges(nudges.iter().copied());
+        motion.nudges(nudges.iter().copied(), center);
         motion
     }
 
@@ -1560,35 +1707,96 @@ mod tests {
         assert!((4.0..6.0).contains(&furthest), "{furthest}");
         assert_eq!(motion.offset(), Vector::ZERO);
         // Already played.
-        motion.nudges([(2, (2, Nudge::Right))]);
+        motion.nudges([(2, (2, Nudge::Right))], center);
         assert!(motion.at_rest());
     }
 
     #[test]
-    fn a_bump_stays_in_its_room_then_flattens() {
+    fn a_nudge_down_bulges_the_bottom_under_its_item_then_flattens() {
         let mut motion = nudged(&[(2, (2, Nudge::Down))]);
-        assert_eq!(motion.bump_at, Some((2, Edge::Bottom)));
-        let (mut furthest, mut lowest): (f32, f32) = (0.0, 0.0);
+        let shape = motion.shape();
+        let (mut furthest, mut lowest, mut wider): (f32, f32, f32) = (0.0, 0.0, 0.0);
+        let mut item: f32 = 0.0;
         run(&mut motion, Instant::now(), |motion| {
-            furthest = furthest.max(motion.bump.value);
+            let jelly = &motion.jelly;
+            let under = jelly.value(Side::Bottom, 65.0 / 200.0);
+            furthest = furthest.max(under);
+            assert!(
+                under >= jelly.value(Side::Bottom, 0.9) - 0.01,
+                "it's under the item"
+            );
             lowest = lowest.max(motion.offset().y);
+            wider = wider.max(jelly.value(Side::Right, 1.0));
+            item = item.max(motion.squish_at(shape, 65.0).1);
         });
         assert!(
             (0.4..0.65).contains(&lowest),
             "the island moves half a pixel: {lowest}"
         );
+        assert!((1.5..2.5).contains(&furthest), "{furthest}");
+        assert!(wider > 0.5, "the bottom widens: {wider}");
+        assert!(
+            (0.5..1.5).contains(&item),
+            "the item rides half the bump: {item}"
+        );
+        assert!(motion.jelly.is_flat());
         assert_eq!(motion.offset(), Vector::ZERO);
-        assert!((1.7..2.3).contains(&furthest), "{furthest}");
-        assert_eq!(motion.bump.value, 0.0);
+    }
+
+    #[test]
+    fn a_push_leans_into_where_its_going_smoothly() {
+        let mut motion = nudged(&[(2, (2, Nudge::Right))]);
+        let shape = motion.shape();
+        let (mut swell, mut flat, mut taller, mut flatter): (f32, f32, f32, f32) =
+            (0.0, 0.0, 1.0, 1.0);
+        run(&mut motion, Instant::now(), |motion| {
+            let jelly = &motion.jelly;
+            swell = swell.max(jelly.value(Side::Top, 0.95));
+            flat = flat.min(jelly.value(Side::Top, 0.05));
+            // Top and bottom lean the same way.
+            assert!((jelly.value(Side::Top, 0.9) - jelly.value(Side::Bottom, 0.9)).abs() < 0.01);
+            // No creases: along the top, nothing jumps between neighbors.
+            for step in 0..100 {
+                let (a, b) = (step as f32 / 100.0, (step + 1) as f32 / 100.0);
+                assert!((jelly.value(Side::Top, a) - jelly.value(Side::Top, b)).abs() < 0.2);
+            }
+            taller = taller.max(motion.squish_at(shape, 185.0).0.y);
+            flatter = flatter.min(motion.squish_at(shape, 15.0).0.y);
+        });
+        assert!((1.0..2.0).contains(&swell), "the right end swells: {swell}");
+        assert!(
+            (-2.0..-1.0).contains(&flat),
+            "the left end flattens: {flat}"
+        );
+        assert!(taller > 1.05 && flatter < 0.95, "{taller} {flatter}");
+        assert!(motion.jelly.is_flat());
+
+        let mut motion = nudged(&[(2, (2, Nudge::Left))]);
+        let mut leaned: f32 = 0.0;
+        run(&mut motion, Instant::now(), |motion| {
+            leaned = leaned.max(motion.jelly.value(Side::Top, 0.05));
+        });
+        assert!(leaned > 1.0, "the left end swells: {leaned}");
+
+        let mut motion = nudged(&[(2, (2, Nudge::Up))]);
+        let (mut top, mut bulge): (f32, f32) = (0.0, 0.0);
+        run(&mut motion, Instant::now(), |motion| {
+            top = top.max(motion.jelly.value(Side::Left, 0.0));
+            bulge = bulge.max(motion.jelly.value(Side::Top, 65.0 / 200.0));
+        });
+        assert!(
+            top > 0.5 && bulge > 1.5,
+            "the top widens and bulges: {top} {bulge}"
+        );
     }
 
     #[test]
     fn a_held_island_lets_nudges_pass() {
         let mut motion = nudged(&[]);
         motion.press(Point::new(10.0, 10.0));
-        motion.nudges([(1, (2, Nudge::Left)), (2, (3, Nudge::Up))]);
+        motion.nudges([(1, (2, Nudge::Left)), (2, (3, Nudge::Up))], center);
         assert_eq!(motion.push_x.velocity, 0.0);
-        assert_eq!(motion.bump.velocity, 0.0);
+        assert!(motion.jelly.at_rest());
         assert_eq!(motion.seen, Some(3));
     }
 

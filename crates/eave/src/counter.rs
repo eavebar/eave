@@ -9,11 +9,12 @@ use std::time::Instant;
 use iced::advanced::text::{self, Paragraph as _};
 use iced::advanced::widget::{Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, renderer};
+use iced::widget::canvas;
 use iced::{
     Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Size, alignment, window,
 };
 
-use crate::theme;
+use crate::{label, squish, theme};
 
 type Paragraph = <iced::Renderer as text::Renderer>::Paragraph;
 
@@ -209,7 +210,21 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Counter {
         let bounds = layout.bounds();
         let width = state.paragraph.min_bounds().width;
         let at = Point::new(bounds.center_x() - width / 2.0, bounds.y);
-        renderer.fill_paragraph(&state.paragraph, at, self.color, *viewport);
+        let squish = squish::current();
+        if squish.is_none() {
+            renderer.fill_paragraph(&state.paragraph, at, self.color, *viewport);
+        } else {
+            let text = canvas::Text {
+                content: state.text.clone(),
+                position: at,
+                color: self.color,
+                size: Pixels(self.size),
+                font: self.font.unwrap_or_default(),
+                shaping: text::Shaping::Basic,
+                ..canvas::Text::default()
+            };
+            label::draw_squished(renderer, squish, text, bounds);
+        }
     }
 
     fn update(

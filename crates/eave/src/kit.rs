@@ -9,17 +9,18 @@ use eave_api::erased::AnyMessage;
 use eave_api::ui::{Kind, Node, Tone};
 use iced::widget::scrollable::{self, Scrollbar};
 use iced::widget::{
-    Space, button, column, container, image, mouse_area, row, rule, slider, text, text_input,
+    Space, button, column, container, mouse_area, row, rule, slider, text, text_input,
 };
 use iced::{Background, Border, Color, Element, Font, Length, Padding, Theme, alignment};
 
 use crate::alternate::Alternate;
-use crate::apps::{AppIcon, Icons};
+use crate::apps::Icons;
 use crate::clip::Clip;
 use crate::counter::Counter;
 use crate::field::Field;
 use crate::gulp::Gulp;
 use crate::icon;
+use crate::label::Label;
 use crate::meter::Meter;
 use crate::switcher::Switcher;
 use crate::tabs::Tabs;
@@ -146,11 +147,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
         Kind::Label {
             text: content,
             tone,
-        } => text(content)
-            .size(ctx.size())
-            .font(ctx.font())
-            .color(ctx.color(tone))
-            .into(),
+        } => Label::new(content, ctx.size(), ctx.font(), ctx.color(tone)).into(),
         Kind::Heading {
             text: content,
             tone,
@@ -617,22 +614,23 @@ fn app_icon<'a>(app_id: &str, tone: Tone, icons: &Icons) -> Element<'a, AnyMessa
         1.0
     };
     match icons.get(app_id) {
-        Some(Some(AppIcon(handle))) => image(handle.clone())
-            .width(theme::ICON_SIZE)
-            .height(theme::ICON_SIZE)
-            .opacity(opacity)
-            .into(),
+        Some(Some(icon)) => icon.view(opacity),
         _ => {
             let letter: String = app_id
                 .chars()
                 .take(1)
                 .flat_map(char::to_uppercase)
                 .collect();
-            container(text(letter).size(theme::TEXT_SIZE).color(theme::tone(tone)))
-                .width(theme::ICON_SIZE)
-                .height(theme::ICON_SIZE)
-                .center(theme::ICON_SIZE)
-                .into()
+            container(Label::new(
+                letter,
+                theme::TEXT_SIZE,
+                Font::DEFAULT,
+                theme::tone(tone),
+            ))
+            .width(theme::ICON_SIZE)
+            .height(theme::ICON_SIZE)
+            .center(theme::ICON_SIZE)
+            .into()
         }
     }
 }
