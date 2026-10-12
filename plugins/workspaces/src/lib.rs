@@ -2,7 +2,9 @@
 //! and the icons of its apps: two at most, then `+n` for the windows they leave out. Resting the
 //! pointer on one shows an icon for every window. The ones you aren't on are dimmed. Click one to
 //! go there, right-click it for a list of its windows, scroll to move between them. Switching
-//! nudges the island the way it went.
+//! nudges the island the way it went, over as long as Hyprland's own workspace animation takes.
+
+use std::time::Duration;
 
 use eave_api::ui::{self, Item, Node, Panel, Tone};
 use eave_api::{Effect, Nudge, Registry, Subscription, Task, Widget};
@@ -35,6 +37,8 @@ pub struct Workspaces {
     focused: Option<String>,
     /// The workspace whose windows the popover lists.
     listing: Option<i64>,
+    /// How long Hyprland takes to animate a workspace switch, if it does.
+    lasting: Option<Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,6 +66,7 @@ pub struct Snapshot {
     workspaces: Vec<Workspace>,
     clients: Vec<Client>,
     active: i64,
+    lasting: Option<Duration>,
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +79,8 @@ pub enum Message {
     List(i64),
     /// Focus a window, by address without the `0x`.
     Focus(String),
+    /// How long Hyprland's workspace animation now takes.
+    Lasting(Option<Duration>),
 }
 
 impl Widget for Workspaces {
@@ -89,6 +96,7 @@ impl Widget for Workspaces {
             active: None,
             focused: None,
             listing: None,
+            lasting: None,
         };
         workspaces.refresh();
         (workspaces, Task::none())
@@ -119,8 +127,14 @@ impl Widget for Workspaces {
                     })
                     .collect();
                 self.active = Some(snapshot.active);
+                self.lasting = snapshot.lasting;
+            }
+            // Its animations may have changed.
+            Message::Hyprland(Update::Event(Event::ConfigReloaded)) => {
+                return Task::future(lasting()).map(Message::Lasting).into();
             }
             Message::Hyprland(Update::Event(event)) => self.apply(event),
+            Message::Lasting(lasting) => self.lasting = lasting,
             Message::Go(id) => return focus(id.to_string()),
             // Relative to the monitor, over the workspaces it has open.
             Message::Previous => return focus("\"m-1\"".into()),
@@ -133,10 +147,15 @@ impl Widget for Workspaces {
         }
         self.refresh();
         // Ids follow the order workspaces are shown in, so a higher one is further right.
-        match (before, self.active) {
-            (Some(from), Some(to)) if to > from => Effect::none().nudge(Nudge::Right),
-            (Some(from), Some(to)) if to < from => Effect::none().nudge(Nudge::Left),
-            _ => Effect::none(),
+        let nudge = match (before, self.active) {
+            (Some(from), Some(to)) if to > from => Nudge::Right,
+            (Some(from), Some(to)) if to < from => Nudge::Left,
+            _ => return Effect::none(),
+        };
+        // In step with Hyprland sliding the workspace in.
+        match self.lasting {
+            Some(lasting) => Effect::none().nudge_lasting(nudge, lasting),
+            None => Effect::none().nudge(nudge),
         }
     }
 
@@ -339,7 +358,18 @@ async fn snapshot() -> std::io::Result<Snapshot> {
         workspaces,
         clients,
         active: active.id,
+        lasting: lasting().await,
     })
+}
+
+/// How long Hyprland takes to slide a workspace in. Without it, nudges keep their own pace.
+async fn lasting() -> Option<Duration> {
+    eave_hyprland::animation("workspacesIn")
+        .await
+        .unwrap_or_else(|error| {
+            eprintln!("eave-workspaces: {error}");
+            None
+        })
 }
 
 /// `clients` gives addresses as `0x5d1f2a0`, events as `5d1f2a0`.
@@ -401,6 +431,7 @@ mod tests {
                 .update(Message::Hyprland(Update::Event(event)))
                 .into_parts()
                 .2
+                .map(|request| request.nudge)
         };
         // The first one is where it starts, not a move.
         assert_eq!(go(1), None);
@@ -446,6 +477,7 @@ mod tests {
             workspaces: vec![workspace(2, "2"), workspace(-98, "special:scratch")],
             clients: vec![client("0xa", 2), client("0xb", -98)],
             active: 2,
+            lasting: None,
         })));
         assert_eq!(ids(&workspaces), [2]);
 
@@ -495,6 +527,7 @@ mod tests {
             workspaces: vec![workspace(1, "1"), workspace(3, "web")],
             clients: vec![client("0xa", 1), client("0xb", 3)],
             active: 1,
+            lasting: None,
         })));
         assert_eq!(ids(&workspaces), [1, 3]);
 

@@ -1,10 +1,12 @@
+use std::time::Duration;
+
 use crate::Task;
 
 /// What [`Widget::update`](crate::Widget::update) asks for: async work, plus requests to the host.
 pub struct Effect<M> {
     task: Task<M>,
     popover: Option<PopoverRequest>,
-    nudge: Option<Nudge>,
+    nudge: Option<NudgeRequest>,
 }
 
 #[doc(hidden)]
@@ -26,6 +28,24 @@ pub enum Nudge {
     Down,
     Left,
     Right,
+}
+
+/// A nudge as the host gets it: which way, and how long what it follows takes on screen, if the
+/// widget knows.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NudgeRequest {
+    pub nudge: Nudge,
+    pub lasting: Option<Duration>,
+}
+
+impl From<Nudge> for NudgeRequest {
+    fn from(nudge: Nudge) -> Self {
+        Self {
+            nudge,
+            lasting: None,
+        }
+    }
 }
 
 impl<M> Effect<M> {
@@ -58,12 +78,26 @@ impl<M> Effect<M> {
 
     /// Nudges this widget's island. Ignored while the island is held or has a popover.
     pub fn nudge(mut self, nudge: Nudge) -> Self {
-        self.nudge = Some(nudge);
+        self.nudge = Some(NudgeRequest {
+            nudge,
+            lasting: None,
+        });
+        self
+    }
+
+    /// Nudges this widget's island in step with something else on screen that takes `lasting`,
+    /// like the compositor's own workspace animation: the host plays the same motion, slowed down
+    /// or sped up to settle over about that long.
+    pub fn nudge_lasting(mut self, nudge: Nudge, lasting: Duration) -> Self {
+        self.nudge = Some(NudgeRequest {
+            nudge,
+            lasting: Some(lasting),
+        });
         self
     }
 
     #[doc(hidden)]
-    pub fn into_parts(self) -> (Task<M>, Option<PopoverRequest>, Option<Nudge>) {
+    pub fn into_parts(self) -> (Task<M>, Option<PopoverRequest>, Option<NudgeRequest>) {
         (self.task, self.popover, self.nudge)
     }
 }

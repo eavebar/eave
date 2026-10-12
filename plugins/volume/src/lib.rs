@@ -569,7 +569,7 @@ mod tests {
     }
 
     fn nudge(effect: Effect<Message>) -> Option<Nudge> {
-        effect.into_parts().2
+        effect.into_parts().2.map(|request| request.nudge)
     }
 
     #[test]

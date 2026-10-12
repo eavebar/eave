@@ -94,6 +94,10 @@ pub const NUDGE_DAMPING: f32 = 0.85;
 /// about 5 px. Up or down, the whole island moves about half a pixel.
 pub const NUDGE_PUSH_SPEED: f32 = 300.0;
 pub const NUDGE_LIFT_SPEED: f32 = 30.0;
+/// About how long a nudge takes to settle: a push is back within 5 % of its peak by then. A
+/// nudge asked to last longer (`Effect::nudge_lasting`) plays the same motion slowed down by as
+/// much.
+pub const NUDGE_LASTING: Duration = Duration::from_millis(190);
 /// The jelly an island's outline is made of ([`crate::jelly`]): how hard each piece of the edge
 /// is pulled back where it belongs, its damping ratio (just under critical, so it settles without
 /// wobbling), and how hard it's pulled toward its neighbors, which is what smooths a poke out.
@@ -107,7 +111,7 @@ pub const JELLY_COUPLING: f32 = 1400.0;
 pub const JELLY_BUMP: f32 = 150.0;
 pub const JELLY_LEAN: f32 = 120.0;
 /// How wide a nudge's bump in an island's edge is, end to end.
-pub const NUDGE_BUMP_WIDTH: f32 = 64.0;
+pub const NUDGE_BUMP_WIDTH: f32 = 176.0;
 /// The furthest the outline reaches out of the island: it stays inside `EDGE_GAP` above and at
 /// the sides, and `DRAG_ROOM` below.
 pub const NUDGE_BUMP_ROOM: f32 = 4.0;

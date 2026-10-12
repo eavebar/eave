@@ -114,3 +114,15 @@ mod tests {
         );
     }
 }
+
+/// One of the animations `animations` lists. One that isn't `overridden` follows its parent's
+/// settings, whatever its own fields say.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Animation {
+    pub name: String,
+    pub overridden: bool,
+    pub enabled: bool,
+    /// In deciseconds: 4 means 400 ms.
+    pub speed: f32,
+}

@@ -204,4 +204,6 @@ Return `Effect::none().nudge(Nudge::…)` from `update` when something your item
 | `Up`, `Down` | a level rose or fell (volume, brightness) | its top edge bumps up above your item, or its bottom edge dips below it, then springs flat |
 | `Left`, `Right` | you moved to the previous or next thing (workspace, track) | the whole island is pushed that way and springs back |
 
+If the change you're following plays out on screen over a known time, like the compositor sliding a workspace in, return `Effect::none().nudge_lasting(nudge, duration)` instead: the host plays the same motion, just as far, stretched to settle over about that long. `workspaces` does this with Hyprland's `workspacesIn` animation.
+
 Nudge on the change itself, wherever it came from, and once per change. `volume` nudges on the server's readings, so a scroll step and a media key look the same. A nudge is dropped while the island is held or has a popover open.

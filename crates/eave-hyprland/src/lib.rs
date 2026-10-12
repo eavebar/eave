@@ -102,6 +102,45 @@ pub async fn query<T: DeserializeOwned>(what: &str) -> io::Result<T> {
     serde_json::from_str(&reply).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
+/// How long Hyprland's animation `name` (like `workspacesIn`) takes, following unset ones up to
+/// the parent they inherit from. `None` if it's turned off.
+pub async fn animation(name: &str) -> io::Result<Option<Duration>> {
+    // `animations` answers with the animations, then the curves.
+    let (animations, _): (Vec<types::Animation>, serde::de::IgnoredAny) =
+        query("animations").await?;
+    Ok(resolve(&animations, name))
+}
+
+fn resolve(animations: &[types::Animation], name: &str) -> Option<Duration> {
+    let mut name = name;
+    loop {
+        let animation = animations.iter().find(|animation| animation.name == name);
+        match animation {
+            Some(animation) if animation.overridden || name == "global" => {
+                return (animation.enabled && animation.speed > 0.0)
+                    .then(|| Duration::from_secs_f32(animation.speed / 10.0));
+            }
+            _ if name == "global" => return None,
+            _ => name = parent(name),
+        }
+    }
+}
+
+/// The animation `name` inherits from, as Hyprland's tree has it: `workspacesIn` from
+/// `workspaces`, `specialWorkspace` from `workspaces`, and the top ones from `global`.
+fn parent(name: &str) -> &str {
+    if let Some(base) = name.strip_suffix("In").or_else(|| name.strip_suffix("Out")) {
+        return base;
+    }
+    match name {
+        "specialWorkspace" => "workspaces",
+        "windowsMove" => "windows",
+        "fadeIn" | "fadeOut" | "fadeSwitch" | "fadeShadow" | "fadeDim" | "fadeLayers"
+        | "fadeDpms" | "fadePopups" => "fade",
+        _ => "global",
+    }
+}
+
 /// Which config syntax this Hyprland speaks, found out on first use.
 static SYNTAX: AtomicU8 = AtomicU8::new(UNKNOWN);
 const UNKNOWN: u8 = 0;
@@ -250,4 +289,32 @@ fn socket_path(name: &str) -> io::Result<PathBuf> {
         .filter(|dir| dir.join(&signature).exists())
         .unwrap_or_else(|| PathBuf::from("/tmp/hypr"));
     Ok(runtime.join(signature).join(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn animations() -> Vec<types::Animation> {
+        let reply = r#"[[
+            {"name": "workspacesIn", "overridden": false, "bezier": "", "enabled": true, "speed": 0.00, "style": ""},
+            {"name": "workspaces", "overridden": true, "bezier": "swipe", "enabled": true, "speed": 4.00, "style": "slide"},
+            {"name": "fadeIn", "overridden": false, "bezier": "", "enabled": true, "speed": 0.00, "style": ""},
+            {"name": "fade", "overridden": true, "bezier": "", "enabled": false, "speed": 3.00, "style": ""},
+            {"name": "global", "overridden": true, "bezier": "default", "enabled": true, "speed": 10.00, "style": ""}
+        ], [{"name": "swipe"}]]"#;
+        let (animations, _): (Vec<types::Animation>, serde::de::IgnoredAny) =
+            serde_json::from_str(reply).unwrap();
+        animations
+    }
+
+    #[test]
+    fn animations_inherit_until_one_is_set() {
+        let animations = animations();
+        let ms = |name| resolve(&animations, name).map(|lasting| lasting.as_millis());
+        assert_eq!(ms("workspacesIn"), Some(400));
+        assert_eq!(ms("specialWorkspaceOut"), Some(400));
+        assert_eq!(ms("windowsMove"), Some(1000), "falls back to global");
+        assert_eq!(ms("fadeIn"), None, "turned off");
+    }
 }

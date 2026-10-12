@@ -20,7 +20,7 @@ mod widget;
 #[doc(hidden)]
 pub mod erased;
 
-pub use effect::{Effect, Nudge};
+pub use effect::{Effect, Nudge, NudgeRequest};
 pub use iced_futures::Subscription;
 pub use iced_runtime::Task;
 pub use registry::Registry;

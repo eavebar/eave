@@ -3,7 +3,7 @@
 //! surface grows to make room while it's there.
 
 use eave_api::erased::{AnyMessage, ErasedWidget, PopoverRequest};
-use eave_api::{Nudge, Registry};
+use eave_api::{NudgeRequest, Registry};
 use iced::alignment::Horizontal;
 use iced::widget::{Space, container, row};
 use iced::{
@@ -55,7 +55,7 @@ struct Instance {
     /// The bar the item was last clicked on, where its popover opens.
     window: Option<window::Id>,
     /// The last nudge it asked for, numbered by [`Bar::nudges`].
-    nudge: Option<(u64, Nudge)>,
+    nudge: Option<(u64, NudgeRequest)>,
 }
 
 /// Messages for widgets whose popover just opened or started closing, by instance id.

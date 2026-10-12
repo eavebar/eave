@@ -17,7 +17,7 @@
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 
-use eave_api::Nudge;
+use eave_api::{Nudge, NudgeRequest};
 
 use iced::advanced::graphics::geometry::Renderer as _;
 use iced::advanced::widget::{Operation, Tree, tree};
@@ -41,7 +41,7 @@ pub struct Island<'a, M> {
     align: Horizontal,
     popover: Option<Popover<'a, M>>,
     /// The last nudge each item asked for, numbered so the island plays each one once.
-    nudges: Vec<(u64, (u64, Nudge))>,
+    nudges: Vec<(u64, (u64, NudgeRequest))>,
     /// Each item's width group: items in the same one are as wide as the widest of them.
     groups: Vec<Option<&'a str>>,
 }
@@ -81,7 +81,7 @@ impl<'a, M> Island<'a, M> {
 
     /// Each item's latest nudge, by key, with its number. Only ones newer than the island has seen
     /// play.
-    pub fn nudges(mut self, nudges: Vec<(u64, (u64, Nudge))>) -> Self {
+    pub fn nudges(mut self, nudges: Vec<(u64, (u64, NudgeRequest))>) -> Self {
         self.nudges = nudges;
         self
     }
@@ -169,6 +169,9 @@ struct Motion {
     push_y: Spring,
     /// The outline, which a nudge pokes and which smooths the poke out by itself.
     jelly: Jelly,
+    /// How much slower than usual the last nudge plays: the push springs and the jelly run on
+    /// time divided by it. 1 unless the nudge said how long it should last.
+    pace: f32,
     /// How many pixels a popover's overshoot adds to the shape's width and height (negative is
     /// narrower or shorter), on top of its edges.
     stretch_x: Spring,
@@ -194,6 +197,7 @@ impl Default for Motion {
             push_x: Spring::new(0.0, NUDGE),
             push_y: Spring::new(0.0, NUDGE),
             jelly: Jelly::default(),
+            pace: 1.0,
             stretch_x: Spring::new(0.0, SQUISH),
             stretch_y: Spring::new(0.0, SQUISH),
             seen: None,
@@ -342,9 +346,9 @@ impl Motion {
     /// Plays the nudges it hasn't seen yet, with where each item's center is across the island.
     /// A new island only notes them: they happened before it. A held island, or one with a
     /// popover, lets them pass.
-    fn nudges(
+    fn nudges<N: Into<NudgeRequest>>(
         &mut self,
-        nudges: impl IntoIterator<Item = (u64, (u64, Nudge))>,
+        nudges: impl IntoIterator<Item = (u64, (u64, N))>,
         center: impl Fn(u64) -> Option<f32>,
     ) {
         let seen = self.seen;
@@ -355,7 +359,7 @@ impl Motion {
                 && self.press.is_none()
                 && !self.popover.present
             {
-                self.nudge(nudge, center(key));
+                self.nudge(nudge.into(), center(key));
             }
         }
         self.seen = Some(newest);
@@ -364,8 +368,13 @@ impl Motion {
     /// Sets the island off: sideways as a whole, or up or down half a pixel. Its outline leans into
     /// it, swelling on the side it's going toward and flattening on the side it's leaving, and up
     /// or down the edge over the item (at `center`) bulges. The springs and the jelly bring it
-    /// back.
-    fn nudge(&mut self, nudge: Nudge, center: Option<f32>) {
+    /// back. A nudge that says how long it lasts plays the same motion stretched out to that.
+    fn nudge(&mut self, request: NudgeRequest, center: Option<f32>) {
+        let NudgeRequest { nudge, lasting } = request;
+        // The springs run on time slowed by the pace, so the same kicks go just as far, slower.
+        self.pace = lasting.map_or(1.0, |lasting| {
+            (lasting.as_secs_f32() / theme::NUDGE_LASTING.as_secs_f32()).clamp(0.5, 5.0)
+        });
         let (push, lift) = (theme::NUDGE_PUSH_SPEED, theme::NUDGE_LIFT_SPEED);
         let lean = theme::JELLY_LEAN;
         // From −1 at the start of a side to 1 at its end, eased at both.
@@ -543,8 +552,6 @@ impl Motion {
             &mut edges.bottom,
             &mut self.popover.items,
             &mut self.popover.panel,
-            &mut self.push_x,
-            &mut self.push_y,
             &mut self.stretch_x,
             &mut self.stretch_y,
         ]
@@ -556,8 +563,15 @@ impl Motion {
         )
     }
 
+    /// The springs a nudge moves, which run at its pace.
+    fn paced(&mut self) -> [&mut Spring; 2] {
+        [&mut self.push_x, &mut self.push_y]
+    }
+
     fn at_rest(&mut self) -> bool {
-        self.jelly.at_rest() && self.springs().all(|spring| spring.at_rest())
+        self.jelly.at_rest()
+            && self.springs().all(|spring| spring.at_rest())
+            && self.paced().iter().all(|spring| spring.at_rest())
     }
 
     /// Advances to `now`. Returns whether another frame is needed.
@@ -579,11 +593,16 @@ impl Motion {
         for spring in self.springs() {
             spring.advance(elapsed);
         }
-        self.jelly.advance(elapsed);
+        let paced = elapsed / self.pace;
+        for spring in self.paced() {
+            spring.advance(paced);
+        }
+        self.jelly.advance(paced);
         // The fades wait on how far the shape has come.
         self.aim();
         if self.at_rest() {
             self.springs().for_each(Spring::settle);
+            self.paced().into_iter().for_each(Spring::settle);
             self.jelly.settle();
             self.let_go_of_grab();
             self.last = None;
@@ -1848,19 +1867,49 @@ mod tests {
         assert!(motion.at_rest());
     }
 
+    /// A nudge that lasts longer plays the same push, just as far, stretched out in time.
+    #[test]
+    fn a_lasting_push_is_slower_but_as_far() {
+        let push = |lasting: Option<Duration>| {
+            let request = NudgeRequest {
+                nudge: Nudge::Right,
+                lasting,
+            };
+            let mut motion = nudged(&[]);
+            motion.nudges([(2, (2, request))], center);
+            let (mut furthest, mut peak_at, mut frame): (f32, usize, usize) = (0.0, 0, 0);
+            let frames = run(&mut motion, Instant::now(), |motion| {
+                frame += 1;
+                if motion.offset().x > furthest {
+                    (furthest, peak_at) = (motion.offset().x, frame);
+                }
+            });
+            (furthest, peak_at, frames)
+        };
+        let (far, peak, frames) = push(None);
+        let (slow_far, slow_peak, slow_frames) = push(Some(theme::NUDGE_LASTING * 3));
+        assert!((far - slow_far).abs() < 0.2, "{far} {slow_far}");
+        assert!(slow_peak >= peak * 2, "{peak} {slow_peak}");
+        assert!(slow_frames >= frames * 2, "{frames} {slow_frames}");
+    }
+
     #[test]
     fn a_nudge_down_bulges_the_bottom_under_its_item_then_flattens() {
-        let mut motion = nudged(&[(2, (2, Nudge::Down))]);
+        // Wide enough that the far end is well clear of the bump.
+        let mut motion = settled(rect(0.0, 400.0), &[1, 2]);
+        motion.nudges([(1, (1, Nudge::Up))], center);
+        motion.nudges([(2, (2, Nudge::Down))], center);
         let shape = motion.shape();
         let (mut furthest, mut lowest, mut wider): (f32, f32, f32) = (0.0, 0.0, 0.0);
         let mut item: f32 = 0.0;
         run(&mut motion, Instant::now(), |motion| {
             let jelly = &motion.jelly;
-            let under = jelly.value(Side::Bottom, 65.0 / 200.0);
+            let under = jelly.value(Side::Bottom, 65.0 / 400.0);
             furthest = furthest.max(under);
             assert!(
-                under >= jelly.value(Side::Bottom, 0.9) - 0.01,
-                "it's under the item"
+                under >= jelly.value(Side::Bottom, 0.9) - 0.05,
+                "it's under the item: {under} {}",
+                jelly.value(Side::Bottom, 0.9)
             );
             lowest = lowest.max(motion.offset().y);
             wider = wider.max(jelly.value(Side::Right, 1.0));

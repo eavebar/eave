@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 pub use crate::effect::PopoverRequest;
 use crate::ui::{Item, Panel};
-use crate::{Effect, Subscription, Task, Widget};
+use crate::{Effect, NudgeRequest, Subscription, Task, Widget};
 
 /// A message of some widget's own type. Cloning is cheap: the value sits behind an `Arc`.
 #[derive(Clone)]
@@ -60,7 +60,11 @@ impl<W: Widget> ErasedWidget for W {
             None => effect,
         };
         match nudge {
-            Some(nudge) => effect.nudge(nudge),
+            Some(NudgeRequest {
+                nudge,
+                lasting: Some(lasting),
+            }) => effect.nudge_lasting(nudge, lasting),
+            Some(NudgeRequest { nudge, .. }) => effect.nudge(nudge),
             None => effect,
         }
     }
