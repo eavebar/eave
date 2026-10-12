@@ -4,7 +4,7 @@
 
 - Rust (stable, edition 2024). Developed with 1.97.
 - A running Hyprland session (the bar needs a Wayland compositor with layer-shell).
-- System libraries: `wayland`, `libxkbcommon`. For the `gpu` feature, also a Vulkan loader plus drivers (Mesa on Asahi).
+- System libraries: `wayland`, `libxkbcommon` (with its headers), and `pkg-config` to find it at build time. Arch and CachyOS have all of them with Hyprland; Debian-like systems need `libxkbcommon-dev pkg-config`. For the `gpu` feature, also a Vulkan loader plus drivers (Mesa on Asahi).
 
 ## Build and run
 
@@ -16,6 +16,8 @@ cargo test --workspace             # every crate
 cargo install --path crates/eave-build   # then `eave-build`: install what config.toml uses
 
 ```
+
+CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs the build, tests, clippy (`-D warnings`) and rustfmt on x86_64 and aarch64 for every push to main and every pull request, then runs `install.sh` from the checkout on x86_64.
 
 To install it and start it with your session, see [running.md](running.md). To have the installed bar built from your checkout instead of GitHub, put `eave = "~/path/to/eave"` at the top of config.toml. Then `eave-build` builds your working tree as it is, uncommitted changes included.
 

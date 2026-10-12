@@ -1,12 +1,14 @@
 # eave
 
+[![CI](https://github.com/francescomengarelli/eave/actions/workflows/ci.yml/badge.svg)](https://github.com/francescomengarelli/eave/actions/workflows/ci.yml)
+
 A status bar for [Hyprland](https://hyprland.org), written from scratch in Rust. Floating islands with workspaces, the focused window, a clock, volume, network and battery. Animations follow the compositor's frame clock, the bar redraws only when something changed, and it idles at about 14 MB and 0% CPU.
 
 Everything in it is a plugin, compiled in rather than loaded at runtime. Plugins are git repositories you name in your config.
 
 ## Install
 
-You need Hyprland, Rust (`cargo`) and `git`:
+You need Hyprland, Rust (`cargo`), `git` and `pkg-config` (Arch and CachyOS have it already):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/francescomengarelli/eave/main/install.sh | sh

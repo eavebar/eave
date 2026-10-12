@@ -120,5 +120,5 @@ systemctl --user enable --now eave-rebuild.path   # eave-build init put the unit
 - The rebuild runs at idle CPU and I/O priority, so it never makes the desktop stutter.
 - A failed build sends a notification (`notify-send`, or Hyprland's own `hyprctl notify` when no notification daemon is running). The old bar keeps running. Details are in `journalctl --user -u eave-rebuild`.
 - Saving while a build runs doesn't start a second build, and that save isn't queued either. If you started using another widget mid-build, save again once the build is done.
-- It works whether the bar runs as the service or from the Hyprland config. In the second case it needs `HYPRLAND_INSTANCE_SIGNATURE` in systemd's environment, as above.
+- It works whether the bar runs as the service or from the Hyprland config. In the second case it relaunches the bar through Hyprland's socket. If systemd's environment has no `HYPRLAND_INSTANCE_SIGNATURE`, it uses the one Hyprland that's running, and it gives up (leaving the old bar running) only when there are several.
 - `eave-build init` writes the real path into `PathChanged=` when `XDG_CONFIG_HOME` isn't `~/.config`.
