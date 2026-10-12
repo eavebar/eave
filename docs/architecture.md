@@ -48,7 +48,7 @@ Core plugins depend only on Hyprland and the kernel, plus an audio server for vo
 - `config.toml` is watched with inotify. When it changes, the host re-reads it and rebuilds only the instances whose entry changed ([D-21](decisions.md)).
 - A widget's `update` returns an `Effect`: a `Task` for async work, plus optional requests to open or close its popover, or to nudge its island. `update` never does I/O.
 - `view(window)` is pure. For the bar it lays out the left, center and right zones from `config.toml`, each as a squircle island only as wide as its items. A zone with nothing to show has no island ([D-24](decisions.md)). When items come or go, the island morphs: its edges spring to the new size, items slide to their new places and new ones fade in ([D-27](decisions.md)). Pressing an island squeezes it; dragging pulls it a few pixels with a rubber band, and it springs back on release ([D-26](decisions.md)). A widget's nudge bumps the island's edge at its item, or pushes the whole island sideways, on the same springs ([D-32](decisions.md)). Each item is wrapped in a `Slot`, which turns unhandled clicks and scroll steps into messages. An open popover's `Panel` is drawn by the island it grew out of.
-- Nothing is drawn when no message arrives. Pointer tracking is only subscribed while a popover is open, so hovering over the bar wakes nothing.
+- Nothing is drawn when no message arrives. Pointer tracking is only subscribed while a popover is open, so hovering over the bar sends the app no messages. The pointer entering or leaving an item does redraw it: its `Slot` tells the alternates inside, which fade to their hover option and back ([D-35](decisions.md)). Moving within an item, or resting on it, draws nothing.
 
 ## Popovers
 
