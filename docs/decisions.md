@@ -626,10 +626,18 @@ The volume item is now `alternate([icon, counter(volume, 0..=max, "%")], showing
 
 **Status:** proposed (2026-10-12)
 
-**What:** while `Icon::Battery { charging: true }` is on screen, the icon is a liquid being poured. The edge of the charge always ripples gently (0.3 px, 1.2 Hz). Every `BATTERY_GULP_EVERY` (8 s) it gulps `BATTERY_GULPS` (3) times, `BATTERY_GULP` (380 ms) each and a little weaker each time. With every gulp the charge surges 0.5 px toward the nub and the whole icon swells from its middle (12% taller, 6% narrower). All of this is in the host (`icon.rs`). The plugin still only says `charging`, so no plugin draws or animates anything. Once charging stops, it asks for no more frames.
+**What:** while `Icon::Battery { charging: true }` is on screen, the icon is a liquid being poured. The edge of the charge always ripples gently (0.3 px, 1.2 Hz). Every `BATTERY_GULP_EVERY` (8 s) it gulps `BATTERY_GULPS` (3) times, `BATTERY_GULP` (380 ms) each and a little weaker each time. With every gulp the charge surges 0.5 px toward the nub and the whole icon swells from its middle (12% taller, 6% narrower). The pour replaces the charging bolt, which is gone: the motion and the `Good` tone say "charging" on their own. All of this is in the host (`icon.rs`). The plugin still only says `charging`, so no plugin draws or animates anything. Once charging stops, it asks for no more frames.
 
-**30 frames a second, not the frame clock:** the animation asks for its next frame `BATTERY_FRAME` (1/30 s) later (`RedrawRequest::At`), not for the compositor's next frame. This is a deliberate exception to "in sync with the compositor's frame clock" ([vision.md](vision.md)), made by the user: at the full 120 Hz the never-ending ripple cost ~12% CPU. Motion this small (fractions of a pixel) still looks smooth at 30 fps. When something else animates, the battery is drawn on those frames too, at its position for that moment.
+**15 frames a second, not the frame clock:** the animation asks for its next frame `BATTERY_FRAME` (1/15 s) later (`RedrawRequest::At`), not for the compositor's next frame. This is a deliberate exception to "in sync with the compositor's frame clock" ([vision.md](vision.md)), made by the user to keep a never-ending animation cheap. When something else animates, the battery is drawn on those frames too, at its position for that moment.
 
-**Cost:** measured on Asahi (aarch64, release, 120 Hz, scale 2, the user's config, charging), 30 s average after a 10 s warm-up, twice: **~6% CPU for as long as it's charging** (main: 0%). Not charging: unchanged. At 120 Hz it was ~12%. That is half, not a quarter: a frame woken by a timer seems to cost about twice one from the frame clock. Not looked into yet. We accept this because it only runs on AC power. Binary unchanged (7,498,776 bytes), RSS within noise.
+**Cost:** measured on Asahi (aarch64, release, 120 Hz, scale 2, the user's config, charging), 30 s averages after a 10 s warm-up, all in one session:
+
+| Build | CPU while charging |
+|---|---|
+| main | 0.4%, 1.5% |
+| 30 fps | 3.5%, 5.3% |
+| 15 fps (this) | 4.4%, 4.0%, 4.1% |
+
+So it costs **~3–4% CPU for as long as it's charging**. Not charging: unchanged. 15 and 30 fps are not distinguishable through the noise, so a frame's cost isn't the whole cost. Not looked into yet. The 120 Hz version read ~12% with an earlier script that rounded down to whole percents. We accept the cost because it only runs on AC power. Binary unchanged (7,498,776 bytes), RSS within noise.
 
 **Superseded first version:** gulps only, in bursts, with the ripple settling after each one and no frames in between (`RedrawRequest::At`). It cost ~5% (7% with longer, more frequent bursts). The user found the gulps too faint and the liquid too lively, and wanted it to ripple all the time, but more subtly.

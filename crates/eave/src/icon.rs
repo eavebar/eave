@@ -3,7 +3,7 @@
 //! gauge. Geometry is laid out on a 16-unit grid and scaled to [`theme::ICON_SIZE`].
 //!
 //! A charging battery pours: its charge ripples like a liquid, and every few seconds it gulps a few
-//! times, like a bottle being emptied, the whole icon swelling with each gulp. It moves at 30
+//! times, like a bottle being emptied, the whole icon swelling with each gulp. It moves at 15
 //! frames a second, not the compositor's rate, to keep it cheap
 //! ([D-37](../../../docs/decisions.md)).
 
@@ -300,26 +300,6 @@ impl Pen<'_> {
                 )
             };
             self.frame.fill(&fill, self.on);
-        }
-
-        if charging {
-            let (x, y) = (body.center_x(), body.center_y());
-            let bolt = polygon(&[
-                (x + 1.5, y - 5.0),
-                (x - 2.5, y + 0.75),
-                (x - 0.25, y + 0.75),
-                (x - 1.5, y + 5.0),
-                (x + 2.5, y - 0.75),
-                (x + 0.25, y - 0.75),
-            ]);
-            self.frame.stroke(
-                &bolt,
-                Stroke::default()
-                    .with_color(theme::ISLAND_BG)
-                    .with_width(theme::ICON_STROKE * 1.5)
-                    .with_line_join(LineJoin::Round),
-            );
-            self.frame.fill(&bolt, self.on);
         }
     }
 }

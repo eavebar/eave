@@ -66,7 +66,7 @@ Use them by name. The default binary (`cargo run --release`) has all of them, an
 | `clock` | time, the date while hovered, calendar in the popover | `format` (strftime, default `%H:%M`), `hover_format` (strftime, shown on hover, default `%b %-d`: `Oct 21`) |
 | `workspaces` | Hyprland workspaces that have windows, plus the active one (marked); click to go, scroll to move | `persistent` (workspaces 1..N always shown, even empty, default 0) |
 | `window` | focused window title, hidden when nothing has focus | `max_chars` (default 60) |
-| `battery` | battery icon filled to the charge (bolt and green while charging), warning/critical tones, the percent while hovered; time left and power draw in the popover; hidden without a battery | `warning` (default 20), `critical` (default 10) |
+| `battery` | battery icon filled to the charge (green, its charge rippling and gulping while charging), warning/critical tones, the percent while hovered; time left and power draw in the popover; hidden without a battery | `warning` (default 20), `critical` (default 10) |
 | `network` | Wi-Fi icon with as many bars as the signal, wired icon, struck-through Wi-Fi when offline; name, signal, band, address, gateway in the popover | `show_name` (default false): the Wi-Fi name next to the icon |
 | `volume` | speaker icon with 0–3 waves for the volume, struck through when muted; the percent while hovered and for 1.5 s after a change, with a nudge; scroll to change, right click to mute; −/+, mute, output list in the popover | `step` (default 5), `max` (default 100) |
 | `keyboard` | active layout, click for the next one; hidden with a single layout | `aliases` (`{ "English (US)" = "us" }`) |
