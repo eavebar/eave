@@ -1,5 +1,6 @@
 # Builds, tests and lints on both targets (AGENTS.md: keep aarch64 and x86_64 building), and runs
 # install.sh for real. No releases: eave compiles plugins in, so it is always built locally (D-12).
+# The step installing libxkbcommon-dev appears in both jobs below.
 name: CI
 
 on:
@@ -31,6 +32,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      # smithay-client-toolkit's build script finds xkbcommon through pkg-config. Arch with
+      # Hyprland has both already; a bare Ubuntu runner doesn't.
+      - run: sudo apt-get update -q && sudo apt-get install -qy --no-install-recommends libxkbcommon-dev pkg-config
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --locked --all-targets
       - run: cargo test --workspace --locked
@@ -45,6 +49,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # smithay-client-toolkit's build script finds xkbcommon through pkg-config. Arch with
+      # Hyprland has both already; a bare Ubuntu runner doesn't.
+      - run: sudo apt-get update -q && sudo apt-get install -qy --no-install-recommends libxkbcommon-dev pkg-config
       - run: shellcheck install.sh
       - name: install.sh
         run: EAVE_REPO="$GITHUB_WORKSPACE" sh install.sh
