@@ -101,6 +101,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/slot.rs              item wrapper: clicks, scroll steps, and the pointer for alternates
   src/alternate.rs         alternate: one option at a time with fades; hover, and growing (expand)
   src/switcher.rs          switcher: row of options with a sliding, frame-paced mark
+  src/tabs.rs              tabs: a pill strip of names over the current page, which the host owns
   src/toggle.rs            toggle: a pill whose knob slides over
   src/meter.rs             meter: a thin bar eased to its value, with an optional limit tick
   src/field.rs             text field box, its focus on appearing, and the focus query popovers use

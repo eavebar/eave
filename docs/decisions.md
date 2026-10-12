@@ -758,3 +758,15 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 **Measured** (Asahi, release): the network popover, eave-dbus (first used here) and eave-iwd add ~787 KB of binary (8,612,928 → 9,399,648 bytes): zbus's object server, the `interface` macro's code, the fdo proxies, and zbus's tokio integration. zbus was already in the binary through `mundy`, on async-io. Building eave-dbus on zbus's `async-io` instead of `tokio` saves ~200 KB (9,202,864 bytes) but brings back the second executor D-7 avoided, so it stays on tokio. With the popover closed nothing watches iwd, so idle RSS and CPU don't change.
 
 **Other popovers on this branch:** eave-pulse now lists inputs (monitors left out) and apps' streams, with each device's kind from its port or properties. Its one event thread subscribes to sinks, sources, sink inputs and the server, and tells watchers what changed, so stream events never wake the bar item. Streams are read only while the sound popover is open, and a slider drag sends one level at a time. +64 KB. The battery reads design capacity, cycles, temperature, health, its charge limit and whether a charger is plugged in, from the same sysfs files on the same events. The keyboard reads layout names once from xkb's `evdev.lst`, a static data file, not a daemon.
+
+## D-43: Tabs, and the host owns the current tab
+
+**Status:** accepted (2026-10-13).
+
+**What:** `tabs([(name, page), …])` puts a popover's pages behind a pill-shaped strip of names, one page showing at a time: the battery's Power and Health, the sound popover's Output, Input and Apps. A tinted mark slides behind the current name with the switcher's slide, and the panel's shape eases to the new page's height through the morph it already has. Which tab is current lives in the host's widget state. The panel's state goes away when the popover closes, so each popover opens on its first tab. Pages that aren't showing keep their state (a scrolled list stays scrolled), but get no events and no operations, so a field on a hidden tab can't take focus. In the bar, only the first page shows.
+
+**Why the host owns it:** which tab is on screen is like hover, scrolling or focus: it's about looking, not about the plugin's state. Owning it in the host keeps plugins to describing pages, with no index to store and no message to handle, and it can't go stale against the tabs a plugin shows (a tab that goes away falls back to the first).
+
+**Alternatives:** a `switcher`-style strip where the plugin keeps the index and handles a message per tab: more code in every plugin, for control nobody needed yet (opening on a tab other than the first). An underline under the current name instead of a pill: the pill matches the switcher and the list's selected rows.
+
+**Measured** (Asahi, release): the binary's size didn't change (9,399,648 bytes; the code fits in existing section padding). All pages are described each time a popover is built, but only while it's open, so idle RSS and CPU don't change.
