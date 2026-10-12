@@ -173,29 +173,29 @@ impl Widget for Battery {
             meter = meter.limit(f32::from(limit) / 100.0);
         }
 
-        let mut lines = vec![hero, meter, ui::section("Power")];
+        let mut power = Vec::new();
         let plugged = reading.ac_online.unwrap_or(matches!(
             reading.state,
             State::Charging | State::Full | State::NotCharging
         ));
         let source = if plugged { "Charger" } else { "Battery" };
-        lines.push(ui::detail("Source", ui::label(source)));
+        power.push(ui::detail("Source", ui::label(source)));
         if reading.energy_rate > 0.05 {
             let direction = match reading.state {
                 State::Charging => "Charging at",
                 _ => "Drawing",
             };
             let watts = ui::label(format!("{:.1} W", reading.energy_rate));
-            lines.push(ui::detail(direction, watts));
+            power.push(ui::detail(direction, watts));
         }
         if let (Some(energy), Some(full)) = (reading.energy, reading.energy_full) {
-            lines.push(ui::detail(
+            power.push(ui::detail(
                 "Energy",
                 of(format!("{energy:.1}"), format!("of {full:.1} Wh")),
             ));
         }
         if let Some(limit) = limit {
-            lines.push(ui::detail("Charge limit", ui::label(limit)));
+            power.push(ui::detail("Charge limit", ui::label(limit)));
         }
 
         let mut health = Vec::new();
@@ -223,11 +223,12 @@ impl Widget for Battery {
                 ui::label(condition.clone()).tone(tone),
             ));
         }
-        if !health.is_empty() {
-            lines.push(ui::section("Health"));
-            lines.extend(health);
-        }
-        Some(Panel::new(ui::column(lines)))
+        let details = if health.is_empty() {
+            ui::column(power)
+        } else {
+            ui::tabs([("Power", ui::column(power)), ("Health", ui::column(health))])
+        };
+        Some(Panel::new(ui::column([hero, meter, details])))
     }
 }
 
