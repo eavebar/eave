@@ -3,7 +3,9 @@
 //! gauge. Geometry is laid out on a 16-unit grid and scaled to [`theme::ICON_SIZE`].
 //!
 //! A charging battery pours: its charge ripples like a liquid, and every few seconds it gulps a few
-//! times, like a bottle being emptied, the whole icon swelling with each gulp.
+//! times, like a bottle being emptied, the whole icon swelling with each gulp. It moves at 30
+//! frames a second, not the compositor's rate, to keep it cheap
+//! ([D-37](../../../docs/decisions.md)).
 
 use std::f32::consts::{PI, TAU};
 use std::time::Instant;
@@ -73,11 +75,12 @@ struct Pour {
 }
 
 impl Pour {
-    /// Advances to `now`. Returns whether another frame is needed: always, while charging.
-    fn step(&mut self, charging: bool, now: Instant) -> bool {
+    /// Advances to `now`. Returns when the next frame is needed, if ever: one
+    /// [`theme::BATTERY_FRAME`] later, for as long as it's charging.
+    fn step(&mut self, charging: bool, now: Instant) -> Option<Instant> {
         if !charging {
             *self = Self::default();
-            return false;
+            return None;
         }
         let start = *self.start.get_or_insert(now);
         let elapsed = now.saturating_duration_since(start).as_secs_f64();
@@ -85,7 +88,7 @@ impl Pour {
         self.t = (elapsed % every) as f32;
         let period = 1.0 / f64::from(RIPPLE_HZ);
         self.phase = ((elapsed % period) / period) as f32 * TAU;
-        true
+        Some(now + theme::BATTERY_FRAME)
     }
 
     fn gulp(&self) -> Gulp {
@@ -134,7 +137,7 @@ impl<M> canvas::Program<M> for Glyph {
             return None;
         };
         let charging = matches!(self.icon, Icon::Battery { charging: true, .. });
-        pour.step(charging, *now).then(Action::request_redraw)
+        pour.step(charging, *now).map(Action::request_redraw_at)
     }
 
     fn draw(
@@ -401,15 +404,20 @@ mod tests {
     fn a_charging_battery_ripples_and_gulps_then_rests() {
         let mut pour = Pour::default();
         let start = Instant::now();
-        assert!(pour.step(true, start), "frames while charging");
+        let next = pour.step(true, start);
+        assert_eq!(
+            next,
+            Some(start + theme::BATTERY_FRAME),
+            "frames while charging"
+        );
 
-        assert!(pour.step(true, start + theme::BATTERY_GULP / 2));
+        assert!(pour.step(true, start + theme::BATTERY_GULP / 2).is_some());
         let swell = pour.gulp().swell;
         assert!(swell > 0.99, "at the height of the first gulp, {swell}");
 
         let quarter = Duration::from_secs_f32(0.25 / RIPPLE_HZ);
         let resting = start + theme::BATTERY_GULP * theme::BATTERY_GULPS + quarter;
-        assert!(pour.step(true, resting), "the ripple never stops");
+        assert!(pour.step(true, resting).is_some(), "the ripple never stops");
         assert_eq!(pour.gulp().swell, 0.0, "no gulps between bursts");
 
         let next = start + theme::BATTERY_GULP_EVERY + theme::BATTERY_GULP / 2;
@@ -435,7 +443,7 @@ mod tests {
         let mut pour = Pour::default();
         let start = Instant::now();
         pour.step(true, start);
-        assert!(!pour.step(false, start + theme::BATTERY_GULP));
+        assert_eq!(pour.step(false, start + theme::BATTERY_GULP), None);
         assert_eq!(pour.gulp(), Gulp::default());
     }
 
