@@ -7,7 +7,7 @@ use eave_api::ui::Tone;
 use iced::{Color, Font, font};
 
 /// Height of an island, the visible part of the bar.
-pub const ISLAND_HEIGHT: u32 = 32;
+pub const ISLAND_HEIGHT: u32 = 30;
 /// Space between the islands and the top, left and right screen edges. A popover keeps the same
 /// distance from the sides.
 pub const EDGE_GAP: u16 = 6;
