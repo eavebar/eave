@@ -2,9 +2,8 @@
 //! that are off (a missing signal bar, a quiet volume) stay faintly visible, so the icon reads as a
 //! gauge. Geometry is laid out on a 16-unit grid and scaled to [`theme::ICON_SIZE`].
 //!
-//! A charging battery pours: every few seconds it gulps a few times, like a bottle being emptied,
-//! its charge sloshing and the whole icon swelling a little with each gulp. Between gulps it asks
-//! for no frames at all.
+//! A charging battery pours: its charge ripples like a liquid, and every few seconds it gulps a few
+//! times, like a bottle being emptied, the whole icon swelling with each gulp.
 
 use std::f32::consts::{PI, TAU};
 use std::time::Instant;
@@ -53,82 +52,67 @@ fn wifi_bars(strength: f32) -> u8 {
 
 /// How far the charge surges forward at the height of a gulp, and how far its edge ripples, in
 /// grid units.
-const SURGE: f32 = 0.8;
-const RIPPLE: f32 = 0.6;
+const SURGE: f32 = 0.5;
+const RIPPLE: f32 = 0.3;
+/// How fast the ripple runs.
+const RIPPLE_HZ: f32 = 1.2;
 /// How much the battery stretches up and squeezes in at the height of a gulp.
-const SWELL_Y: f32 = 0.05;
-const SWELL_X: f32 = 0.025;
-/// How long the ripple takes to settle after the last gulp (to under 2%), and how fast it runs.
-const SETTLE: f32 = 0.5;
-const RIPPLE_HZ: f32 = 2.5;
+const SWELL_Y: f32 = 0.12;
+const SWELL_X: f32 = 0.06;
 
-/// Where a charging battery is in its cycle of gulps.
+/// Where a charging battery is in its cycle of gulps, and its ripple.
 #[derive(Default)]
 struct Pour {
     /// The first frame drawn while charging, when the first gulp starts.
     start: Option<Instant>,
-    /// Seconds into the current cycle, as of the last frame.
+    /// Seconds into the current cycle of gulps, as of the last frame.
     t: f32,
+    /// Where the ripple is along its wave, in radians. It never stops, so it runs on across
+    /// cycles.
+    phase: f32,
 }
 
 impl Pour {
-    /// Advances to `now`. Returns when the next frame is needed, if ever: `now` for the next one.
-    fn step(&mut self, charging: bool, now: Instant) -> Option<Instant> {
+    /// Advances to `now`. Returns whether another frame is needed: always, while charging.
+    fn step(&mut self, charging: bool, now: Instant) -> bool {
         if !charging {
             *self = Self::default();
-            return None;
+            return false;
         }
         let start = *self.start.get_or_insert(now);
-        let every = theme::BATTERY_GULP_EVERY;
-        let elapsed = now.saturating_duration_since(start);
-        let cycles = (elapsed.as_secs_f64() / every.as_secs_f64()).floor();
-        self.t = (elapsed.as_secs_f64() - cycles * every.as_secs_f64()) as f32;
-        if self.t < burst() + SETTLE {
-            Some(now)
-        } else {
-            Some(start + every.mul_f64(cycles + 1.0))
+        let elapsed = now.saturating_duration_since(start).as_secs_f64();
+        let every = theme::BATTERY_GULP_EVERY.as_secs_f64();
+        self.t = (elapsed % every) as f32;
+        let period = 1.0 / f64::from(RIPPLE_HZ);
+        self.phase = ((elapsed % period) / period) as f32 * TAU;
+        true
+    }
+
+    fn gulp(&self) -> Gulp {
+        Gulp {
+            swell: swell(self.t),
+            phase: self.phase,
         }
     }
 }
 
-/// How long the gulps of one cycle take.
-fn burst() -> f32 {
-    (theme::BATTERY_GULP * theme::BATTERY_GULPS).as_secs_f32()
-}
-
-/// The pour at `t` seconds into a cycle. Each part runs from 0 (still) to 1.
+/// How the pour moves the battery on a frame.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 struct Gulp {
-    /// Rises and falls with each gulp, a little less each time.
+    /// From 0 (still) to 1: rises and falls with each gulp, a little less each time.
     swell: f32,
-    /// How much the charge's edge ripples: on during the gulps, then dying away.
-    ripple: f32,
     /// Where the ripple is along its wave, in radians.
     phase: f32,
 }
 
-fn gulp(t: f32) -> Gulp {
+/// The swell at `t` seconds into a cycle: a few gulps, then still until the next cycle.
+fn swell(t: f32) -> f32 {
     let length = theme::BATTERY_GULP.as_secs_f32();
-    let burst = burst();
-    if t >= burst + SETTLE {
-        return Gulp::default();
+    let index = (t / length).floor();
+    if index >= theme::BATTERY_GULPS as f32 {
+        return 0.0;
     }
-    let swell = if t < burst {
-        let index = (t / length).floor();
-        (PI * (t / length - index)).sin().powi(2) * (1.0 - 0.2 * index)
-    } else {
-        0.0
-    };
-    let ripple = if t < burst {
-        (t / 0.15).min(1.0)
-    } else {
-        (-5.0 * (t - burst) / SETTLE).exp()
-    };
-    Gulp {
-        swell,
-        ripple,
-        phase: t * TAU * RIPPLE_HZ,
-    }
+    (PI * (t / length - index)).sin().powi(2) * (1.0 - 0.2 * index)
 }
 
 struct Glyph {
@@ -150,10 +134,7 @@ impl<M> canvas::Program<M> for Glyph {
             return None;
         };
         let charging = matches!(self.icon, Icon::Battery { charging: true, .. });
-        match pour.step(charging, *now)? {
-            at if at <= *now => Some(Action::request_redraw()),
-            at => Some(Action::request_redraw_at(at)),
-        }
+        pour.step(charging, *now).then(Action::request_redraw)
     }
 
     fn draw(
@@ -166,7 +147,7 @@ impl<M> canvas::Program<M> for Glyph {
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         frame.scale(theme::ICON_SIZE / GRID);
-        let gulp = gulp(pour.t);
+        let gulp = pour.gulp();
         if let Icon::Battery { charging: true, .. } = self.icon {
             // Swells from its middle.
             let middle = Vector::new(battery_width() / 2.0, GRID / 2.0);
@@ -346,14 +327,14 @@ fn battery_width() -> f32 {
 }
 
 /// A charge `level` units into `inside`, with rounded corners like the still one, but its right
-/// edge surging and rippling with the `gulp`. Kept inside the battery.
+/// edge rippling, and surging with the `gulp`. Kept inside the battery.
 fn liquid(inside: Rectangle, level: f32, gulp: Gulp) -> Path {
     const RADIUS: f32 = 1.0;
     const STEPS: usize = 8;
     let (left, top, bottom) = (inside.x, inside.y, inside.y + inside.height);
     let edge = |y: f32| {
         let across = (y - top) / inside.height;
-        let ripple = RIPPLE * gulp.ripple * (TAU * 0.8 * across - gulp.phase).sin();
+        let ripple = RIPPLE * (TAU * 0.8 * across - gulp.phase).sin();
         (left + level + SURGE * gulp.swell + ripple).clamp(left + 2.0 * RADIUS, left + inside.width)
     };
     Path::new(|path| {
@@ -417,49 +398,36 @@ mod tests {
     }
 
     #[test]
-    fn a_charging_battery_gulps_then_rests() {
+    fn a_charging_battery_ripples_and_gulps_then_rests() {
         let mut pour = Pour::default();
         let start = Instant::now();
-        assert_eq!(
-            pour.step(true, start),
-            Some(start),
-            "starts gulping at once"
-        );
+        assert!(pour.step(true, start), "frames while charging");
 
-        let mid_gulp = start + theme::BATTERY_GULP / 2;
-        assert_eq!(pour.step(true, mid_gulp), Some(mid_gulp));
-        let swell = gulp(pour.t).swell;
+        assert!(pour.step(true, start + theme::BATTERY_GULP / 2));
+        let swell = pour.gulp().swell;
         assert!(swell > 0.99, "at the height of the first gulp, {swell}");
 
-        let resting = start + Duration::from_secs_f32(burst() + SETTLE + 0.1);
-        let next = start + theme::BATTERY_GULP_EVERY;
-        assert_eq!(
-            pour.step(true, resting),
-            Some(next),
-            "no frames until the next gulps"
-        );
-        assert_eq!(gulp(pour.t), Gulp::default(), "still while resting");
+        let quarter = Duration::from_secs_f32(0.25 / RIPPLE_HZ);
+        let resting = start + theme::BATTERY_GULP * theme::BATTERY_GULPS + quarter;
+        assert!(pour.step(true, resting), "the ripple never stops");
+        assert_eq!(pour.gulp().swell, 0.0, "no gulps between bursts");
 
-        let later = next + theme::BATTERY_GULP / 2;
-        assert_eq!(pour.step(true, later), Some(later), "and gulps again");
-        assert!(gulp(pour.t).swell > 0.99);
+        let next = start + theme::BATTERY_GULP_EVERY + theme::BATTERY_GULP / 2;
+        pour.step(true, next);
+        assert!(pour.gulp().swell > 0.99, "and gulps again");
     }
 
     #[test]
     fn gulps_fade() {
         let length = theme::BATTERY_GULP.as_secs_f32();
         let heights: Vec<f32> = (0..theme::BATTERY_GULPS)
-            .map(|index| gulp((index as f32 + 0.5) * length).swell)
+            .map(|index| swell((index as f32 + 0.5) * length))
             .collect();
         assert!(
             heights.windows(2).all(|pair| pair[1] < pair[0]),
             "{heights:?}"
         );
-        assert_eq!(gulp(0.0).swell, 0.0, "starts still");
-        assert!(
-            gulp(burst() + SETTLE - 0.01).ripple < 0.02,
-            "settled by the end"
-        );
+        assert_eq!(swell(0.0), 0.0, "starts still");
     }
 
     #[test]
@@ -467,8 +435,8 @@ mod tests {
         let mut pour = Pour::default();
         let start = Instant::now();
         pour.step(true, start);
-        assert_eq!(pour.step(false, start + theme::BATTERY_GULP), None);
-        assert_eq!(gulp(pour.t), gulp(0.0));
+        assert!(!pour.step(false, start + theme::BATTERY_GULP));
+        assert_eq!(pour.gulp(), Gulp::default());
     }
 
     #[test]
