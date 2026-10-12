@@ -16,6 +16,7 @@ We build it ourselves, not on a framework like Quickshell or AGS, because we wan
 | [docs/platform.md](docs/platform.md) | Targets (Hyprland, Asahi aarch64, CachyOS x86_64) and their quirks |
 | [docs/architecture.md](docs/architecture.md) | How the bar works: host / widgets / services, the event loop, popovers, code layout |
 | [docs/plugins.md](docs/plugins.md) | Using and writing plugins: plugins.toml, config.toml, the Widget trait, the manifest |
+| [docs/running.md](docs/running.md) | Starting the bar (systemd user service or Hyprland config), config reload, rebuild and restart |
 | [docs/decisions.md](docs/decisions.md) | Every significant choice, with the alternatives and *why* |
 | [docs/development.md](docs/development.md) | Build, run, measure, and the rules for writing code here |
 | [docs/roadmap.md](docs/roadmap.md) | What exists, what is next, in what order |
@@ -24,6 +25,7 @@ We build it ourselves, not on a framework like Quickshell or AGS, because we wan
 
 - Stack: **Rust + iced 0.14 + iced_layershell 0.19**, with the **tiny-skia** (CPU) renderer by default.
 - **Everything is a plugin.** With no `~/.config/eave/config.toml` the bar is empty. Plugins are crates compiled in by `eave-build`, never loaded at runtime ([docs/plugins.md](docs/plugins.md)).
+- `config.toml` reloads live. `plugins.toml` needs `eave-build --restart`. The bar runs best as a systemd user service ([docs/running.md](docs/running.md)).
 - Run it: `cargo run --release`. GPU renderer: `cargo run --release --features gpu`. Tests: `cargo test --workspace`.
 - Code: `crates/eave-api` (plugin SDK: `Widget`, closed `ui` vocabulary), `crates/eave` (host: surfaces, layout, theme, popovers), `crates/eave-build` (builds a binary with third-party plugins), `crates/eave-{hyprland,dbus,pulse}` (shared services), `plugins/{clock,workspaces,window,keyboard,battery,network,volume}`.
 - Baseline: ~11.8 MB RSS with two clocks and ~0% idle CPU (see [docs/development.md](docs/development.md#measuring)). Don't regress it without a reason written down in `docs/decisions.md`.

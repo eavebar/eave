@@ -15,23 +15,31 @@ use iced_layershell::reexport::{
 };
 use iced_layershell::to_layer_message;
 
-use crate::config::{Entry, Zone};
+use crate::config::{Config, Entry, Zone};
 use crate::measure::Measure;
 use crate::slot::Slot;
-use crate::{kit, theme as style};
+use crate::{kit, theme as style, watch};
 
 /// How long the pointer may be outside an open popover before it closes.
 const LEAVE_GRACE: Duration = Duration::from_millis(400);
 
 pub struct Bar {
+    registry: Registry,
+    /// The config the instances were built from, to skip reloads that change nothing.
+    config: Config,
     instances: Vec<Instance>,
+    /// Instances are addressed by id, not position, so a reload can't route a stale message to
+    /// whichever widget now sits at the old index.
+    next_id: u64,
     popover: Option<Popover>,
     /// Pointer-leave timers carry this, so re-entering cancels a pending close.
     leave_generation: u64,
 }
 
 struct Instance {
-    zone: Zone,
+    id: u64,
+    /// What the instance was built from. An unchanged entry keeps its instance across reloads.
+    entry: Entry,
     widget: Box<dyn ErasedWidget>,
     /// Cached after every update, so drawing the bar never builds a popover just to ask.
     has_popover: bool,
@@ -46,7 +54,8 @@ struct Anchor {
 }
 
 struct Popover {
-    instance: usize,
+    /// The id of the instance it belongs to.
+    instance: u64,
     window: window::Id,
     /// Known once the panel has been measured. Until then the surface is 1×1 and nothing is drawn.
     size: Option<Size>,
@@ -55,23 +64,47 @@ struct Popover {
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
-    Widget(usize, AnyMessage),
+    Widget(u64, AnyMessage),
     /// A primary click on an item: its bounds, the bar width, and the item's own `on_press`.
-    Pressed(usize, Rectangle, f32, Option<AnyMessage>),
+    Pressed(u64, Rectangle, f32, Option<AnyMessage>),
     PopoverMeasured(Size),
     PointerEntered(window::Id),
     PointerLeft(window::Id),
     LeaveTimeout(u64),
     WindowClosed(window::Id),
+    /// `config.toml` changed on disk: the new contents, or why they couldn't be loaded.
+    ConfigChanged(Result<Config, String>),
 }
 
 impl Bar {
-    pub fn new(registry: &Registry, entries: &[Entry]) -> (Self, Task<Message>) {
-        let mut instances = Vec::new();
+    pub fn new(registry: Registry, config: Config) -> (Self, Task<Message>) {
+        let mut bar = Self {
+            registry,
+            config: Config::default(),
+            instances: Vec::new(),
+            next_id: 0,
+            popover: None,
+            leave_generation: 0,
+        };
+        let task = bar.apply(config);
+        (bar, task)
+    }
+
+    /// Makes the bar match `config`. Instances whose entry didn't change are kept as they are,
+    /// state, subscription and open popover included; the rest are built fresh.
+    fn apply(&mut self, config: Config) -> Task<Message> {
+        for warning in &config.warnings {
+            eprintln!("eave: config: {warning}");
+        }
+        let mut old = std::mem::take(&mut self.instances);
         let mut tasks = Vec::new();
 
-        for entry in entries {
-            let Some(construct) = registry.get(&entry.widget) else {
+        for entry in &config.entries {
+            if let Some(position) = old.iter().position(|instance| instance.entry == *entry) {
+                self.instances.push(old.remove(position));
+                continue;
+            }
+            let Some(construct) = self.registry.get(&entry.widget) else {
                 eprintln!(
                     "eave: no plugin provides widget `{}`, skipping it",
                     entry.widget
@@ -80,10 +113,12 @@ impl Bar {
             };
             match construct(entry.options.clone()) {
                 Ok((widget, task)) => {
-                    let index = instances.len();
-                    tasks.push(task.map(move |message| Message::Widget(index, message)));
-                    instances.push(Instance {
-                        zone: entry.zone,
+                    let id = self.next_id;
+                    self.next_id += 1;
+                    tasks.push(task.map(move |message| Message::Widget(id, message)));
+                    self.instances.push(Instance {
+                        id,
+                        entry: entry.clone(),
                         has_popover: widget.popover().is_some(),
                         widget,
                         anchor: None,
@@ -93,16 +128,27 @@ impl Bar {
             }
         }
 
-        let bar = Self {
-            instances,
-            popover: None,
-            leave_generation: 0,
-        };
-        (bar, Task::batch(tasks))
+        if let Some(popover) = &self.popover
+            && self.find(popover.instance).is_none()
+        {
+            tasks.push(self.close_popover());
+        }
+        self.config = config;
+        Task::batch(tasks)
     }
 
-    fn open_popover(&mut self, index: usize) -> Task<Message> {
-        let instance = &self.instances[index];
+    fn find(&self, id: u64) -> Option<&Instance> {
+        self.instances.iter().find(|instance| instance.id == id)
+    }
+
+    fn find_mut(&mut self, id: u64) -> Option<&mut Instance> {
+        self.instances.iter_mut().find(|instance| instance.id == id)
+    }
+
+    fn open_popover(&mut self, id: u64) -> Task<Message> {
+        let Some(instance) = self.find(id) else {
+            return Task::none();
+        };
         if !instance.has_popover {
             return Task::none();
         }
@@ -116,7 +162,7 @@ impl Bar {
         let close = self.close_popover();
         let window = window::Id::unique();
         self.popover = Some(Popover {
-            instance: index,
+            instance: id,
             window,
             size: None,
         });
@@ -146,52 +192,54 @@ impl Bar {
         }
     }
 
-    fn popover_of(&self, index: usize) -> Option<&Popover> {
+    fn popover_of(&self, id: u64) -> Option<&Popover> {
         self.popover
             .as_ref()
-            .filter(|popover| popover.instance == index)
+            .filter(|popover| popover.instance == id)
     }
 }
 
 pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
     match message {
-        Message::Widget(index, message) => {
-            let Some(instance) = bar.instances.get_mut(index) else {
+        Message::Widget(id, message) => {
+            // Gone after a reload: its leftover messages have nowhere to go.
+            let Some(instance) = bar.find_mut(id) else {
                 return Task::none();
             };
             let (task, request) = instance.widget.update(message).into_parts();
             instance.has_popover = instance.widget.popover().is_some();
-            let task = task.map(move |message| Message::Widget(index, message));
+            let has_popover = instance.has_popover;
+            let task = task.map(move |message| Message::Widget(id, message));
 
             let popover = match request {
-                Some(PopoverRequest::Open) => bar.open_popover(index),
-                Some(PopoverRequest::Close) if bar.popover_of(index).is_some() => {
-                    bar.close_popover()
-                }
+                Some(PopoverRequest::Open) => bar.open_popover(id),
+                Some(PopoverRequest::Close) if bar.popover_of(id).is_some() => bar.close_popover(),
                 // A widget that stops offering a popover closes it.
-                _ if bar.popover_of(index).is_some() && !bar.instances[index].has_popover => {
-                    bar.close_popover()
-                }
+                _ if bar.popover_of(id).is_some() && !has_popover => bar.close_popover(),
                 _ => Task::none(),
             };
             Task::batch([task, popover])
         }
-        Message::Pressed(index, bounds, bar_width, on_press) => {
-            let Some(instance) = bar.instances.get_mut(index) else {
+        Message::Pressed(id, bounds, bar_width, on_press) => {
+            let Some(instance) = bar.find_mut(id) else {
                 return Task::none();
             };
             instance.anchor = Some(Anchor { bounds, bar_width });
             match on_press {
-                Some(message) => update(bar, Message::Widget(index, message)),
-                None if bar.popover_of(index).is_some() => bar.close_popover(),
-                None => bar.open_popover(index),
+                Some(message) => update(bar, Message::Widget(id, message)),
+                None if bar.popover_of(id).is_some() => bar.close_popover(),
+                None => bar.open_popover(id),
             }
         }
         Message::PopoverMeasured(size) => {
-            let Some(popover) = &mut bar.popover else {
+            let Some(anchor) = bar
+                .popover
+                .as_ref()
+                .and_then(|popover| bar.find(popover.instance)?.anchor)
+            else {
                 return Task::none();
             };
-            let Some(anchor) = bar.instances[popover.instance].anchor else {
+            let Some(popover) = &mut bar.popover else {
                 return Task::none();
             };
             popover.size = Some(size);
@@ -243,6 +291,15 @@ pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::ConfigChanged(config) => match config {
+            // Editors often fire several events per save; only a real change rebuilds anything.
+            Ok(config) if config == bar.config => Task::none(),
+            Ok(config) => bar.apply(config),
+            Err(error) => {
+                eprintln!("eave: config: {error}; keeping the current bar");
+                Task::none()
+            }
+        },
         // Stale timers, and the layer-shell variants added by `to_layer_message`.
         _ => Task::none(),
     }
@@ -269,9 +326,8 @@ fn bar_view(bar: &Bar) -> Element<'_, Message> {
         let items = bar
             .instances
             .iter()
-            .enumerate()
-            .filter(|(_, instance)| instance.zone == zone)
-            .filter_map(|(index, instance)| item_view(index, instance));
+            .filter(|instance| instance.entry.zone == zone)
+            .filter_map(item_view);
         container(row(items).spacing(style::ITEM_SPACING).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
@@ -290,7 +346,8 @@ fn bar_view(bar: &Bar) -> Element<'_, Message> {
     .into()
 }
 
-fn item_view(index: usize, instance: &Instance) -> Option<Element<'_, Message>> {
+fn item_view(instance: &Instance) -> Option<Element<'_, Message>> {
+    let id = instance.id;
     let parts = instance.widget.item().into_parts();
     let on_press = parts.on_press;
     let content: Element<'_, AnyMessage> = container(kit::node(parts.content?))
@@ -298,21 +355,20 @@ fn item_view(index: usize, instance: &Instance) -> Option<Element<'_, Message>> 
         .center_y(Length::Fill)
         .into();
 
-    let wrap = move |message| Message::Widget(index, message);
+    let wrap = move |message| Message::Widget(id, message);
     let mut slot = Slot::new(content.map(wrap))
         .on_secondary(parts.on_secondary.map(wrap))
         .on_scroll(parts.on_scroll.map(|(up, down)| (wrap(up), wrap(down))));
     if on_press.is_some() || instance.has_popover {
-        slot = slot.on_press(move |bounds, width| {
-            Message::Pressed(index, bounds, width, on_press.clone())
-        });
+        slot = slot
+            .on_press(move |bounds, width| Message::Pressed(id, bounds, width, on_press.clone()));
     }
     Some(slot.into())
 }
 
 fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> Element<'a, Message> {
-    let index = popover.instance;
-    let content = match bar.instances[index].widget.popover() {
+    let id = popover.instance;
+    let content = match bar.find(id).and_then(|instance| instance.widget.popover()) {
         Some(panel) => kit::node(panel.into_node()),
         None => text("").into(),
     };
@@ -322,7 +378,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> Element<'a, Message> {
         .into();
 
     Measure::new(
-        panel.map(move |message| Message::Widget(index, message)),
+        panel.map(move |message| Message::Widget(id, message)),
         Message::PopoverMeasured,
         popover.size.is_some(),
     )
@@ -330,15 +386,16 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> Element<'a, Message> {
 }
 
 pub fn subscription(bar: &Bar) -> Subscription<Message> {
-    let widgets = bar.instances.iter().enumerate().map(|(index, instance)| {
+    let widgets = bar.instances.iter().map(|instance| {
         instance
             .widget
             .subscription()
-            .with(index)
-            .map(|(index, message)| Message::Widget(index, message))
+            .with(instance.id)
+            .map(|(id, message)| Message::Widget(id, message))
     });
     let mut subscriptions: Vec<_> = widgets.collect();
     subscriptions.push(window::close_events().map(Message::WindowClosed));
+    subscriptions.push(watch::config_changes().map(Message::ConfigChanged));
     // Pointer tracking only while a popover is open: otherwise every hover over the bar would wake us.
     if bar.popover.is_some() {
         subscriptions.push(iced::event::listen_with(pointer_event));
@@ -365,7 +422,75 @@ pub fn style(_: &Bar, _: &Theme) -> theme::Style {
 
 #[cfg(test)]
 mod tests {
+    use eave_api::ui::label;
+    use eave_api::{Effect, Widget};
+
     use super::*;
+
+    struct Dummy;
+
+    impl Widget for Dummy {
+        type Config = toml::Table;
+        type Message = ();
+
+        fn new(_: Self::Config) -> (Self, eave_api::Task<()>) {
+            (Self, eave_api::Task::none())
+        }
+
+        fn update(&mut self, _: ()) -> Effect<()> {
+            Effect::none()
+        }
+
+        fn item(&self) -> eave_api::ui::Item<()> {
+            eave_api::ui::Item::new(label("dummy"))
+        }
+    }
+
+    fn config(source: &str) -> Config {
+        crate::config::parse(source).unwrap()
+    }
+
+    fn ids(bar: &Bar) -> Vec<(&str, u64)> {
+        bar.instances
+            .iter()
+            .map(|instance| (instance.entry.widget.as_str(), instance.id))
+            .collect()
+    }
+
+    #[test]
+    fn reload_keeps_unchanged_instances_and_replaces_the_rest() {
+        let mut registry = Registry::new();
+        registry.widget::<Dummy>("a");
+        registry.widget::<Dummy>("b");
+        registry.widget::<Dummy>("c");
+        let (mut bar, _) = Bar::new(
+            registry,
+            config(
+                "[[left]]\nwidget = \"a\"\nx = 1\n[[left]]\nwidget = \"b\"\n[[left]]\nwidget = \"b\"",
+            ),
+        );
+        assert_eq!(ids(&bar), [("a", 0), ("b", 1), ("b", 2)]);
+
+        // `a` changes an option, one `b` goes, `c` is new: only the changed ones are rebuilt,
+        // and the order follows the file.
+        let _ = bar.apply(config(
+            "[[left]]\nwidget = \"c\"\n[[left]]\nwidget = \"b\"\n[[left]]\nwidget = \"a\"\nx = 2",
+        ));
+        assert_eq!(ids(&bar), [("c", 3), ("b", 1), ("a", 4)]);
+
+        // A leftover message for a removed instance goes nowhere instead of reaching another widget.
+        let _ = update(&mut bar, Message::Widget(0, AnyMessage::new(())));
+        let _ = update(&mut bar, Message::Widget(2, AnyMessage::new(())));
+    }
+
+    #[test]
+    fn an_unparsable_config_keeps_the_bar() {
+        let mut registry = Registry::new();
+        registry.widget::<Dummy>("a");
+        let (mut bar, _) = Bar::new(registry, config("[[left]]\nwidget = \"a\""));
+        let _ = update(&mut bar, Message::ConfigChanged(Err("broken".into())));
+        assert_eq!(ids(&bar), [("a", 0)]);
+    }
 
     fn anchor(x: f32, width: f32) -> Anchor {
         Anchor {

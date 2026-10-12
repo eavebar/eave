@@ -14,7 +14,10 @@ cargo run --release                # what you'd actually use
 cargo run --release --features gpu # wgpu renderer instead of tiny-skia
 cargo test --workspace             # every crate
 cargo run --release -p eave-build -- --install   # build with the plugins in plugins.toml
+cargo run --release -p eave-build -- --restart   # ...and restart the running bar on it
 ```
+
+To start the bar with your session, see [running.md](running.md).
 
 Without `~/.config/eave/config.toml` the bar is empty. A minimal config:
 
@@ -50,7 +53,7 @@ ps -o rss,pcpu -p (pgrep -x eave)              # memory (KB) and CPU
 kill (pgrep -x eave)
 ```
 
-Current baseline (Asahi, aarch64, release, tiny-skia, default binary). Measured 2026-10-12 after the plugin foundation (0.5):
+Current baseline (Asahi, aarch64, release, tiny-skia, default binary). Measured 2026-10-12 after the plugin foundation (0.5). Config hot reload (0.6) left RSS and idle CPU unchanged within noise, added one thread and 65 KB of binary (5.84 MiB) ([D-21](decisions.md)):
 
 | Config | Binary | RSS | Idle CPU |
 |---|---|---|---|

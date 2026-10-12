@@ -1,0 +1,19 @@
+# Started by eave-rebuild.path. Needs eave-build installed:
+#   cargo install --path crates/eave-build
+
+[Unit]
+Description=Rebuild eave with the plugins in plugins.toml
+Documentation=https://github.com/francescomengarelli/eave/blob/main/docs/running.md
+
+[Service]
+Type=oneshot
+# cargo, git, systemctl and hyprctl.
+Environment=PATH=%h/.cargo/bin:/usr/local/bin:/usr/bin
+ExecStart=eave-build --restart
+# A rebuild must never make the desktop stutter.
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+# Nobody watches this run: say so when it fails. The old bar keeps running in that case.
+# Hyprland's own notification covers setups without a notification daemon.
+ExecStopPost=/bin/sh -c '[ "$$SERVICE_RESULT" = success ] && exit; m="eave: rebuilding with the new plugins failed. See: journalctl --user -u eave-rebuild"; notify-send -u critical eave "$$m" 2>/dev/null || hyprctl notify 0 10000 0 "$$m"'

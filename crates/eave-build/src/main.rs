@@ -1,21 +1,28 @@
 //! Builds an eave binary with the plugins listed in `plugins.toml`, the way xcaddy builds Caddy.
 //!
 //! ```text
-//! eave-build [--config <plugins.toml>] [--install]
+//! eave-build [--config <plugins.toml>] [--install | --restart]
 //! ```
 //!
 //! Plugins are compiled in, never loaded at runtime ([D-12](../../docs/decisions.md)). For each
 //! plugin this fetches its repository (or uses a local path), reads the `eave-plugin.toml`
 //! manifest, checks it targets this eave's plugin API, then generates a small crate whose `main`
 //! calls `eave::run` with every plugin's `register`, and builds it with cargo.
+//!
+//! `--install` copies the binary to `~/.local/bin/eave`. `--restart` also restarts a running bar
+//! on it: through systemd when the `eave.service` user unit runs it, otherwise by stopping it and
+//! relaunching it through Hyprland ([D-22](../../docs/decisions.md)).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::time::Duration;
 
 use serde::Deserialize;
 
 const DEFAULT_EAVE_GIT: &str = "https://github.com/francescomengarelli/eave";
+const SERVICE: &str = "eave.service";
+const USAGE: &str = "usage: eave-build [--config <plugins.toml>] [--install | --restart]";
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -81,6 +88,7 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let mut config_path = config_dir()?.join("eave/plugins.toml");
     let mut install = false;
+    let mut restart = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -91,8 +99,9 @@ fn run() -> Result<()> {
                     .ok_or("--config needs a path")?
             }
             "--install" => install = true,
+            "--restart" => (install, restart) = (true, true),
             "-h" | "--help" => {
-                println!("usage: eave-build [--config <plugins.toml>] [--install]");
+                println!("{USAGE}");
                 return Ok(());
             }
             other => return Err(format!("unknown argument `{other}` (try --help)")),
@@ -158,10 +167,141 @@ fn run() -> Result<()> {
         std::fs::copy(&binary, &staging).map_err(|e| format!("{}: {e}", staging.display()))?;
         std::fs::rename(&staging, &target).map_err(|e| format!("{}: {e}", target.display()))?;
         eprintln!("eave-build: installed {}", target.display());
+        if restart {
+            restart_bar(&target)?;
+        }
     } else {
         eprintln!("eave-build: built {}", binary.display());
     }
     Ok(())
+}
+
+/// Puts the freshly installed `binary` in place of a running bar. Only called after a successful
+/// install, so a failed build never takes the old bar down.
+fn restart_bar(binary: &Path) -> Result<()> {
+    let under_systemd = Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", SERVICE])
+        .status()
+        .is_ok_and(|status| status.success());
+    if under_systemd {
+        let status = Command::new("systemctl")
+            .args(["--user", "restart", SERVICE])
+            .status()
+            .map_err(|e| format!("running systemctl: {e}"))?;
+        if !status.success() {
+            return Err(format!("systemctl --user restart {SERVICE} failed"));
+        }
+        eprintln!("eave-build: restarted {SERVICE}");
+        return Ok(());
+    }
+
+    let pids = running_bars(binary);
+    if pids.is_empty() {
+        eprintln!("eave-build: eave isn't running; not starting it");
+        return Ok(());
+    }
+    // Check before stopping anything: without Hyprland we couldn't bring the bar back.
+    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
+        return Err(
+            "eave is running, but HYPRLAND_INSTANCE_SIGNATURE isn't set, so it can't be \
+             relaunched through Hyprland; restart it yourself"
+                .into(),
+        );
+    }
+
+    let status = Command::new("kill")
+        .args(pids.iter().map(u32::to_string))
+        .status()
+        .map_err(|e| format!("running kill: {e}"))?;
+    if !status.success() {
+        return Err("couldn't stop the running eave".into());
+    }
+    // A one-off wait in a CLI, not the bar: polling /proc here is fine.
+    let gone = || {
+        pids.iter()
+            .all(|pid| !Path::new(&format!("/proc/{pid}")).exists())
+    };
+    for _ in 0..40 {
+        if gone() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if !gone() {
+        return Err("the running eave didn't exit within 2 s".into());
+    }
+
+    // Through Hyprland, so the bar gets the session's environment and outlives this terminal.
+    // Lua configs (Hyprland 0.56+) take `eval`; older ones only know `dispatch exec`. A failed
+    // `eval` launched nothing, so trying both can't start two bars.
+    // Both run the command through a shell.
+    let command = shell_quote(&binary.to_string_lossy());
+    let launched = hyprctl(&["eval", &format!("hl.exec_cmd({})", lua_string(&command))])
+        .or_else(|_| hyprctl(&["dispatch", "exec", &command]));
+    if let Err(error) = launched {
+        return Err(format!("relaunching eave through hyprctl: {error}"));
+    }
+    eprintln!("eave-build: restarted eave");
+    Ok(())
+}
+
+fn hyprctl(args: &[&str]) -> Result<()> {
+    let output = Command::new("hyprctl")
+        .args(args)
+        .output()
+        .map_err(|e| format!("running hyprctl: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    }
+}
+
+/// A single-quoted POSIX shell word.
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
+/// A double-quoted Lua string literal.
+fn lua_string(text: &str) -> String {
+    let mut quoted = String::from("\"");
+    for c in text.chars() {
+        match c {
+            '\\' | '"' => quoted.extend(['\\', c]),
+            '\n' => quoted.push_str("\\n"),
+            c => quoted.push(c),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+/// Our running bars started from `binary`. A dev build elsewhere (`target/release/eave`) is left
+/// alone. Other users' processes are skipped because their `exe` can't be read.
+fn running_bars(binary: &Path) -> Vec<u32> {
+    let binary = std::fs::canonicalize(binary).unwrap_or_else(|_| binary.to_path_buf());
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
+            let comm = std::fs::read_to_string(entry.path().join("comm")).ok()?;
+            let exe = std::fs::read_link(entry.path().join("exe")).ok()?;
+            is_bar(&comm, &exe, &binary).then_some(pid)
+        })
+        .collect()
+}
+
+/// `exe` gains a ` (deleted)` suffix once the install has renamed a new binary over the old one.
+fn is_bar(comm: &str, exe: &Path, binary: &Path) -> bool {
+    let exe = exe.as_os_str().as_encoded_bytes();
+    let binary = binary.as_os_str().as_encoded_bytes();
+    comm.trim_end() == "eave"
+        && exe
+            .strip_prefix(binary)
+            .is_some_and(|rest| rest.is_empty() || rest == b" (deleted)")
 }
 
 fn load_plugin(source: &Source, base: &Path, cache: &Path, api_version: &str) -> Result<Plugin> {
@@ -430,6 +570,40 @@ mod tests {
         assert!(!api_compatible("1.5", "1.4.0"));
         assert!(!api_compatible("2.0", "1.4.0"));
         assert!(!api_compatible("banana", "0.1.0"));
+    }
+
+    #[test]
+    fn finds_bars_running_the_installed_binary() {
+        let binary = Path::new("/home/me/.local/bin/eave");
+        assert!(is_bar("eave\n", binary, binary));
+        assert!(is_bar(
+            "eave\n",
+            Path::new("/home/me/.local/bin/eave (deleted)"),
+            binary
+        ));
+        assert!(!is_bar(
+            "eave\n",
+            Path::new("/home/me/code/eave/target/release/eave"),
+            binary
+        ));
+        assert!(!is_bar(
+            "eave\n",
+            Path::new("/home/me/.local/bin/eave-old"),
+            binary
+        ));
+        assert!(!is_bar("eave-build\n", binary, binary));
+    }
+
+    #[test]
+    fn lua_strings_are_escaped() {
+        assert_eq!(lua_string("/a b/eave"), r#""/a b/eave""#);
+        assert_eq!(lua_string(r#"a"b\c"#), r#""a\"b\\c""#);
+    }
+
+    #[test]
+    fn shell_words_are_quoted() {
+        assert_eq!(shell_quote("/a b/eave"), "'/a b/eave'");
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
     }
 
     #[test]

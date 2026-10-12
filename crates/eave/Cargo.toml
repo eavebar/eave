@@ -13,6 +13,8 @@ iced_layershell = "0.19"
 # Only for the popover's pointer-leave grace timer; already in the tree through iced.
 tokio = { version = "1", default-features = false, features = ["time"] }
 toml.workspace = true
+# inotify for config hot reload (D-21); already in the tree through the Wayland stack.
+rustix = { version = "1", default-features = false, features = ["std", "fs"] }
 # iced_exdevtools 0.19.1 fails to build against winit-core beta.3 (new Key variant); drop once fixed upstream.
 winit-core = "=0.31.0-beta.2"
 # Built-in plugins, only used by the default binary (src/main.rs).

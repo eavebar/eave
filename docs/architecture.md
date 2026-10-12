@@ -36,12 +36,14 @@ eave keeps these apart. The **host** does the first job and owns everything visu
  event sources                       host (iced daemon)                                 compositor
 ┌───────────────────┐  AnyMessage   ┌─────────────────────────┐ view(window) ┌────────┐ frame cb ┌──────────┐
 │ widget            │─────────────▶ │ update: route to widget │────────────▶ │ layout │ ───────▶ │ Hyprland │
-│ subscriptions     │  (index, msg) │ instance, apply Effect  │              │ render │ ◀─────── │          │
-│ pointer, windows  │─────────────▶ │                         │              └────────┘          └──────────┘
+│ subscriptions     │  (id, msg)    │ instance, apply Effect  │              │ render │ ◀─────── │          │
+│ pointer, windows, │─────────────▶ │                         │              └────────┘          └──────────┘
+│ config.toml       │               │                         │
 └───────────────────┘               └─────────────────────────┘
 ```
 
-- Each widget instance's `subscription()` is tagged with its index and mapped to `Message::Widget(index, AnyMessage)` ([D-15](decisions.md)). `update` hands the message to that instance only.
+- Each widget instance's `subscription()` is tagged with the instance's stable id and mapped to `Message::Widget(id, AnyMessage)` ([D-15](decisions.md)). `update` hands the message to that instance only. Messages for an id that no longer exists (removed by a reload) are dropped.
+- `config.toml` is watched with inotify. When it changes, the host re-reads it and rebuilds only the instances whose entry changed ([D-21](decisions.md)).
 - A widget's `update` returns an `Effect`: a `Task` for async work, plus optional requests to open or close its popover. `update` never does I/O.
 - `view(window)` is pure. For the bar it lays out the left, center and right zones from `config.toml`. Each item is wrapped in a `Slot`, which turns unhandled clicks and scroll steps into messages and reports the item's bounds. For a popover window it renders the widget's `Panel`.
 - Nothing is drawn when no message arrives. Pointer tracking is only subscribed while a popover is open, so hovering over the bar wakes nothing.
@@ -83,15 +85,16 @@ crates/eave-api/           the plugin SDK: what plugin authors depend on
   src/erased.rs            type erasure for the host (doc-hidden)
 crates/eave/               the host, as a library (`eave::run`) plus the default binary
   src/main.rs              default binary: host + built-in plugins
-  src/lib.rs               run(): registry, config, layer-shell settings, daemon
-  src/app.rs               state, Message, update/view/subscription, popover lifecycle
+  src/lib.rs               run(): registry, layer-shell settings, daemon
+  src/app.rs               state, Message, update/view/subscription, popover lifecycle, reload
   src/config.rs            config.toml → zone entries
+  src/watch.rs             inotify watch on the config directory
   src/kit.rs               ui nodes → iced elements, styled
   src/theme.rs             every color, size and font
   src/slot.rs              item wrapper: clicks, scroll steps and bounds
   src/switcher.rs          switcher: row of options with a sliding, frame-paced mark
   src/measure.rs           popover sizing
-crates/eave-build/         builds a binary with the plugins from plugins.toml
+crates/eave-build/         builds a binary with the plugins from plugins.toml, installs, restarts
 crates/eave-dbus/          service: shared system bus, snapshot-on-PropertiesChanged watcher
 crates/eave-pulse/         service: audio over the PulseAudio protocol (one event thread)
 crates/eave-hyprland/      service: shared socket2 events, socket1 queries and dispatches
@@ -102,6 +105,7 @@ plugins/keyboard/          keyboard layout (eave-keyboard)
 plugins/battery/           battery from UPower (eave-battery)
 plugins/network/           network from NetworkManager (eave-network)
 plugins/volume/            output volume and switching (eave-volume)
+dist/systemd/              user units: the bar, and the optional rebuild-on-plugins.toml pair
 ```
 
 The rule: **split a file when it gets a second responsibility, not before.** Each service is its own crate (`eave-hyprland`, later a D-Bus one), so a plugin only compiles in the sources it uses.

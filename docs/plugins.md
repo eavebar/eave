@@ -23,7 +23,10 @@ Then:
 
 ```fish
 cargo run --release -p eave-build -- --install   # builds and copies to ~/.local/bin/eave
+cargo run --release -p eave-build -- --restart   # same, then restarts the running bar on it
 ```
+
+A rebuild is needed only when `plugins.toml` changes. A systemd path unit can do it for you on every save ([running.md](running.md#rebuild-automatically-when-pluginstoml-changes)).
 
 Sources are cloned to `~/.cache/eave/src`, and the generated crate builds in `~/.cache/eave/build`, so rebuilds are incremental. The plain `cargo run --release` in this repo builds the default binary, which has only the built-in plugins.
 
@@ -39,6 +42,8 @@ format = "%a %d %b"
 ```
 
 The zones are `left`, `center` and `right`, in order. Every key except `widget` goes to the widget's `Config`. Unknown widgets and invalid options are reported on stderr and skipped. They never crash the bar.
+
+Changes apply as soon as you save, with no restart. Widgets whose entry didn't change keep their state. A file that doesn't parse leaves the bar as it was ([D-21](decisions.md)).
 
 ## Built-in plugins
 

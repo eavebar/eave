@@ -2,7 +2,8 @@ use crate::Widget;
 use crate::erased::{Constructor, construct};
 
 /// The widgets every plugin makes available, by the name `config.toml` uses.
-#[derive(Default)]
+/// Cheap to clone: names and function pointers.
+#[derive(Default, Clone)]
 pub struct Registry {
     widgets: Vec<(&'static str, Constructor)>,
 }

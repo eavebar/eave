@@ -730,6 +730,7 @@ dependencies = [
  "eave-workspaces",
  "iced",
  "iced_layershell",
+ "rustix 1.1.5",
  "tokio",
  "toml",
  "winit-core",
