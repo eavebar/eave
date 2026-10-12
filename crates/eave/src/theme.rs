@@ -43,8 +43,8 @@ pub const ISLAND_SMOOTHING: f32 = 0.6;
 pub const PRESS_INSET: f32 = 1.5;
 /// The most the part of a dragged island under the pointer moves, sideways and up or down. It only
 /// approaches these: the further the pointer goes, the harder it pulls back.
-pub const DRAG_LIMIT_X: f32 = 18.0;
-pub const DRAG_LIMIT_Y: f32 = 10.0;
+pub const DRAG_LIMIT_X: f32 = 10.0;
+pub const DRAG_LIMIT_Y: f32 = 6.0;
 /// How much of a drag moves the whole island. The rest stretches the part near where it was
 /// grabbed, less and less further away, and not at all past `DRAG_REACH`. Wide, so a pull bends
 /// the island in one long curve rather than a dent.
