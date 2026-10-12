@@ -14,7 +14,8 @@ We build it ourselves, not on a framework like Quickshell or AGS, because we wan
 |---|---|
 | [docs/vision.md](docs/vision.md) | What we are building, the philosophy, what we will *not* do |
 | [docs/platform.md](docs/platform.md) | Targets (Hyprland, Asahi aarch64, CachyOS x86_64) and their quirks |
-| [docs/architecture.md](docs/architecture.md) | How the bar works: layer shell, the event loop, data sources, code layout |
+| [docs/architecture.md](docs/architecture.md) | How the bar works: host / widgets / services, the event loop, popovers, code layout |
+| [docs/plugins.md](docs/plugins.md) | Using and writing plugins: plugins.toml, config.toml, the Widget trait, the manifest |
 | [docs/decisions.md](docs/decisions.md) | Every significant choice, with the alternatives and *why* |
 | [docs/development.md](docs/development.md) | Build, run, measure, and the rules for writing code here |
 | [docs/roadmap.md](docs/roadmap.md) | What exists, what is next, in what order |
@@ -22,9 +23,10 @@ We build it ourselves, not on a framework like Quickshell or AGS, because we wan
 ## Quick facts
 
 - Stack: **Rust + iced 0.14 + iced_layershell 0.19**, with the **tiny-skia** (CPU) renderer by default.
-- Run it: `cargo run --release`. GPU renderer: `cargo run --release --features gpu`.
-- Code: `src/main.rs` (layer-shell setup), `src/app.rs` (state, messages, view).
-- Baseline: ~11.5 MB RSS and ~0% idle CPU (see [docs/development.md](docs/development.md#measuring)). Don't regress it without a reason written down in `docs/decisions.md`.
+- **Everything is a plugin.** With no `~/.config/eave/config.toml` the bar is empty. Plugins are crates compiled in by `eave-build`, never loaded at runtime ([docs/plugins.md](docs/plugins.md)).
+- Run it: `cargo run --release`. GPU renderer: `cargo run --release --features gpu`. Tests: `cargo test --workspace`.
+- Code: `crates/eave-api` (plugin SDK: `Widget`, closed `ui` vocabulary), `crates/eave` (host: surfaces, layout, theme, popovers), `crates/eave-build` (builds a binary with third-party plugins), `plugins/clock`.
+- Baseline: ~11.8 MB RSS with two clocks and ~0% idle CPU (see [docs/development.md](docs/development.md#measuring)). Don't regress it without a reason written down in `docs/decisions.md`.
 
 ## Rules for agents
 
@@ -33,4 +35,6 @@ We build it ourselves, not on a framework like Quickshell or AGS, because we wan
 - **Every new dependency needs a reason.** Prefer `default-features = false`. Record non-obvious ones in `docs/decisions.md`.
 - **Measure** RSS, idle CPU and binary size before and after any change that might affect them (dependencies, renderer, animation).
 - **Keep both architectures building:** aarch64 (Asahi) and x86_64 (CachyOS). No arch-specific code without a fallback.
+- **Plugins describe, the host draws.** Never give plugins colors, sizes, raw iced elements or control over layout. Extend the `ui` vocabulary in `eave-api` and render it in `crates/eave/src/kit.rs` instead.
+- **Built-in widgets are plugins.** They use only the public `eave-api`. No private shortcuts into the host.
 - **Keep the docs true.** If you change a decision, update `docs/decisions.md` and say why. Don't just delete the old reasoning: mark it superseded.

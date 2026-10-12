@@ -32,6 +32,9 @@ The bar is idle almost all the time. It wakes up only when the world changes: Hy
 ### From scratch, but not reinventing everything
 "From scratch" means we own the architecture and the data layer. It does not mean writing a font rasterizer. We use solid building blocks (iced for UI and layout, zbus for D-Bus, the layer-shell binding) and write ourselves the parts that are small and central to the bar. A Hyprland IPC client is about 100 lines, so we write it instead of pulling in a crate.
 
+### Empty by default, everything is a plugin
+With no plugins configured, the bar is an empty strip. The clock, the battery and the workspaces are all plugins written against the same public API a third party would use. That keeps the API honest: if a built-in widget needs something, every plugin gets it too.
+
 ### Simple code over clever code
 The Elm-style architecture (`Message → update → view`) keeps all state in one place and every change explicit. Modules should read like the code around them. No abstraction until there's a second user of it.
 
@@ -42,6 +45,8 @@ Decisions record their reasons and the alternatives we rejected, so a future cha
 
 - **Supporting every compositor.** Hyprland is the target. Other wlroots compositors may work through layer-shell, but we won't add code for them.
 - **X11.** Not supported, and it's disabled at build time.
-- **A config language or plugin system** for other people. Configuration will exist (a TOML file), but this isn't Waybar-for-everyone.
+- **A config language.** Configuration is a TOML file that says which widgets go where, plus each widget's own options. No scripting, no CSS.
+- **Runtime-loaded plugins.** Plugins exist, and anyone can publish one as a git repository, but they are compiled into the binary by `eave-build`. No dynamic libraries, no WASM, no scripting runtime ([D-12](decisions.md)). *(This item used to read "a config language or plugin system for other people". The plugin half was reversed on 2026-10-12: see D-12.)*
+- **Plugin-controlled styling or layout.** Plugins describe *what* to show with a closed vocabulary. The host decides how it looks and where it goes ([D-11](decisions.md), [D-13](decisions.md)).
 - **Matching Waybar feature for feature.** Modules get added when they're actually wanted.
 - **Distro packaging beyond Arch.** We may write a `PKGBUILD`. Nothing else is planned.

@@ -5,37 +5,68 @@
 A bar does two separate jobs:
 
 1. **Being a bar-shaped surface.** On Wayland a normal window gets tiled by the compositor. A bar instead uses the **`wlr-layer-shell`** protocol to anchor to a screen edge, sit on a layer (`background`, `bottom`, `top` or `overlay`), and reserve an **exclusive zone** so tiled windows stay out of its space. `iced_layershell` handles this for us.
-2. **Knowing what to show.** Every module reads a different system interface. This is where most of the work is.
+2. **Knowing what to show.** Every widget reads a different system interface. This is where most of the work is.
+
+eave keeps these apart. The **host** does the first job and owns everything visual. **Widgets** (plugins) do the second and only describe content. With no widgets configured, the bar is an empty strip.
+
+## Three layers
+
+```
+┌──────────────────────────────── host (crates/eave) ────────────────────────────────┐
+│ surfaces: bar + popovers · zones from config.toml · theme · kit (nodes → pixels)   │
+│ click routing · popover lifecycle · animation                                      │
+└───────────────▲───────────────────────────────────────────────▲────────────────────┘
+                │ Item / Panel (closed vocabulary)               │ Effect (task, open/close popover)
+┌───────────────┴───────────── widgets (plugins) ────────────────┴────────────────────┐
+│ clock · battery · workspaces · …   each: Config, state, Message, update, views      │
+└───────────────▲────────────────────────────────────────────────────────────────────┘
+                │ Subscription
+┌───────────────┴───────────── services (planned) ───────────────────────────────────┐
+│ Hyprland IPC · D-Bus (UPower, MPRIS, NM, SNI) · PipeWire · timers                  │
+└────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Host** ([D-11](decisions.md)): owns every surface, the layout, the look and the motion. It is not pluggable.
+- **Widgets** implement `eave_api::Widget`. They can't pick colors or sizes, can't build raw iced elements, and can't move other items or the bar ([D-13](decisions.md)).
+- **Services** are shared event sources. Today a widget runs its own subscription. A shared services crate arrives with the Hyprland step.
 
 ## Data flow
 
 ```
- event sources                     iced runtime                         compositor
-┌────────────────────┐   Message  ┌──────────────┐  view()  ┌────────┐ frame cb ┌──────────┐
-│ Hyprland socket2   │──────────▶ │ update(state)│────────▶ │ layout │ ───────▶ │ Hyprland │
-│ D-Bus signals      │──────────▶ │              │          │ render │ ◀─────── │          │
-│ PipeWire listener  │──────────▶ │   App state  │          └────────┘          └──────────┘
-│ timers (/proc,clock)│─────────▶ └──────────────┘
-└────────────────────┘
+ event sources                       host (iced daemon)                                 compositor
+┌───────────────────┐  AnyMessage   ┌─────────────────────────┐ view(window) ┌────────┐ frame cb ┌──────────┐
+│ widget            │─────────────▶ │ update: route to widget │────────────▶ │ layout │ ───────▶ │ Hyprland │
+│ subscriptions     │  (index, msg) │ instance, apply Effect  │              │ render │ ◀─────── │          │
+│ pointer, windows  │─────────────▶ │                         │              └────────┘          └──────────┘
+└───────────────────┘               └─────────────────────────┘
 ```
 
-- Each source is an **iced `Subscription`**: an async stream that turns external events into `Message`s.
-- `update` is the **only** place state changes. It's synchronous and fast, and it never does I/O. If something must happen in response (for example a command sent to Hyprland), `update` returns a `Task`.
-- `view` is a pure function of state. iced decides when to redraw. With no messages and no running animation, nothing is drawn.
-- Animations are state too: a start value, a target and a start time. While one is running, we request frames, so pacing follows the compositor's frame callbacks. Once it settles, the requests stop.
+- Each widget instance's `subscription()` is tagged with its index and mapped to `Message::Widget(index, AnyMessage)` ([D-15](decisions.md)). `update` hands the message to that instance only.
+- A widget's `update` returns an `Effect`: a `Task` for async work, plus optional requests to open or close its popover. `update` never does I/O.
+- `view(window)` is pure. For the bar it lays out the left, center and right zones from `config.toml`. Each item is wrapped in a `Slot`, which turns unhandled clicks into messages and reports the item's bounds. For a popover window it renders the widget's `Panel`.
+- Nothing is drawn when no message arrives. Pointer tracking is only subscribed while a popover is open, so hovering over the bar wakes nothing.
 
-## Data sources by module
+## Popovers
 
-| Module | Source | Mechanism |
+A click on an item that has a popover and no `on_press`:
+
+1. The host records the item's bounds and the bar width, then asks for a new layer surface: `overlay` layer, anchored top-left, zero exclusive zone (so it sits under the bar), 1×1, namespace `eave-popover`.
+2. `Measure` lays the panel out at its natural size, draws nothing yet, and reports the size.
+3. The host resizes the surface and sets its margin so it's centered under the item, clamped to the screen. Then the panel becomes visible.
+4. It closes on a second click on the item, when the widget returns `close_popover()` or stops offering a popover, or 400 ms after the pointer leaves it. Closing on an outside click is an open issue ([D-14](decisions.md)).
+
+## Data sources by widget
+
+| Widget | Source | Mechanism |
 |---|---|---|
 | Workspaces, active window, monitors | Hyprland | `.socket2.sock` events + `.socket.sock` queries (our own client) |
-| Clock | system time | 1 s timer |
+| Clock | system time | 1 s timer (`eave_api::time::every`) |
 | Battery | UPower | D-Bus (`zbus`), `PropertiesChanged` signals |
 | Volume | PipeWire / WirePlumber | `pipewire` crate listener |
 | Media | MPRIS | D-Bus (`zbus`) |
 | Network | NetworkManager or iwd | D-Bus (`zbus`) |
 | Bluetooth | BlueZ | D-Bus (`zbus`) |
-| Tray | StatusNotifierItem | D-Bus. We must act as the watcher/host. The hardest module. |
+| Tray | StatusNotifierItem | D-Bus. We must act as the watcher/host. The hardest widget. |
 | CPU / RAM / temps | `/proc`, `/sys` | timer (the only legitimate polling) |
 
 So far only the clock exists. Hyprland is next. See [roadmap.md](roadmap.md).
@@ -43,27 +74,32 @@ So far only the clock exists. Hyprland is next. See [roadmap.md](roadmap.md).
 ## Code layout
 
 ```
-src/
-  main.rs   entry point: layer-shell settings (anchor, layer, size, exclusive zone), runs the app
-  app.rs    App state, Message enum, update / view / subscription / style
+Cargo.toml                 workspace, release profile
+crates/eave-api/           the plugin SDK: what plugin authors depend on
+  src/widget.rs            the Widget trait
+  src/ui.rs                the closed vocabulary: Node, Item, Panel, Tone
+  src/effect.rs            Effect: a Task plus popover requests
+  src/registry.rs          Registry: widget name → constructor
+  src/erased.rs            type erasure for the host (doc-hidden)
+crates/eave/               the host, as a library (`eave::run`) plus the default binary
+  src/main.rs              default binary: host + built-in plugins
+  src/lib.rs               run(): registry, config, layer-shell settings, daemon
+  src/app.rs               state, Message, update/view/subscription, popover lifecycle
+  src/config.rs            config.toml → zone entries
+  src/kit.rs               ui nodes → iced elements, styled
+  src/theme.rs             every color, size and font
+  src/slot.rs              item wrapper: clicks and bounds
+  src/measure.rs           popover sizing
+crates/eave-build/         builds a binary with the plugins from plugins.toml
+plugins/clock/             the clock plugin (crate eave-clock) + eave-plugin.toml
 ```
 
-The planned layout as modules arrive:
-
-```
-src/
-  main.rs
-  app.rs            top-level state + routing of messages to modules
-  hyprland/         IPC client (socket2 stream, socket queries), event types
-  modules/          one file per bar module: its state, message, view fragment, subscription
-  services/         shared D-Bus connection, PipeWire, etc. (when >1 module needs them)
-  theme.rs          colors, spacing, fonts in one place
-```
-
-The rule: **split a file when it gets a second responsibility, not before.**
+The rule: **split a file when it gets a second responsibility, not before.** A planned `services/` crate (Hyprland client, shared D-Bus connection) arrives with the first widget that needs it.
 
 ## Things to keep in mind
 
-- `#[to_layer_message]` on `Message` adds variants that `iced_layershell` uses to control the surface at runtime (resize, re-anchor, margins). `update` must handle them with a catch-all arm.
-- `KeyboardInteractivity::None`: the bar must never steal keyboard focus. Popups that need typing (a launcher, say) will be separate surfaces with their own settings.
-- The bar opens on the active output for now (`StartMode` default). For one bar per monitor we'll switch to `iced_layershell::daemon` with one surface per output.
+- `#[to_layer_message(multi)]` on `Message` adds the variants `iced_layershell` uses to create and control surfaces (`NewLayerShell`, `SizeChange`, `MarginChange`, `RemoveWindow`, …). `update` must handle them with a catch-all arm.
+- Margin tuples are `(top, right, bottom, left)`, despite the macro's doc comment.
+- Surfaces are transparent. The bar and the popover panel draw their own backgrounds, which is what gives popovers rounded corners.
+- `KeyboardInteractivity::None` everywhere: the bar and its popovers never steal keyboard focus. Something that needs typing (a launcher) will need its own settings.
+- The bar opens on the active output (`StartMode` default). In daemon mode, every window that isn't a popover is drawn as a bar, so one bar per monitor (`StartMode::AllScreens`) mostly needs per-output state.

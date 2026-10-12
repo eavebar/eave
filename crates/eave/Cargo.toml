@@ -1,0 +1,29 @@
+[package]
+name = "eave"
+version = "0.1.0"
+description = "A status bar for Hyprland"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+iced = { version = "0.14", default-features = false, features = ["tiny-skia", "wayland", "tokio", "crisp", "advanced"] }
+iced_layershell = "0.19"
+# Only for the popover's pointer-leave grace timer; already in the tree through iced.
+tokio = { version = "1", default-features = false, features = ["time"] }
+toml.workspace = true
+# iced_exdevtools 0.19.1 fails to build against winit-core beta.3 (new Key variant); drop once fixed upstream.
+winit-core = "=0.31.0-beta.2"
+# Built-in plugins, only used by the default binary (src/main.rs).
+eave-clock = { workspace = true, optional = true }
+
+[features]
+default = ["builtin-clock"]
+builtin-clock = ["dep:eave-clock"]
+# GPU renderer (wgpu); tiny-skia stays as fallback. Default is CPU-only, which is lighter for a bar.
+gpu = ["iced/wgpu"]
+
+[[bin]]
+name = "eave"
+required-features = ["builtin-clock"]

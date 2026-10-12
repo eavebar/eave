@@ -1,0 +1,10 @@
+# Plugin manifest. In a plugin's own repository this file sits at the repo root.
+[plugin]
+name = "clock"
+description = "Clock with a calendar popover"
+# Cargo package name, and the directory holding its Cargo.toml (relative to this file).
+crate = "eave-clock"
+path = "."
+# The eave-api version this plugin is written against.
+api = "0.1"
+# The Rust module path of the crate (crate name with '-' replaced by '_') must export `pub fn register(&mut eave_api::Registry)`.

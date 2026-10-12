@@ -1,0 +1,14 @@
+[package]
+name = "eave-api"
+version = "0.1.0"
+description = "Plugin API for the eave status bar"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Task and Subscription are the only iced types plugins see. No widgets, no renderer: that is what keeps the UI vocabulary closed (D-13).
+iced_runtime = "0.14"
+iced_futures = { version = "0.14", features = ["tokio"] }
+serde.workspace = true
+toml.workspace = true

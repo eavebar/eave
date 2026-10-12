@@ -1,0 +1,11 @@
+[package]
+name = "eave-build"
+version = "0.1.0"
+description = "Builds an eave binary with the plugins listed in plugins.toml"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+toml = { version = "0.9", default-features = false, features = ["std", "parse", "display", "serde"] }

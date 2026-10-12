@@ -9,10 +9,21 @@
 ## Build and run
 
 ```fish
-cargo run                          # debug
+cargo run                          # debug, default binary (host + built-in plugins)
 cargo run --release                # what you'd actually use
 cargo run --release --features gpu # wgpu renderer instead of tiny-skia
+cargo test --workspace             # every crate
+cargo run --release -p eave-build -- --install   # build with the plugins in plugins.toml
 ```
+
+Without `~/.config/eave/config.toml` the bar is empty. A minimal config:
+
+```toml
+[[center]]
+widget = "clock"
+```
+
+To try a config without touching your own, point `XDG_CONFIG_HOME` at another directory. See [plugins.md](plugins.md) for plugins and the config format.
 
 Stop with Ctrl+C. To check that the surface exists and where it is:
 
@@ -39,12 +50,17 @@ ps -o rss,pcpu -p (pgrep -x eave)              # memory (KB) and CPU
 kill (pgrep -x eave)
 ```
 
-Current baseline (Asahi, aarch64, release, clock only):
+Current baseline (Asahi, aarch64, release, tiny-skia, default binary). Measured 2026-10-12 after the plugin foundation (0.5):
 
-| | Binary | RSS | Idle CPU |
+| Config | Binary | RSS | Idle CPU |
 |---|---|---|---|
-| tiny-skia | 5.6 MB | ~11.5 MB | ~0.2% |
-| wgpu | 9.5 MB | ~72 MB | ~1% |
+| empty bar (no config) | 5.8 MiB | ~9.7 MB | 0% |
+| two clocks | 5.8 MiB | ~11.8 MB | 0% |
+| two clocks, popover open | | ~14.5 MB | |
+
+Before the plugin split (skeleton, clock + date hard-coded): binary 5.6 MiB, RSS ~11.5 MB. The +0.2 MiB of binary and +0.3 MB of RSS are the price of the registry, config parsing (`toml`) and popover surfaces ([D-12](decisions.md), [D-14](decisions.md)).
+
+The wgpu renderer measured 9.5 MB binary, ~72 MB RSS and ~1% idle CPU at the skeleton stage ([D-4](decisions.md)).
 
 Update this table when the baseline moves for a good reason, and record that reason in [decisions.md](decisions.md).
 
@@ -55,7 +71,7 @@ For smoothness: watch animations with Hyprland's debug overlay (`hyprctl keyword
 - **Events over polling.** If the data source can notify us, subscribe. Polling needs a comment explaining why no event source exists.
 - **`update` does no I/O.** It mutates state and returns `Task`s. Blocking calls belong in subscriptions or tasks.
 - **`view` is pure.** No side effects, no expensive computation. Precompute in `update` if needed.
-- **One place for visual constants:** colors, sizes and fonts. Today that's the constants at the top of `app.rs`, and later `theme.rs`.
+- **One place for visual constants:** colors, sizes and fonts all live in `crates/eave/src/theme.rs`. Plugins never see them ([D-13](decisions.md)).
 - **Dependencies:** `default-features = false` unless there's a reason. Every new crate gets one line in the PR or commit explaining why. Non-obvious ones get a `decisions.md` entry.
 - **Tolerant parsing** of anything external (Hyprland events, D-Bus properties). Unknown is ignored and logged at debug level, never a panic.
 - **Both arches build.** If you touch anything platform-dependent, note whether it was tested on x86_64 too.

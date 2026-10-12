@@ -1,0 +1,249 @@
+//! The closed UI vocabulary widgets build their views from.
+//!
+//! Every node is semantic: it says *what* something is (a label, a heading, a button), never how
+//! it looks. The host maps nodes to pixels using its theme, so every plugin gets the same style,
+//! and the same animations, without being able to break them.
+
+/// The role of a piece of text. The theme decides the color.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Tone {
+    #[default]
+    Normal,
+    /// Secondary information.
+    Dim,
+    /// The thing to notice: today in a calendar, the active workspace.
+    Accent,
+    Warning,
+    Critical,
+}
+
+/// A piece of UI. Build it with the functions in this module.
+pub struct Node<M>(Kind<M>);
+
+#[doc(hidden)]
+pub enum Kind<M> {
+    Label { text: String, tone: Option<Tone> },
+    Heading { text: String, tone: Option<Tone> },
+    Row(Vec<Node<M>>),
+    Column(Vec<Node<M>>),
+    Grid { columns: usize, cells: Vec<Node<M>> },
+    Button { content: Box<Node<M>>, on_press: M },
+    Separator,
+    Empty,
+}
+
+pub fn label<M>(text: impl Into<String>) -> Node<M> {
+    Node(Kind::Label {
+        text: text.into(),
+        tone: None,
+    })
+}
+
+/// A title, larger than a label. Meant for popovers.
+pub fn heading<M>(text: impl Into<String>) -> Node<M> {
+    Node(Kind::Heading {
+        text: text.into(),
+        tone: None,
+    })
+}
+
+/// Children side by side, vertically centered.
+pub fn row<M>(children: impl IntoIterator<Item = Node<M>>) -> Node<M> {
+    Node(Kind::Row(children.into_iter().collect()))
+}
+
+/// Children stacked top to bottom.
+pub fn column<M>(children: impl IntoIterator<Item = Node<M>>) -> Node<M> {
+    Node(Kind::Column(children.into_iter().collect()))
+}
+
+/// Cells laid out left to right in rows of `columns`, all the same width. A calendar, a keypad.
+pub fn grid<M>(columns: usize, cells: impl IntoIterator<Item = Node<M>>) -> Node<M> {
+    Node(Kind::Grid {
+        columns: columns.max(1),
+        cells: cells.into_iter().collect(),
+    })
+}
+
+pub fn button<M>(content: Node<M>, on_press: M) -> Node<M> {
+    Node(Kind::Button {
+        content: Box::new(content),
+        on_press,
+    })
+}
+
+/// A thin horizontal line between groups.
+pub fn separator<M>() -> Node<M> {
+    Node(Kind::Separator)
+}
+
+/// Takes up a grid cell, or nothing elsewhere.
+pub fn empty<M>() -> Node<M> {
+    Node(Kind::Empty)
+}
+
+impl<M> Node<M> {
+    /// Sets the tone of this text, or of every text inside this node that has none yet.
+    pub fn tone(mut self, tone: Tone) -> Self {
+        self.set_tone(tone);
+        self
+    }
+
+    fn set_tone(&mut self, new: Tone) {
+        match &mut self.0 {
+            Kind::Label { tone, .. } | Kind::Heading { tone, .. } => {
+                tone.get_or_insert(new);
+            }
+            Kind::Row(children)
+            | Kind::Column(children)
+            | Kind::Grid {
+                cells: children, ..
+            } => {
+                children.iter_mut().for_each(|child| child.set_tone(new));
+            }
+            Kind::Button { content, .. } => content.set_tone(new),
+            Kind::Separator | Kind::Empty => {}
+        }
+    }
+
+    pub fn map<N>(self, f: &impl Fn(M) -> N) -> Node<N> {
+        let map_all = |nodes: Vec<Node<M>>| nodes.into_iter().map(|node| node.map(f)).collect();
+
+        Node(match self.0 {
+            Kind::Label { text, tone } => Kind::Label { text, tone },
+            Kind::Heading { text, tone } => Kind::Heading { text, tone },
+            Kind::Row(children) => Kind::Row(map_all(children)),
+            Kind::Column(children) => Kind::Column(map_all(children)),
+            Kind::Grid { columns, cells } => Kind::Grid {
+                columns,
+                cells: map_all(cells),
+            },
+            Kind::Button { content, on_press } => Kind::Button {
+                content: Box::new(content.map(f)),
+                on_press: f(on_press),
+            },
+            Kind::Separator => Kind::Separator,
+            Kind::Empty => Kind::Empty,
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn into_kind(self) -> Kind<M> {
+        self.0
+    }
+}
+
+/// What a widget shows in the bar.
+pub struct Item<M> {
+    content: Option<Node<M>>,
+    on_press: Option<M>,
+    on_secondary: Option<M>,
+}
+
+impl<M> Item<M> {
+    pub fn new(content: Node<M>) -> Self {
+        Self {
+            content: Some(content),
+            on_press: None,
+            on_secondary: None,
+        }
+    }
+
+    /// Takes no space in the bar. For widgets with nothing to show, like a battery on a desktop.
+    pub fn hidden() -> Self {
+        Self {
+            content: None,
+            on_press: None,
+            on_secondary: None,
+        }
+    }
+
+    /// Sent on a primary click. Replaces the default of toggling the popover.
+    pub fn on_press(mut self, message: M) -> Self {
+        self.on_press = Some(message);
+        self
+    }
+
+    /// Sent on a secondary (right) click.
+    pub fn on_secondary(mut self, message: M) -> Self {
+        self.on_secondary = Some(message);
+        self
+    }
+
+    pub fn map<N>(self, f: &impl Fn(M) -> N) -> Item<N> {
+        Item {
+            content: self.content.map(|content| content.map(f)),
+            on_press: self.on_press.map(f),
+            on_secondary: self.on_secondary.map(f),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn into_parts(self) -> (Option<Node<M>>, Option<M>, Option<M>) {
+        (self.content, self.on_press, self.on_secondary)
+    }
+}
+
+/// The contents of a popover. The host draws the surface, its background and its edges.
+pub struct Panel<M>(Node<M>);
+
+impl<M> Panel<M> {
+    pub fn new(content: Node<M>) -> Self {
+        Self(content)
+    }
+
+    pub fn map<N>(self, f: &impl Fn(M) -> N) -> Panel<N> {
+        Panel(self.0.map(f))
+    }
+
+    #[doc(hidden)]
+    pub fn into_node(self) -> Node<M> {
+        self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_converts_every_message() {
+        let node = row([
+            button(label("a"), 1),
+            column([button(label("b"), 2), label("c")]),
+        ]);
+
+        let Kind::Row(children) = node.map(&|n: i32| n * 10).into_kind() else {
+            panic!("row became something else");
+        };
+        let mut messages = Vec::new();
+        collect(children, &mut messages);
+        assert_eq!(messages, [10, 20]);
+    }
+
+    fn collect(nodes: Vec<Node<i32>>, out: &mut Vec<i32>) {
+        for node in nodes {
+            match node.into_kind() {
+                Kind::Button { on_press, .. } => out.push(on_press),
+                Kind::Row(children) | Kind::Column(children) => collect(children, out),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn tone_fills_only_unset_text() {
+        let node: Node<()> = row([label("a").tone(Tone::Accent), label("b")]).tone(Tone::Dim);
+        let Kind::Row(children) = node.into_kind() else {
+            unreachable!()
+        };
+        let tones: Vec<_> = children
+            .into_iter()
+            .map(|child| match child.into_kind() {
+                Kind::Label { tone, .. } => tone,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tones, [Some(Tone::Accent), Some(Tone::Dim)]);
+    }
+}

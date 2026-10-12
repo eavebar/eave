@@ -1,0 +1,15 @@
+[package]
+name = "eave-clock"
+version = "0.1.0"
+description = "Clock with a calendar popover, for eave"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+serde.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

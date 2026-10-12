@@ -1,0 +1,107 @@
+//! Turns the plugin vocabulary ([`eave_api::ui`]) into iced elements, styled by [`theme`].
+//! This is the only place plugin UI becomes pixels.
+
+use eave_api::erased::AnyMessage;
+use eave_api::ui::{Kind, Node, Tone};
+use iced::widget::{button, column, container, row, rule, text};
+use iced::{Background, Border, Element, Length, Theme, alignment};
+
+use crate::theme;
+
+pub fn node<'a>(node: Node<AnyMessage>) -> Element<'a, AnyMessage> {
+    render(node, Tone::Normal)
+}
+
+fn render<'a>(node: Node<AnyMessage>, inherited: Tone) -> Element<'a, AnyMessage> {
+    let all = |children: Vec<Node<AnyMessage>>| {
+        children
+            .into_iter()
+            .map(move |child| render(child, inherited))
+    };
+
+    match node.into_kind() {
+        Kind::Label {
+            text: content,
+            tone,
+        } => text(content)
+            .size(theme::TEXT_SIZE)
+            .color(theme::tone(tone.unwrap_or(inherited)))
+            .into(),
+        Kind::Heading {
+            text: content,
+            tone,
+        } => text(content)
+            .size(theme::HEADING_SIZE)
+            .font(theme::HEADING_FONT)
+            .color(theme::tone(tone.unwrap_or(inherited)))
+            .into(),
+        Kind::Row(children) => row(all(children))
+            .spacing(theme::SPACING)
+            .align_y(alignment::Vertical::Center)
+            .into(),
+        Kind::Column(children) => column(all(children)).spacing(theme::SPACING).into(),
+        Kind::Grid { columns, cells } => {
+            let mut cells = all(cells).map(|cell| {
+                container(cell)
+                    .width(Length::Fixed(theme::GRID_CELL))
+                    .align_x(alignment::Horizontal::Center)
+                    .into()
+            });
+            let mut rows = Vec::new();
+            loop {
+                let line: Vec<Element<'a, AnyMessage>> = cells.by_ref().take(columns).collect();
+                if line.is_empty() {
+                    break;
+                }
+                rows.push(row(line).into());
+            }
+            column(rows).spacing(theme::SPACING / 2).into()
+        }
+        Kind::Button { content, on_press } => button(render(*content, inherited))
+            .on_press(on_press)
+            .padding([2, 8])
+            .style(button_style)
+            .into(),
+        Kind::Separator => rule::horizontal(1)
+            .style(|_| rule::Style {
+                color: theme::SEPARATOR,
+                radius: 0.0.into(),
+                fill_mode: rule::FillMode::Full,
+                snap: true,
+            })
+            .into(),
+        Kind::Empty => text("").into(),
+    }
+}
+
+fn button_style(_: &Theme, status: button::Status) -> button::Style {
+    let background = match status {
+        button::Status::Hovered => Some(Background::Color(theme::HOVER_BG)),
+        button::Status::Pressed => Some(Background::Color(theme::PRESSED_BG)),
+        button::Status::Active | button::Status::Disabled => None,
+    };
+    button::Style {
+        background,
+        text_color: theme::tone(Tone::Normal),
+        border: Border::default().rounded(theme::BUTTON_RADIUS),
+        ..button::Style::default()
+    }
+}
+
+pub fn panel_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(theme::PANEL_BG)),
+        border: Border::default()
+            .rounded(theme::PANEL_RADIUS)
+            .width(1)
+            .color(theme::PANEL_BORDER),
+        ..container::Style::default()
+    }
+}
+
+pub fn bar_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(theme::BAR_BG)),
+        ..container::Style::default()
+    }
+}
