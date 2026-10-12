@@ -1,15 +1,14 @@
-# Started by eave-rebuild.path. Needs eave-build installed:
-#   cargo install --path crates/eave-build
+# Started by eave-rebuild.path. Needs eave-build installed (install.sh does it).
 
 [Unit]
-Description=Rebuild eave with the plugins in plugins.toml
+Description=Rebuild eave with the plugins config.toml uses
 Documentation=https://github.com/francescomengarelli/eave/blob/main/docs/running.md
 
 [Service]
 Type=oneshot
-# cargo, git, systemctl and hyprctl.
+# cargo, git and systemctl.
 Environment=PATH=%h/.cargo/bin:/usr/local/bin:/usr/bin
-ExecStart=eave-build --restart
+ExecStart=eave-build
 # A rebuild must never make the desktop stutter.
 Nice=19
 CPUSchedulingPolicy=idle

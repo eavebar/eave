@@ -46,6 +46,6 @@ That's all. Battery and network read the kernel directly. The binary links only 
   - `.socket.sock`: request/response (same as `hyprctl -j ...`)
   - `.socket2.sock`: newline-separated event stream, `EVENT>>DATA`
 
-- **`eave-build --restart`** relaunches a bar started from the Hyprland config by writing to `.socket.sock` itself (no `hyprctl`). Hyprland 0.56 moved to Lua configs, where `dispatch <args>` is evaluated as Lua (`hl.dispatch(<args>)`), so it sends `eval hl.exec_cmd(…)` first and falls back to `dispatch exec` on older releases ([D-22](decisions.md)).
+- **`eave-build`** relaunches a bar started from the Hyprland config by writing to `.socket.sock` itself (no `hyprctl`). Hyprland 0.56 moved to Lua configs, where `dispatch <args>` is evaluated as Lua (`hl.dispatch(<args>)`), so it sends `eval hl.exec_cmd(…)` first and falls back to `dispatch exec` on older releases ([D-22](decisions.md)).
 
 Hyprland's IPC changes between releases more often than freedesktop APIs do. Keep parsing tolerant: ignore unknown events, and don't crash on extra fields.

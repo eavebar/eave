@@ -4,6 +4,9 @@
 //! [[center]]
 //! widget = "clock"
 //! format = "%H:%M"   # every other key goes to the widget
+//!
+//! [[right]]
+//! widget = "someone/weather@v0.2"   # a plugin, compiled in by eave-build (D-30)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -70,8 +73,33 @@ pub fn dir() -> Option<PathBuf> {
     Some(base.join("eave"))
 }
 
+/// The widget a `widget = "…"` reference names. `clock` is built in, the rest name a plugin's
+/// source ([D-30](../../../docs/decisions.md)): `someone/eave-weather@v0.2` is `weather` (the
+/// repository's name without `eave-`), and `someone/tools#cpu` is `cpu`. eave-build parses the
+/// same grammar, and keeps the same test cases.
+pub fn widget_name(reference: &str) -> &str {
+    if let Some((_, name)) = reference.rsplit_once('#') {
+        return name;
+    }
+    // A revision follows the last `/` and never holds a `:`, so `git@host:x/y` keeps its `@`.
+    let tail = reference.rfind('/').map_or(0, |slash| slash + 1);
+    let source = match reference[tail..].rfind('@') {
+        Some(at) if !reference[tail + at + 1..].contains(':') => &reference[..tail + at],
+        _ => reference,
+    };
+    let last = source
+        .trim_end_matches('/')
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap_or(source);
+    let last = last.strip_suffix(".git").unwrap_or(last);
+    last.strip_prefix("eave-").unwrap_or(last)
+}
+
 pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
     let mut table: toml::Table = source.parse()?;
+    // Where eave itself comes from. Only eave-build reads it.
+    table.remove("eave");
     let mut config = Config::default();
 
     for zone in Zone::ALL {
@@ -170,6 +198,34 @@ mod tests {
         .unwrap();
         assert!(config.entries.is_empty());
         assert_eq!(config.warnings.len(), 3);
+    }
+
+    #[test]
+    fn eave_source_is_not_a_warning() {
+        let config = parse("eave = \"~/code/eave\"").unwrap();
+        assert!(config.warnings.is_empty());
+    }
+
+    #[test]
+    fn references_name_their_widget() {
+        // Keep in sync with eave-build's `references_name_their_widget`.
+        for (reference, name) in [
+            ("clock", "clock"),
+            ("someone/weather", "weather"),
+            ("someone/eave-weather", "weather"),
+            ("someone/eave-weather@v0.2", "weather"),
+            ("someone/tools#cpu", "cpu"),
+            ("someone/tools@main#cpu", "cpu"),
+            ("https://git.sr.ht/~x/eave-mail", "mail"),
+            ("https://codeberg.org/x/eave-mail.git@1a2b3c", "mail"),
+            ("git@github.com:x/eave-mail.git", "mail"),
+            ("git@host:mail.git", "mail"),
+            ("codeberg.org/x/mail/", "mail"),
+            ("~/code/eave-weather", "weather"),
+            ("./weather", "weather"),
+        ] {
+            assert_eq!(widget_name(reference), name, "{reference}");
+        }
     }
 
     #[test]

@@ -1,15 +1,15 @@
-# Rebuilds and restarts eave whenever plugins.toml changes (D-22). Optional. Install with:
-#   cp dist/systemd/eave-rebuild.{path,service} ~/.config/systemd/user/
+# Rebuilds eave when config.toml changes (D-22, D-30). `eave-build init` installs it; enable with:
 #   systemctl --user enable --now eave-rebuild.path
-# config.toml doesn't need this: the bar reloads it by itself.
+# A save that doesn't change which plugins are used costs a quick no-op build, and no restart.
+# The bar itself reloads config.toml on its own.
 
 [Unit]
-Description=Rebuild eave when plugins.toml changes
+Description=Rebuild eave when config.toml changes
 Documentation=https://github.com/francescomengarelli/eave/blob/main/docs/running.md
 
 [Path]
-# Edit this if XDG_CONFIG_HOME isn't ~/.config.
-PathChanged=%h/.config/eave/plugins.toml
+# `eave-build init` writes the real path here when XDG_CONFIG_HOME isn't ~/.config.
+PathChanged=%h/.config/eave/config.toml
 
 [Install]
 WantedBy=default.target

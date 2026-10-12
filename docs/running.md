@@ -1,29 +1,58 @@
 # Running eave
 
-How to start the bar with your session, and what each kind of edit needs. The default is a systemd user service ([D-20](decisions.md)). Starting it from the Hyprland config works too.
+How to install the bar, start it with your session, update it, and what each kind of edit needs. The default is a systemd user service ([D-20](decisions.md)). Starting it from the Hyprland config works too.
+
+## Install
+
+You need Rust (`cargo`) and `git`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/francescomengarelli/eave/main/install.sh | sh
+```
+
+[`install.sh`](../install.sh) does these steps, and you can do them by hand too:
+
+1. `cargo install --locked --git https://github.com/francescomengarelli/eave eave-build`
+2. `eave-build init`: writes a starter `~/.config/eave/config.toml` (an existing one is kept) and the systemd user units into `~/.config/systemd/user/`.
+3. `eave-build`: clones eave into `~/.local/share/eave/src`, builds the widgets config.toml uses, and installs `~/.local/bin/eave`. The first build takes a few minutes.
+4. `systemctl --user enable --now eave-rebuild.path`, and `eave.service` when `graphical-session.target` is active (see [below](#as-a-systemd-user-service-recommended)). Otherwise it tells you what to add instead.
+
+Running it again repairs an install and never updates one. `EAVE_REPO=<git URL or checkout>` installs from a fork or a local checkout.
 
 ## What an edit needs
 
 | You edit | What happens |
 |---|---|
-| `~/.config/eave/config.toml` (what goes where) | Nothing to do. The bar reloads it as soon as you save ([D-21](decisions.md)). Widgets whose entry didn't change keep their state. A file that doesn't parse is reported on stderr and the current bar stays. |
-| `~/.config/eave/plugins.toml` (what's compiled in) | A rebuild: `eave-build --restart`, or automatically with the [path unit](#rebuild-automatically-when-pluginstoml-changes) ([D-22](decisions.md)). |
+| `~/.config/eave/config.toml`, moving widgets or changing options | Nothing to do. The bar reloads it as soon as you save ([D-21](decisions.md)). Widgets whose entry didn't change keep their state. A file that doesn't parse is reported on stderr and the current bar stays. |
+| `~/.config/eave/config.toml`, using a widget that isn't compiled in yet | A rebuild: `eave-build`, run for you by the [path unit](#rebuild-automatically-when-configtoml-changes) ([D-22](decisions.md), [D-30](decisions.md)). |
 
-`eave-build --restart` builds, installs to `~/.local/bin/eave`, then restarts a running bar on the new binary. It uses `systemctl --user restart eave.service` when the service runs the bar. Otherwise it stops the bar and relaunches it through Hyprland. A failed build installs nothing and leaves the running bar alone. If no bar is running, it doesn't start one.
+`eave-build` builds, and if the new binary differs from `~/.local/bin/eave`, installs it and restarts a running bar on it. It uses `systemctl --user restart eave.service` when the service runs the bar. Otherwise it stops the bar and relaunches it through Hyprland. A failed build installs nothing and leaves the running bar alone. If no bar is running, it doesn't start one.
 
-To have `eave-build` on your `PATH` (the path unit needs this):
+## Update
 
-```fish
-cargo install --path crates/eave-build
+```sh
+eave-build update
 ```
+
+Nothing changes version until you run this ([D-31](decisions.md)). It fetches eave and every plugin, moves each to the newest commit of its `@rev` (or its default branch), prints what moved, and rebuilds as above. When eave itself moved, it also reinstalls `eave-build` from the new checkout. To stay on a version, pin it: `eave = "francescomengarelli/eave@<tag>"`, `widget = "someone/weather@v0.2"`.
+
+## Uninstall
+
+```sh
+systemctl --user disable --now eave.service eave-rebuild.path
+rm ~/.config/systemd/user/eave{,-rebuild}.* ~/.local/bin/eave
+rm -r ~/.local/share/eave ~/.cache/eave     # sources and build cache
+cargo uninstall eave-build
+```
+
+`~/.config/eave` is yours to keep or remove.
 
 ## As a systemd user service (recommended)
 
 The release build aborts on a panic ([D-10](decisions.md)). Under systemd, `Restart=on-failure` brings the bar back, logs go to the journal (`journalctl --user -u eave`), and `systemctl --user status eave` shows its memory.
 
 ```fish
-cp dist/systemd/eave.service ~/.config/systemd/user/
-systemctl --user enable --now eave.service
+systemctl --user enable --now eave.service   # eave-build init put the unit in place
 ```
 
 The unit starts with `graphical-session.target` and needs the session's environment. Two things must be true:
@@ -77,20 +106,19 @@ end)
 exec-once = ~/.local/bin/eave
 ```
 
-`eave-build --restart` handles this setup too. It finds the bar by its binary (`~/.local/bin/eave`), stops it, and relaunches it through Hyprland's request socket with `eval hl.exec_cmd(…)`, falling back to `dispatch exec` on older Hyprland. It doesn't need `hyprctl` or `kill` installed. That way the new bar gets Hyprland's environment and doesn't belong to your terminal. A dev build running from `target/` is left alone.
+`eave-build` restarts the bar in this setup too. It finds the bar by its binary (`~/.local/bin/eave`), stops it, and relaunches it through Hyprland's request socket with `eval hl.exec_cmd(…)`, falling back to `dispatch exec` on older Hyprland. It doesn't need `hyprctl` or `kill` installed. That way the new bar gets Hyprland's environment and doesn't belong to your terminal. A dev build running from `target/` is left alone.
 
-## Rebuild automatically when plugins.toml changes
+## Rebuild automatically when config.toml changes
 
-Optional. A systemd path unit runs `eave-build --restart` whenever `plugins.toml` changes:
+A systemd path unit runs `eave-build` whenever `config.toml` changes. The installer enables it. By hand:
 
 ```fish
-cargo install --path crates/eave-build
-cp dist/systemd/eave-rebuild.{path,service} ~/.config/systemd/user/
-systemctl --user enable --now eave-rebuild.path
+systemctl --user enable --now eave-rebuild.path   # eave-build init put the units in place
 ```
 
+- A save that doesn't change which widgets are used finds nothing to compile, installs nothing and doesn't restart the bar. It costs a cargo freshness check at idle priority, about a second.
 - The rebuild runs at idle CPU and I/O priority, so it never makes the desktop stutter.
 - A failed build sends a notification (`notify-send`, or Hyprland's own `hyprctl notify` when no notification daemon is running). The old bar keeps running. Details are in `journalctl --user -u eave-rebuild`.
-- Saving while a build runs doesn't start a second build, and that save isn't queued either. If you changed `plugins.toml` mid-build, save it again once the build is done.
+- Saving while a build runs doesn't start a second build, and that save isn't queued either. If you started using another widget mid-build, save again once the build is done.
 - It works whether the bar runs as the service or from the Hyprland config. In the second case it needs `HYPRLAND_INSTANCE_SIGNATURE` in systemd's environment, as above.
-- If `XDG_CONFIG_HOME` isn't `~/.config`, edit `PathChanged=` in `eave-rebuild.path`.
+- `eave-build init` writes the real path into `PathChanged=` when `XDG_CONFIG_HOME` isn't `~/.config`.

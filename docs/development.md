@@ -13,11 +13,11 @@ cargo run                          # debug, default binary (host + built-in plug
 cargo run --release                # what you'd actually use
 cargo run --release --features gpu # wgpu renderer instead of tiny-skia
 cargo test --workspace             # every crate
-cargo run --release -p eave-build -- --install   # build with the plugins in plugins.toml
-cargo run --release -p eave-build -- --restart   # ...and restart the running bar on it
+cargo install --path crates/eave-build   # then `eave-build`: install what config.toml uses
+
 ```
 
-To start the bar with your session, see [running.md](running.md).
+To install it and start it with your session, see [running.md](running.md). To have the installed bar built from your checkout instead of GitHub, put `eave = "~/path/to/eave"` at the top of config.toml. Then `eave-build` builds your working tree as it is, uncommitted changes included.
 
 Without `~/.config/eave/config.toml` the bar is empty. A minimal config:
 

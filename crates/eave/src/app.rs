@@ -13,7 +13,7 @@ use iced::{
 use iced_layershell::actions::ActionCallback;
 use iced_layershell::to_layer_message;
 
-use crate::config::{Config, Entry, Zone};
+use crate::config::{self, Config, Entry, Zone};
 use crate::island::{self, Island};
 use crate::slot::Slot;
 use crate::{kit, theme as style, watch};
@@ -106,9 +106,10 @@ impl Bar {
                 self.instances.push(old.remove(position));
                 continue;
             }
-            let Some(construct) = self.registry.get(&entry.widget) else {
+            let Some(construct) = self.registry.get(config::widget_name(&entry.widget)) else {
                 eprintln!(
-                    "eave: no plugin provides widget `{}`, skipping it",
+                    "eave: widget `{}` isn't compiled in, skipping it. Run eave-build \
+                     (eave-rebuild.path does it on save)",
                     entry.widget
                 );
                 continue;
