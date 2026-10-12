@@ -17,6 +17,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **3.5 Keyboard layout.** `plugins/keyboard`: `activelayout` events, click to switch, hidden with a single layout.
 - [x] **4. Battery.** `plugins/battery`: `/sys/class/power_supply`, re-read on the kernel's `power_supply` uevents and every 30 s while there's a battery. No UPower ([D-23](decisions.md), first done over UPower in [D-18](decisions.md)).
 - [x] **4.5 Network.** `plugins/network` on `crates/eave-net`: the interface with the default route, from rtnetlink, with SSID, signal and band from nl80211, and address and gateway in the popover. It works with any network manager (NetworkManager, iwd, systemd-networkd, dhcpcd) ([D-23](decisions.md)).
+- [x] **5.8 Install and update.** `install.sh` (curl | sh), `eave-build init`, plugins named in config.toml as `owner/repo[@rev]` instead of a separate plugins.toml, only used widgets compiled in, and updates only through `eave-build update` ([D-30](decisions.md), [D-31](decisions.md), [running.md](running.md)).
 - [x] **5. Volume.** `plugins/volume` on `crates/eave-pulse`: the PulseAudio protocol served by pipewire-pulse ([D-19](decisions.md)). Scroll changes it, right click mutes, and the popover has −/+, mute and output switching.
 
 ## Next
@@ -33,6 +34,7 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 - [x] Popover open/close animation, owned by the host: the island morphs into its popover and back ([D-28](decisions.md)).
 - [x] Shared services crate (with step 1), so widgets on the same source share one connection. Hyprland is done ([D-17](decisions.md)); D-Bus is done too (`eave-dbus`, [D-18](decisions.md)), and so is the kernel's network state (`eave-net`, [D-23](decisions.md)).
 - [ ] Publish `eave-api` on crates.io, so plugins build standalone without a `[patch]`.
+- [ ] Packages (AUR first), once the install flow has settled.
 - [ ] Kit primitives as widgets need them: meter, slider, toggle. Switcher and item scroll are done ([D-16](decisions.md)), and so are status icons ([D-29](decisions.md)).
 - [ ] Per-monitor workspaces once there's one bar per monitor (the widget shows every monitor's workspaces today).
 

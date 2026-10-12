@@ -99,7 +99,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/squircle.rs          the squircle path
   src/slot.rs              item wrapper: clicks and scroll steps
   src/switcher.rs          switcher: row of options with a sliding, frame-paced mark
-crates/eave-build/         builds a binary with the plugins from plugins.toml, installs, restarts
+crates/eave-build/         builds the widgets config.toml uses, installs and restarts; `update`, `init`
 crates/eave-dbus/          service: shared system bus, snapshot-on-PropertiesChanged watcher
 crates/eave-net/           service: network state from the kernel over netlink (one event thread)
 crates/eave-pulse/         service: audio over the PulseAudio protocol (one event thread)
@@ -112,7 +112,9 @@ plugins/battery/           battery from sysfs (eave-battery)
 plugins/network/           primary connection, via eave-net (eave-network)
 plugins/volume/            output volume and switching (eave-volume)
 vendor/softbuffer/         softbuffer 0.4.8 with an alpha-carrying Wayland buffer (D-25)
-dist/systemd/              user units: the bar, and the optional rebuild-on-plugins.toml pair
+dist/systemd/              user units: the bar, and the rebuild-on-config.toml pair
+dist/config.toml           the starter config `eave-build init` writes
+install.sh                 the curl | sh installer
 ```
 
 The rule: **split a file when it gets a second responsibility, not before.** Each service is its own crate (`eave-hyprland`, later a D-Bus one), so a plugin only compiles in the sources it uses.

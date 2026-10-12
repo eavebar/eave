@@ -1,0 +1,24 @@
+# eave: which widgets go where. Changes apply as soon as you save.
+#
+# Zones are [[left]], [[center]] and [[right]], in order. Every key except `widget` goes to the
+# widget. `widget` is a built-in name, or a plugin's source: `someone/weather` (GitHub),
+# `someone/weather@v0.2` (pinned), a git URL, or a local path. Adding a plugin rebuilds the bar
+# (automatic with eave-rebuild.path). See docs/plugins.md.
+
+[[left]]
+widget = "workspaces"
+
+[[left]]
+widget = "window"
+
+[[center]]
+widget = "clock"
+
+[[right]]
+widget = "volume"
+
+[[right]]
+widget = "network"
+
+[[right]]
+widget = "battery"

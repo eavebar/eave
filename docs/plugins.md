@@ -4,50 +4,58 @@ Everything in the bar is a plugin, including the clock. A plugin is an ordinary 
 
 ## Using plugins
 
-`~/.config/eave/plugins.toml` lists what to compile in:
+`~/.config/eave/config.toml` is the only file you edit. It says what appears where, and the same `widget = "…"` says where each widget comes from ([D-30](decisions.md)):
 
 ```toml
-# Where eave itself comes from. Defaults to the main repository.
-eave = { path = "~/code/fran/eave" }          # or { git = "…", rev = "…" }
+[[left]]
+widget = "workspaces"                 # built in
 
-[[plugin]]                                     # the built-in clock, from the eave checkout
-path = "~/code/fran/eave"
-dir = "plugins/clock"
-
-[[plugin]]
-git = "https://github.com/someone/eave-weather"
-rev = "v0.2.0"                                 # commit, tag or branch; default branch if omitted
-```
-
-Then:
-
-```fish
-cargo run --release -p eave-build -- --install   # builds and copies to ~/.local/bin/eave
-cargo run --release -p eave-build -- --restart   # same, then restarts the running bar on it
-```
-
-A rebuild is needed only when `plugins.toml` changes. A systemd path unit can do it for you on every save ([running.md](running.md#rebuild-automatically-when-pluginstoml-changes)).
-
-Sources are cloned to `~/.cache/eave/src`, and the generated crate builds in `~/.cache/eave/build`, so rebuilds are incremental. The plain `cargo run --release` in this repo builds the default binary, which has only the built-in plugins.
-
-`~/.config/eave/config.toml` decides what appears where:
-
-```toml
 [[center]]
 widget = "clock"
+format = "%a %d %b  %H:%M"            # every key except `widget` goes to the widget
 
 [[right]]
-widget = "clock"          # the same widget twice, with different options
-format = "%a %d %b"
+widget = "someone/weather"            # a plugin: github.com/someone/weather
+units = "metric"
 ```
 
-The zones are `left`, `center` and `right`, in order. Every key except `widget` goes to the widget's `Config`. Unknown widgets and invalid options are reported on stderr and skipped. They never crash the bar.
+The zones are `left`, `center` and `right`, in order. Unknown widgets and invalid options are reported on stderr and skipped. They never crash the bar. Changes apply as soon as you save, with no restart. Widgets whose entry didn't change keep their state, and a file that doesn't parse leaves the bar as it was ([D-21](decisions.md)).
 
-Changes apply as soon as you save, with no restart. Widgets whose entry didn't change keep their state. A file that doesn't parse leaves the bar as it was ([D-21](decisions.md)).
+### Widget references
+
+```
+<source>[@rev][#widget]
+```
+
+| You write | Comes from | Widget |
+|---|---|---|
+| `clock` (no `/`) | built in: `plugins/clock` of eave itself | `clock` |
+| `someone/weather` | `https://github.com/someone/weather` | `weather` |
+| `someone/eave-weather@v0.2` | the same, at tag `v0.2` (or any commit or branch) | `weather`: a leading `eave-` is dropped |
+| `codeberg.org/x/eave-mail`, `https://…`, `git@host:x/y.git` | any git repository | `mail` |
+| `~/code/eave-weather`, `./weather`, `/abs/path` | a local directory, for working on a plugin | `weather` |
+| `someone/tools#cpu` | `github.com/someone/tools` | `cpu`, for a repository with several widgets |
+
+Built-in widgets come with eave, so they take no `@rev`. The same plugin can appear many times, but always at one revision. An optional top-level `eave = "<source>[@rev]"` says where eave itself comes from. It defaults to `francescomengarelli/eave`, and `eave = "~/code/eave"` builds from a local checkout.
+
+### Compiling plugins in
+
+The binary in `~/.local/bin/eave` holds exactly the widgets your config.toml uses. When the config starts using another one, `eave-build` compiles it in:
+
+```fish
+eave-build           # build what config.toml uses; install and restart the bar if it changed
+eave-build update    # fetch newer eave and plugins first, then the same
+```
+
+The installer sets up `eave-rebuild.path`, which runs `eave-build` on every save ([running.md](running.md#rebuild-automatically-when-configtoml-changes)). A save that only moves widgets or changes options builds nothing new and doesn't restart the bar. Until a new plugin is compiled in, the bar reports it as not compiled in and skips it.
+
+**Nothing updates by itself** ([D-31](decisions.md)). Git sources are cloned once, to `~/.local/share/eave/src`, and stay at that commit. `eave-build update` fetches every source, moves unpinned ones to their default branch and pinned ones to the newest commit of their `@rev`, and prints what moved. Changing a pin in config.toml checks out that revision on the next build, fetching it if needed. Removing a pin leaves the checkout where it is until the next update.
+
+The generated crate builds in `~/.cache/eave/build`, so rebuilds are incremental. The plain `cargo run --release` in this repo builds the default binary, which has every built-in plugin and ignores the config's sources.
 
 ## Built-in plugins
 
-They ship in the default binary, and with `eave-build` you list them like the clock above (`dir = "plugins/<name>"`).
+Use them by name. The default binary (`cargo run --release`) has all of them, and an installed bar only those config.toml uses.
 
 | Widget | Shows | Options |
 |---|---|---|
@@ -91,12 +99,14 @@ eave-api = { path = "../eave/crates/eave-api" }
 ```toml
 # eave-plugin.toml, at the repository root
 [plugin]
-name = "weather"
+name = "weather"         # the widget `owner/repo` refers to (see below)
 description = "Current weather, forecast in the popover"
 crate = "eave-weather"   # package name
 path = "."               # crate directory, relative to this file
 api = "0.1"              # eave-api version you target (cargo caret rules)
 ```
+
+Users write `widget = "you/<repo>"`, and that refers to the widget named like the repository, without a leading `eave-`. So a repository `eave-weather` should set `name = "weather"` and register `weather`. `eave-build` checks the manifest's `name` against the reference and suggests `you/<repo>#<name>` when they differ. A plugin that registers several widgets is used as `you/<repo>#<widget>`.
 
 ```rust
 use eave_api::ui::{self, Item, Panel, Tone};

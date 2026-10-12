@@ -1,5 +1,4 @@
-# The bar, as a systemd user service (D-20). Install with:
-#   cp dist/systemd/eave.service ~/.config/systemd/user/
+# The bar, as a systemd user service (D-20). `eave-build init` installs it; enable with:
 #   systemctl --user enable --now eave.service
 # It needs the session's WAYLAND_DISPLAY and HYPRLAND_INSTANCE_SIGNATURE: see docs/running.md.
 
