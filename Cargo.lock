@@ -715,8 +715,10 @@ name = "eave"
 version = "0.1.0"
 dependencies = [
  "eave-api",
+ "eave-battery",
  "eave-clock",
  "eave-keyboard",
+ "eave-network",
  "eave-window",
  "eave-workspaces",
  "iced",
@@ -732,6 +734,16 @@ version = "0.1.0"
 dependencies = [
  "iced_futures",
  "iced_runtime",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "eave-battery"
+version = "0.1.0"
+dependencies = [
+ "eave-api",
+ "eave-dbus",
  "serde",
  "toml",
 ]
@@ -755,6 +767,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "eave-dbus"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "eave-hyprland"
 version = "0.1.0"
 dependencies = [
@@ -770,6 +791,16 @@ version = "0.1.0"
 dependencies = [
  "eave-api",
  "eave-hyprland",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "eave-network"
+version = "0.1.0"
+dependencies = [
+ "eave-api",
+ "eave-dbus",
  "serde",
  "toml",
 ]
@@ -3206,7 +3237,9 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -4270,6 +4303,7 @@ dependencies = [
  "rustix 1.1.5",
  "serde",
  "serde_repr",
+ "tokio",
  "tracing",
  "uds_windows",
  "uuid",

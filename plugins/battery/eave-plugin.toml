@@ -1,0 +1,7 @@
+# Plugin manifest. In a plugin's own repository this file sits at the repo root.
+[plugin]
+name = "battery"
+description = "Battery level, with time left and power draw in the popover (from UPower)"
+crate = "eave-battery"
+path = "."
+api = "0.1"

@@ -11,13 +11,14 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **2. Workspaces widget + animated indicator.** `plugins/workspaces` on the new `ui::switcher`: the host slides the mark between workspaces, one step per frame callback, and stops asking for frames when it arrives ([D-16](decisions.md)). Scroll moves between workspaces. *Still to do:* measure CPU during a switch with the debug overlay.
 - [x] **3. Active window title.** `plugins/window`, from the same event stream.
 - [x] **3.5 Keyboard layout.** `plugins/keyboard`: `activelayout` events, click to switch, hidden with a single layout.
+- [x] **4. Battery.** `plugins/battery`: UPower's display device over zbus, re-read only on `PropertiesChanged` ([D-18](decisions.md)).
+- [x] **4.5 Network.** `plugins/network`: NetworkManager's primary connection, with Wi-Fi strength, band, address and gateway in the popover. iwd-only systems (no NetworkManager) aren't covered yet.
 
 ## Next
 
-- [ ] **4. Battery.** UPower over zbus ([D-7](decisions.md)), driven by signals.
 - [ ] **5. Volume.** PipeWire listener. Scroll to change it, click to mute.
 - [ ] **6. Media.** MPRIS over zbus.
-- [ ] **7. Network / Bluetooth.** NetworkManager or iwd, plus BlueZ, over zbus.
+- [ ] **7. Bluetooth.** BlueZ over zbus, on `eave-dbus`.
 - [ ] **8. System tray.** StatusNotifierItem watcher and host, with menus.
 
 Every item from here on is a plugin, written against `eave-api` like a third-party one. Anything a built-in widget needs goes into the API or the kit, not into a private shortcut.
@@ -26,7 +27,7 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 
 - [ ] Close popovers on an outside click ([D-14](decisions.md) open issue): test `OnDemand` focus loss, then measure a catcher surface.
 - [ ] Popover open/close animation, owned by the host.
-- [x] Shared services crate (with step 1), so widgets on the same source share one connection. Hyprland is done ([D-17](decisions.md)); D-Bus comes with battery.
+- [x] Shared services crate (with step 1), so widgets on the same source share one connection. Hyprland is done ([D-17](decisions.md)); D-Bus is done too (`eave-dbus`, [D-18](decisions.md)).
 - [ ] Publish `eave-api` on crates.io, so plugins build standalone without a `[patch]`.
 - [ ] Kit primitives as widgets need them: icon, meter, slider, toggle. Switcher and item scroll are done ([D-16](decisions.md)).
 - [ ] Per-monitor workspaces once there's one bar per monitor (the widget shows every monitor's workspaces today).

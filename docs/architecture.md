@@ -28,7 +28,7 @@ eave keeps these apart. The **host** does the first job and owns everything visu
 
 - **Host** ([D-11](decisions.md)): owns every surface, the layout, the look and the motion. It is not pluggable.
 - **Widgets** implement `eave_api::Widget`. They can't pick colors or sizes, can't build raw iced elements, and can't move other items or the bar ([D-13](decisions.md)).
-- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). D-Bus and PipeWire services come with their widgets.
+- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-dbus` shares one system bus connection ([D-18](decisions.md)). PipeWire comes with volume.
 
 ## Data flow
 
@@ -69,7 +69,7 @@ A click on an item that has a popover and no `on_press`:
 | Tray | StatusNotifierItem | D-Bus. We must act as the watcher/host. The hardest widget. |
 | CPU / RAM / temps | `/proc`, `/sys` | timer (the only legitimate polling) |
 
-So far the clock, workspaces, active window and keyboard layout exist. Battery is next. See [roadmap.md](roadmap.md).
+So far: clock, workspaces, active window, keyboard layout, battery and network. Volume is next. See [roadmap.md](roadmap.md).
 
 ## Code layout
 
@@ -92,11 +92,14 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/switcher.rs          switcher: row of options with a sliding, frame-paced mark
   src/measure.rs           popover sizing
 crates/eave-build/         builds a binary with the plugins from plugins.toml
+crates/eave-dbus/          service: shared system bus, snapshot-on-PropertiesChanged watcher
 crates/eave-hyprland/      service: shared socket2 events, socket1 queries and dispatches
 plugins/clock/             the clock plugin (crate eave-clock) + eave-plugin.toml
 plugins/workspaces/        Hyprland workspaces (eave-workspaces)
 plugins/window/            focused window title (eave-window)
 plugins/keyboard/          keyboard layout (eave-keyboard)
+plugins/battery/           battery from UPower (eave-battery)
+plugins/network/           network from NetworkManager (eave-network)
 ```
 
 The rule: **split a file when it gets a second responsibility, not before.** Each service is its own crate (`eave-hyprland`, later a D-Bus one), so a plugin only compiles in the sources it uses.

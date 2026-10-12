@@ -1,0 +1,15 @@
+[package]
+name = "eave-battery"
+version = "0.1.0"
+description = "Battery level, with time left and power draw in the popover, for eave"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+eave-dbus.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

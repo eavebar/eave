@@ -49,6 +49,8 @@ They ship in the default binary, and with `eave-build` you list them like the cl
 | `clock` | time, calendar in the popover | `format` (strftime, default `%H:%M`) |
 | `workspaces` | Hyprland workspaces, active one marked; click to go, scroll to move | `persistent` (workspaces 1..N always shown, default 0) |
 | `window` | focused window title, hidden when nothing has focus | `max_chars` (default 60) |
+| `battery` | percent, `↑` while charging, warning/critical tones; time left and power draw in the popover; hidden without a battery | `warning` (default 20), `critical` (default 10) |
+| `network` | Wi-Fi name and signal, `Wired`, `Offline`; address, gateway, band in the popover | `show_name` (default true) |
 | `keyboard` | active layout, click for the next one; hidden with a single layout | `aliases` (`{ "English (US)" = "us" }`) |
 
 ```toml
@@ -148,7 +150,9 @@ async fn snapshot() -> std::io::Result<eave_hyprland::types::Window> {
 }
 ```
 
-`eave_hyprland::dispatch("hl.dsp.focus({ workspace = 3 })", "workspace 3")` runs a dispatcher. Give it in both the Lua syntax of Hyprland 0.56+ and the older one, and it uses whichever this Hyprland speaks. `request("…")` sends any other command. Run them in a `Task`.
+`eave_hyprland::dispatch("hl.dsp.focus({ workspace = 3 })", "workspace 3")` runs a dispatcher. Give it in both the Lua syntax of Hyprland 0.56+ and the older one, and it uses whichever this Hyprland speaks. `request("…")` sends any other command.
+
+For D-Bus, depend on `eave-dbus`: `eave_dbus::watch(service, snapshot)` yields a snapshot of the service's state, then a new one after each `PropertiesChanged` on the objects the snapshot depends on. Unchanged snapshots are skipped. `properties(...)` reads every property of an interface in one call. Run them in a `Task`.
 
 ### The rules
 

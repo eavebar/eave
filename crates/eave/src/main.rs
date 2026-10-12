@@ -3,8 +3,10 @@
 
 fn main() -> Result<(), eave::Error> {
     eave::run(&[
+        eave_battery::register,
         eave_clock::register,
         eave_keyboard::register,
+        eave_network::register,
         eave_window::register,
         eave_workspaces::register,
     ])

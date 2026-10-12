@@ -16,14 +16,23 @@ toml.workspace = true
 # iced_exdevtools 0.19.1 fails to build against winit-core beta.3 (new Key variant); drop once fixed upstream.
 winit-core = "=0.31.0-beta.2"
 # Built-in plugins, only used by the default binary (src/main.rs).
+eave-battery = { workspace = true, optional = true }
 eave-clock = { workspace = true, optional = true }
 eave-keyboard = { workspace = true, optional = true }
+eave-network = { workspace = true, optional = true }
 eave-window = { workspace = true, optional = true }
 eave-workspaces = { workspace = true, optional = true }
 
 [features]
 default = ["builtin"]
-builtin = ["dep:eave-clock", "dep:eave-keyboard", "dep:eave-window", "dep:eave-workspaces"]
+builtin = [
+    "dep:eave-battery",
+    "dep:eave-clock",
+    "dep:eave-keyboard",
+    "dep:eave-network",
+    "dep:eave-window",
+    "dep:eave-workspaces",
+]
 # GPU renderer (wgpu); tiny-skia stays as fallback. Default is CPU-only, which is lighter for a bar.
 gpu = ["iced/wgpu"]
 

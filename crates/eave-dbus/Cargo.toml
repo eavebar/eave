@@ -1,0 +1,13 @@
+[package]
+name = "eave-dbus"
+version = "0.1.0"
+description = "D-Bus for eave plugins: shared connections and property watching"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Pure Rust, async (D-7). tokio instead of the default async-io executor, which would be a second runtime.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio = { version = "1", default-features = false, features = ["sync", "time"] }
