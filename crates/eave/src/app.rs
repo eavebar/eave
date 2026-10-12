@@ -7,10 +7,11 @@ use eave_api::{Nudge, Registry};
 use iced::alignment::Horizontal;
 use iced::widget::{Space, container, row};
 use iced::{
-    Color, Element, Event, Length, Padding, Rectangle, Subscription, Task, Theme, mouse, theme,
-    window,
+    Color, Element, Event, Length, Padding, Rectangle, Subscription, Task, Theme, keyboard, mouse,
+    theme, window,
 };
 use iced_layershell::actions::ActionCallback;
+use iced_layershell::reexport::KeyboardInteractivity;
 use iced_layershell::to_layer_message;
 
 use crate::config::{self, Config, Entry, Zone};
@@ -31,6 +32,9 @@ pub struct Bar {
     /// Whether the pointer is over the bar, so a click that Hyprland reports is ours to handle,
     /// not an outside one. Tracked only while a popover is open.
     pointer_inside: bool,
+    /// The bar surface holding the keyboard: the one with the open popover, so a key press can
+    /// close it.
+    keyboard: Option<window::Id>,
     /// How many nudges widgets have asked for, so each island can tell a new one from one it has
     /// already played.
     nudges: u64,
@@ -74,6 +78,8 @@ pub enum Message {
     Clicked,
     PointerEntered,
     PointerLeft,
+    /// A key was pressed while a popover had the keyboard.
+    KeyPressed,
     /// An island placed the popover it's turning into.
     PopoverPlaced(u64, Rectangle),
     /// An island finished turning back from a popover.
@@ -92,6 +98,7 @@ impl Bar {
             next_id: 0,
             popovers: Vec::new(),
             pointer_inside: false,
+            keyboard: None,
             nudges: 0,
         };
         let task = bar.apply(config);
@@ -259,18 +266,45 @@ impl Bar {
 
 pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
     let was_open = bar.is_open();
-    let task = handle(bar, message);
+    let mut tasks = vec![handle(bar, message)];
     let open = bar.is_open();
-    if open == was_open {
-        return task;
+    if open != was_open {
+        // Hyprland reports clicks anywhere only while a popover is open.
+        let report = Task::future(async move {
+            if let Err(error) = eave_hyprland::report_clicks(open).await {
+                eprintln!("eave: can't watch for clicks outside the popover: {error}");
+            }
+        });
+        tasks.push(report.discard());
     }
-    // Hyprland reports clicks anywhere only while a popover is open.
-    let report = Task::future(async move {
-        if let Err(error) = eave_hyprland::report_clicks(open).await {
-            eprintln!("eave: can't watch for clicks outside the popover: {error}");
-        }
-    });
-    Task::batch([task, report.discard()])
+    tasks.extend(hand_keyboard(bar));
+    Task::batch(tasks)
+}
+
+/// Gives the keyboard to the bar surface with the open popover, and takes it back from the one
+/// that had it. Exclusive, not on demand: with `follow_mouse`, hovering a window would take the
+/// focus away ([D-36](../../../docs/decisions.md)).
+fn hand_keyboard(bar: &mut Bar) -> Vec<Task<Message>> {
+    let wanted = bar
+        .popovers
+        .iter()
+        .find(|popover| popover.open)
+        .map(|popover| popover.window);
+    if wanted == bar.keyboard {
+        return Vec::new();
+    }
+    let change = |id, keyboard_interactivity| {
+        Task::done(Message::KeyboardInteractivityChange {
+            id,
+            keyboard_interactivity,
+        })
+    };
+    let released = bar
+        .keyboard
+        .map(|window| change(window, KeyboardInteractivity::None));
+    let taken = wanted.map(|window| change(window, KeyboardInteractivity::Exclusive));
+    bar.keyboard = wanted;
+    released.into_iter().chain(taken).collect()
 }
 
 fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
@@ -344,6 +378,10 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             bar.pointer_inside = false;
             Task::none()
         }
+        Message::KeyPressed => {
+            bar.close_popover();
+            Task::none()
+        }
         Message::PopoverPlaced(id, rect) => {
             let Some(popover) = bar
                 .popovers
@@ -369,6 +407,9 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         }
         Message::WindowClosed(window) => {
             bar.popovers.retain(|popover| popover.window != window);
+            if bar.keyboard == Some(window) {
+                bar.keyboard = None;
+            }
             Task::none()
         }
         Message::ConfigChanged(config) => match config {
@@ -488,8 +529,8 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
     let mut subscriptions: Vec<_> = widgets.collect();
     subscriptions.push(window::close_events().map(Message::WindowClosed));
     subscriptions.push(watch::config_changes().map(Message::ConfigChanged));
-    // Pointer and click tracking only while a popover is open: otherwise every hover over the bar
-    // would wake us.
+    // Pointer, click and key tracking only while a popover is open: otherwise every hover over the
+    // bar would wake us.
     if bar.is_open() {
         subscriptions.push(iced::event::listen_with(popover_event));
         subscriptions.push(Subscription::run(hyprland_events).filter_map(clicked));
@@ -499,9 +540,9 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
 
 fn popover_event(event: Event, status: iced::event::Status, _: window::Id) -> Option<Message> {
     match event {
-        // The bar never takes keyboard focus, so clicks on it are caught here instead. Handled
-        // clicks on items arrive as `Pressed` or `InnerPressed`, and the popover's island takes
-        // the ones on it.
+        // The bar takes the keyboard only while a popover is open, so it can't learn of clicks
+        // through focus loss: they're caught here instead. Handled clicks on items arrive as
+        // `Pressed` or `InnerPressed`, and the popover's island takes the ones on it.
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
             if status == iced::event::Status::Ignored =>
         {
@@ -509,6 +550,8 @@ fn popover_event(event: Event, status: iced::event::Status, _: window::Id) -> Op
         }
         Event::Mouse(mouse::Event::CursorEntered) => Some(Message::PointerEntered),
         Event::Mouse(mouse::Event::CursorLeft) => Some(Message::PointerLeft),
+        // Any key closes it, Esc or not.
+        Event::Keyboard(keyboard::Event::KeyPressed { .. }) => Some(Message::KeyPressed),
         _ => None,
     }
 }
@@ -704,6 +747,23 @@ mod tests {
         assert!(bar.popover_of(2).is_some());
         assert!(bar.popover_of(0).is_none());
         assert_eq!(bar.popovers.len(), 2, "0 is still morphing back");
+    }
+
+    #[test]
+    fn a_key_press_closes_the_popover() {
+        let mut bar = open_bar();
+        let _ = update(&mut bar, Message::KeyPressed);
+        assert!(!bar.is_open());
+    }
+
+    #[test]
+    fn the_open_popover_has_the_keyboard() {
+        let mut bar = open_bar();
+        assert_eq!(bar.keyboard, Some(bar.popovers[0].window));
+        // Given back as soon as it starts closing, not when its island is back.
+        let _ = update(&mut bar, Message::BarPressed);
+        assert_eq!(bar.popovers.len(), 1, "still morphing back");
+        assert_eq!(bar.keyboard, None);
     }
 
     #[test]

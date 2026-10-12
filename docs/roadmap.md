@@ -33,6 +33,7 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 ## Plugin system follow-ups
 
 - [x] Close popovers on an outside click, via a Hyprland click bind ([D-14](decisions.md)).
+- [x] Close popovers on any key press, Esc included ([D-36](decisions.md)).
 - [x] Popover open/close animation, owned by the host: the island morphs into its popover and back ([D-28](decisions.md)).
 - [x] Shared services crate (with step 1), so widgets on the same source share one connection. Hyprland is done ([D-17](decisions.md)); D-Bus is done too (`eave-dbus`, [D-18](decisions.md)), and so is the kernel's network state (`eave-net`, [D-23](decisions.md)).
 - [ ] Publish `eave-api` on crates.io, so plugins build standalone without a `[patch]`.
