@@ -482,6 +482,11 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
         let dir = eave_dir.join("crates").join(service);
         manifest += &format!("{service} = {{ path = {} }}\n", quote(&dir));
     }
+    // eave's patched softbuffer, so transparent pixels stay transparent (D-25).
+    manifest += &format!(
+        "softbuffer = {{ path = {} }}\n",
+        quote(&eave_dir.join("vendor/softbuffer"))
+    );
     // Same profile as eave's own release builds (D-10).
     manifest += "\n[profile.release]\nlto = \"thin\"\ncodegen-units = 1\nstrip = true\npanic = \"abort\"\n\n\
                  # Standalone: never part of an enclosing workspace.\n[workspace]\n";

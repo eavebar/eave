@@ -17,6 +17,8 @@ members = [
     "plugins/workspaces",
 ]
 default-members = ["crates/eave"]
+# Patched copies of upstream crates, not ours to test or lint.
+exclude = ["vendor"]
 
 [workspace.package]
 edition = "2024"
@@ -39,6 +41,11 @@ eave-window = { path = "plugins/window", version = "0.1.0" }
 eave-workspaces = { path = "plugins/workspaces", version = "0.1.0" }
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
 toml = { version = "0.9", default-features = false, features = ["std", "parse", "serde"] }
+
+# softbuffer's Wayland backend hardcodes `Xrgb8888`, so the compositor drops the alpha channel and
+# every transparent pixel shows as black. Our copy uses `Argb8888` (D-25).
+[patch.crates-io]
+softbuffer = { path = "vendor/softbuffer" }
 
 [profile.release]
 lto = "thin"

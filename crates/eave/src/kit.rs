@@ -109,10 +109,3 @@ pub fn panel_style(_: &Theme) -> container::Style {
         ..container::Style::default()
     }
 }
-
-pub fn bar_style(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(theme::BAR_BG)),
-        ..container::Style::default()
-    }
-}

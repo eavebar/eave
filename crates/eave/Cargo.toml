@@ -10,7 +10,7 @@ repository.workspace = true
 eave-api.workspace = true
 # Reports clicks anywhere while a popover is open, so a click outside closes it (D-14).
 eave-hyprland.workspace = true
-iced = { version = "0.14", default-features = false, features = ["tiny-skia", "wayland", "tokio", "crisp", "advanced"] }
+iced = { version = "0.14", default-features = false, features = ["tiny-skia", "wayland", "tokio", "crisp", "advanced", "canvas"] }
 iced_layershell = "0.19"
 toml.workspace = true
 # inotify for config hot reload (D-21); already in the tree through the Wayland stack.

@@ -7,7 +7,7 @@ A bar does two separate jobs:
 1. **Being a bar-shaped surface.** On Wayland a normal window gets tiled by the compositor. A bar instead uses the **`wlr-layer-shell`** protocol to anchor to a screen edge, sit on a layer (`background`, `bottom`, `top` or `overlay`), and reserve an **exclusive zone** so tiled windows stay out of its space. `iced_layershell` handles this for us.
 2. **Knowing what to show.** Every widget reads a different system interface. This is where most of the work is.
 
-eave keeps these apart. The **host** does the first job and owns everything visual. **Widgets** (plugins) do the second and only describe content. With no widgets configured, the bar is an empty strip.
+eave keeps these apart. The **host** does the first job and owns everything visual. **Widgets** (plugins) do the second and only describe content. With no widgets configured, the bar draws nothing (it still reserves its space).
 
 ## Three layers
 
@@ -47,7 +47,7 @@ Core plugins depend only on Hyprland and the kernel, plus an audio server for vo
 - Each widget instance's `subscription()` is tagged with the instance's stable id and mapped to `Message::Widget(id, AnyMessage)` ([D-15](decisions.md)). `update` hands the message to that instance only. Messages for an id that no longer exists (removed by a reload) are dropped.
 - `config.toml` is watched with inotify. When it changes, the host re-reads it and rebuilds only the instances whose entry changed ([D-21](decisions.md)).
 - A widget's `update` returns an `Effect`: a `Task` for async work, plus optional requests to open or close its popover. `update` never does I/O.
-- `view(window)` is pure. For the bar it lays out the left, center and right zones from `config.toml`. Each item is wrapped in a `Slot`, which turns unhandled clicks and scroll steps into messages and reports the item's bounds. For a popover window it renders the widget's `Panel`.
+- `view(window)` is pure. For the bar it lays out the left, center and right zones from `config.toml`, each as a squircle island only as wide as its items. A zone with nothing to show has no island ([D-24](decisions.md)). Pressing an island squeezes it; dragging pulls it a few pixels with a rubber band, and it springs back on release ([D-26](decisions.md)). Each item is wrapped in a `Slot`, which turns unhandled clicks and scroll steps into messages and reports the item's bounds. For a popover window it renders the widget's `Panel`.
 - Nothing is drawn when no message arrives. Pointer tracking is only subscribed while a popover is open, so hovering over the bar wakes nothing.
 
 ## Popovers
@@ -93,6 +93,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/watch.rs             inotify watch on the config directory
   src/kit.rs               ui nodes → iced elements, styled
   src/theme.rs             every color, size and font
+  src/island.rs            island: squircle background, press squeeze and drag springs
   src/slot.rs              item wrapper: clicks, scroll steps and bounds
   src/switcher.rs          switcher: row of options with a sliding, frame-paced mark
   src/measure.rs           popover sizing
@@ -108,6 +109,7 @@ plugins/keyboard/          keyboard layout (eave-keyboard)
 plugins/battery/           battery from sysfs (eave-battery)
 plugins/network/           primary connection, via eave-net (eave-network)
 plugins/volume/            output volume and switching (eave-volume)
+vendor/softbuffer/         softbuffer 0.4.8 with an alpha-carrying Wayland buffer (D-25)
 dist/systemd/              user units: the bar, and the optional rebuild-on-plugins.toml pair
 ```
 
@@ -117,6 +119,6 @@ The rule: **split a file when it gets a second responsibility, not before.** Eac
 
 - `#[to_layer_message(multi)]` on `Message` adds the variants `iced_layershell` uses to create and control surfaces (`NewLayerShell`, `SizeChange`, `MarginChange`, `RemoveWindow`, …). `update` must handle them with a catch-all arm.
 - Margin tuples are `(top, right, bottom, left)`, despite the macro's doc comment.
-- Surfaces are transparent. The bar and the popover panel draw their own backgrounds, which is what gives popovers rounded corners.
+- Surfaces are transparent. The bar's islands and the popover panel draw their own backgrounds, which is what gives them rounded corners and lets the wallpaper show around the islands. With the CPU renderer that needs our patched softbuffer ([D-25](decisions.md)).
 - `KeyboardInteractivity::None` everywhere: the bar and its popovers never steal keyboard focus. Something that needs typing (a launcher) will need its own settings.
 - The bar opens on the active output (`StartMode` default). In daemon mode, every window that isn't a popover is drawn as a bar, so one bar per monitor (`StartMode::AllScreens`) mostly needs per-output state.

@@ -4,9 +4,10 @@
 use eave_api::Registry;
 use eave_api::erased::{AnyMessage, ErasedWidget, PopoverRequest};
 use iced::alignment::Horizontal;
-use iced::widget::{container, row, text};
+use iced::widget::{Space, container, row, text};
 use iced::{
-    Color, Element, Event, Length, Rectangle, Size, Subscription, Task, Theme, mouse, theme, window,
+    Color, Element, Event, Length, Padding, Rectangle, Size, Subscription, Task, Theme, mouse,
+    theme, window,
 };
 use iced_layershell::reexport::{
     Anchor as Edge, KeyboardInteractivity, Layer, NewLayerShellSettings,
@@ -14,6 +15,7 @@ use iced_layershell::reexport::{
 use iced_layershell::to_layer_message;
 
 use crate::config::{Config, Entry, Zone};
+use crate::island::Island;
 use crate::measure::Measure;
 use crate::slot::Slot;
 use crate::{kit, theme as style, watch};
@@ -178,7 +180,7 @@ impl Bar {
                 // Zero exclusive zone: the compositor places us below the bar, not over it.
                 exclusive_zone: None,
                 // Top, right, bottom, left (wlr-layer-shell order, despite the macro's doc comment).
-                margin: Some((style::PANEL_GAP, 0, 0, anchor.bounds.x as i32)),
+                margin: Some((popover_top(), 0, 0, anchor.bounds.x as i32)),
                 keyboard_interactivity: KeyboardInteractivity::None,
                 namespace: Some("eave-popover".into()),
                 ..NewLayerShellSettings::default()
@@ -292,7 +294,7 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
                 Task::done(Message::SizeChange { id, size }),
                 Task::done(Message::MarginChange {
                     id,
-                    margin: (style::PANEL_GAP, 0, 0, x),
+                    margin: (popover_top(), 0, 0, x),
                 }),
             ])
         }
@@ -316,6 +318,12 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
     }
 }
 
+/// The popover's top margin. The compositor already puts it below the bar's exclusive zone, which
+/// ends `DRAG_ROOM` below the islands, so this keeps the visible gap at `PANEL_GAP`.
+fn popover_top() -> i32 {
+    (style::PANEL_GAP - i32::from(style::DRAG_ROOM)).max(0)
+}
+
 /// Centered under the item, kept on screen.
 fn popover_x(anchor: Anchor, width: f32) -> i32 {
     let gap = style::PANEL_GAP as f32;
@@ -333,27 +341,41 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
 }
 
 fn bar_view(bar: &Bar) -> Element<'_, Message> {
+    // Each zone is an island as wide as its items. A zone with nothing to show draws nothing, but
+    // still takes its share of the width, so the center island stays centered on screen.
     let zone = |zone: Zone, align: Horizontal| {
-        let items = bar
+        let items: Vec<_> = bar
             .instances
             .iter()
             .filter(|instance| instance.entry.zone == zone)
-            .filter_map(item_view);
-        container(row(items).spacing(style::ITEM_SPACING).height(Length::Fill))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(align)
+            .filter_map(item_view)
+            .collect();
+        let island: Element<'_, Message> = if items.is_empty() {
+            Space::new().into()
+        } else {
+            Island::new(
+                container(row(items).spacing(style::ITEM_SPACING).height(Length::Fill))
+                    .height(Length::Fixed(style::ISLAND_HEIGHT as f32))
+                    .padding([0, style::ISLAND_PADDING]),
+            )
+            .into()
+        };
+        container(island).width(Length::Fill).align_x(align)
     };
 
-    container(
-        row![
-            zone(Zone::Left, Horizontal::Left),
-            zone(Zone::Center, Horizontal::Center),
-            zone(Zone::Right, Horizontal::Right),
-        ]
-        .padding([0, style::BAR_PADDING]),
-    )
-    .style(kit::bar_style)
+    // No background of its own: the surface is transparent around and between the islands, and
+    // below them, where a dragged island has room to move.
+    container(row![
+        zone(Zone::Left, Horizontal::Left),
+        zone(Zone::Center, Horizontal::Center),
+        zone(Zone::Right, Horizontal::Right),
+    ])
+    .padding(Padding {
+        top: style::EDGE_GAP.into(),
+        right: style::EDGE_GAP.into(),
+        bottom: style::DRAG_ROOM.into(),
+        left: style::EDGE_GAP.into(),
+    })
     .into()
 }
 
