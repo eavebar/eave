@@ -8,6 +8,7 @@ use iced::{Background, Border, Element, Length, Theme, alignment};
 
 use crate::alternate::Alternate;
 use crate::counter::Counter;
+use crate::gulp::Gulp;
 use crate::icon;
 use crate::switcher::Switcher;
 use crate::theme;
@@ -73,6 +74,7 @@ fn render<'a>(node: Node<AnyMessage>, inherited: Tone) -> Element<'a, AnyMessage
             }
             column(rows).spacing(theme::SPACING / 2).into()
         }
+        Kind::Gulp(content) => Gulp::new(render(*content, inherited)).into(),
         Kind::Button { content, on_press } => button(render(*content, inherited))
             .on_press(on_press)
             .padding([2, 8])

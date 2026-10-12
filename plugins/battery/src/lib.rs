@@ -1,5 +1,5 @@
 //! Battery level, as a battery icon filled to the charge: green while charging, red when nearly
-//! empty. Hovering it shows the percentage instead. Read from the kernel's
+//! empty. Hovering it shows the percentage instead, gulping while it charges. Read from the kernel's
 //! `/sys/class/power_supply`, with every system battery combined into one. Hidden when there's no
 //! battery (a desktop). The popover has the state, the time left and the power draw.
 
@@ -107,9 +107,15 @@ impl Widget for Battery {
         let percent = self.percent();
         let icon = ui::icon(Icon::Battery {
             charge: f32::from(percent) / 100.0,
-            charging: self.reading.state == State::Charging,
+            charging: self.charging(),
         });
-        Item::new(ui::hover(icon, ui::label(format!("{percent}%"))).tone(self.tone()))
+        let label = ui::label(format!("{percent}%"));
+        let label = if self.charging() {
+            ui::gulp(label)
+        } else {
+            label
+        };
+        Item::new(ui::hover(icon, label).tone(self.tone()))
     }
 
     fn popover(&self) -> Option<Panel<Message>> {
@@ -149,6 +155,10 @@ impl Widget for Battery {
 }
 
 impl Battery {
+    fn charging(&self) -> bool {
+        self.reading.state == State::Charging
+    }
+
     fn percent(&self) -> u8 {
         self.reading.percentage.round().clamp(0.0, 100.0) as u8
     }
@@ -217,6 +227,18 @@ mod tests {
             options.pop().unwrap().into_kind(),
             ui::Kind::Label { text, .. } if text == "42%"
         ));
+    }
+
+    #[test]
+    fn the_percentage_gulps_while_charging() {
+        let content = battery(42.0, State::Charging).item().into_parts().content;
+        let ui::Kind::Alternate { mut options, .. } = content.unwrap().into_kind() else {
+            panic!("the icon, with the percentage on hover");
+        };
+        let ui::Kind::Gulp(label) = options.pop().unwrap().into_kind() else {
+            panic!("a gulping percentage");
+        };
+        assert!(matches!(label.into_kind(), ui::Kind::Label { text, .. } if text == "42%"));
     }
 
     #[test]

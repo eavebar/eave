@@ -78,6 +78,7 @@ pub enum Kind<M> {
         options: Vec<(Node<M>, M)>,
         current: Option<usize>,
     },
+    Gulp(Box<Node<M>>),
     Separator,
     Empty,
 }
@@ -170,6 +171,12 @@ pub fn switcher<M>(
     })
 }
 
+/// Keeps gulping, like a bottle being poured: the host swells `content` gently and steadily for as
+/// long as it's on screen. For something filling up, like a charging battery's percent.
+pub fn gulp<M>(content: Node<M>) -> Node<M> {
+    Node(Kind::Gulp(Box::new(content)))
+}
+
 /// A thin horizontal line between groups.
 pub fn separator<M>() -> Node<M> {
     Node(Kind::Separator)
@@ -214,7 +221,7 @@ impl<M> Node<M> {
             } => {
                 children.iter_mut().for_each(|child| child.set_tone(new));
             }
-            Kind::Button { content, .. } => content.set_tone(new),
+            Kind::Button { content, .. } | Kind::Gulp(content) => content.set_tone(new),
             Kind::Switcher { options, .. } => {
                 options
                     .iter_mut()
@@ -268,6 +275,7 @@ impl<M> Node<M> {
                     .collect(),
                 current,
             },
+            Kind::Gulp(content) => Kind::Gulp(Box::new(content.map(f))),
             Kind::Separator => Kind::Separator,
             Kind::Empty => Kind::Empty,
         })

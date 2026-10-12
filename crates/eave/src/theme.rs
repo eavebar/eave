@@ -89,6 +89,18 @@ pub const ALTERNATE_SLIDE_Y: f32 = 4.0;
 pub const COUNTER_COUNT: Duration = Duration::from_millis(320);
 /// How long a switcher's mark takes to reach a newly current option.
 pub const SWITCHER_SLIDE: Duration = Duration::from_millis(180);
+/// While charging, the battery gulps like a bottle being poured: a few gulps, then a long rest
+/// with no frames at all. One gulp, and the time from one burst of gulps to the next.
+pub const BATTERY_GULP: Duration = Duration::from_millis(380);
+pub const BATTERY_GULPS: u32 = 3;
+pub const BATTERY_GULP_EVERY: Duration = Duration::from_secs(8);
+/// How long each of a [`eave_api::ui::gulp`]'s gulps takes, and how much it grows at the height
+/// of one. Slow and steady, unlike the battery icon's quick bursts.
+pub const GULP: Duration = Duration::from_millis(700);
+pub const GULP_SWELL: f32 = 0.08;
+/// How often the charging battery is redrawn: 30 frames a second, cheaper than the compositor's
+/// rate and smooth enough for motion this small.
+pub const BATTERY_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
 /// A primary press held at least this long is a long press: it plays with the island, but the
 /// item's action and popover don't fire on release.
 pub const LONG_PRESS: Duration = Duration::from_millis(400);

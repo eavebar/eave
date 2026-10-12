@@ -4,6 +4,7 @@ mod alternate;
 mod app;
 mod config;
 mod counter;
+mod gulp;
 mod icon;
 mod island;
 mod kit;
