@@ -89,6 +89,11 @@ pub const ALTERNATE_SLIDE_Y: f32 = 4.0;
 pub const COUNTER_COUNT: Duration = Duration::from_millis(320);
 /// How long a switcher's mark takes to reach a newly current option.
 pub const SWITCHER_SLIDE: Duration = Duration::from_millis(180);
+/// While charging, the battery gulps like a bottle being poured: a few gulps, then a long rest
+/// with no frames at all. One gulp, and the time from one burst of gulps to the next.
+pub const BATTERY_GULP: Duration = Duration::from_millis(380);
+pub const BATTERY_GULPS: u32 = 3;
+pub const BATTERY_GULP_EVERY: Duration = Duration::from_secs(8);
 /// A primary press held at least this long is a long press: it plays with the island, but the
 /// item's action and popover don't fire on release.
 pub const LONG_PRESS: Duration = Duration::from_millis(400);

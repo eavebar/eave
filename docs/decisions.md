@@ -621,3 +621,13 @@ The volume item is now `alternate([icon, counter(volume, 0..=max, "%")], showing
 
 **Measured** (Asahi, release, the user's config, no popover open): binary 7,498,776 bytes, the same as before. RSS ~14.3 MB for both main and this branch, run one after the other.
 
+
+## D-37: A charging battery gulps
+
+**Status:** proposed (2026-10-12)
+
+**What:** while `Icon::Battery { charging: true }` is on screen, the icon pours like a bottle being emptied. Every `BATTERY_GULP_EVERY` (8 s) it gulps `BATTERY_GULPS` (3) times, `BATTERY_GULP` (380 ms) each and a little weaker each time. With every gulp the charge surges ~0.8 px toward the nub and the whole icon swells from its middle (5% taller, 2.5% narrower). The charge's edge ripples like a liquid surface during the gulps and settles over 0.5 s. Then the icon is still until the next burst. All of this is in the host (`icon.rs`). The plugin still only says `charging`, so no plugin draws or animates anything.
+
+**Why bursts, not a loop:** a liquid that never stops moving would ask for every frame for as long as the charger is in. A burst is also closer to the "glug glug" being imitated. Between bursts the canvas asks for one redraw at the start of the next burst (`RedrawRequest::At`), so the bar sleeps in between. The bursts follow the compositor's frame clock like every other animation. Once charging stops, it asks for nothing.
+
+**Cost:** measured on Asahi (aarch64, release, 120 Hz, scale 2, the user's config, charging), 30 s average after a 10 s warm-up: **~5% CPU while charging** (main: 0%). Not charging: unchanged. A frame at 120 Hz costs this bar about a quarter of a core whatever is animating. The other animations just last a fraction of a second. The first version (420 ms gulps, 0.8 s settle, every 5 s, so animating 41% of the time) cost 7%. We accept this because it only runs on AC power. The knobs are the three `BATTERY_GULP*` constants in `theme.rs`. Binary unchanged (7,498,776 bytes). RSS +0.3 MB, within noise.
