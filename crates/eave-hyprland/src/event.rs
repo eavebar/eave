@@ -40,6 +40,8 @@ pub enum Event {
         layout: String,
     },
     ConfigReloaded,
+    /// Sent by the `event` dispatcher, e.g. from a bind (`custom>>DATA`).
+    Custom(String),
 }
 
 impl Event {
@@ -102,6 +104,7 @@ impl Event {
                 _ => return None,
             },
             "configreloaded" => Self::ConfigReloaded,
+            "custom" => Self::Custom(data.into()),
             _ => return None,
         })
     }
@@ -174,6 +177,10 @@ mod tests {
         assert_eq!(
             Event::parse("configreloaded>>"),
             Some(Event::ConfigReloaded)
+        );
+        assert_eq!(
+            Event::parse("custom>>eave-click"),
+            Some(Event::Custom("eave-click".into()))
         );
     }
 }

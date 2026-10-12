@@ -11,6 +11,8 @@ pub type OnPress<'a, M> = Box<dyn Fn(Rectangle, f32) -> M + 'a>;
 pub struct Slot<'a, M> {
     content: Element<'a, M>,
     on_press: Option<OnPress<'a, M>>,
+    /// Sent when the content itself handles a primary click, e.g. a button inside the item.
+    on_inner_press: Option<M>,
     on_secondary: Option<M>,
     /// Up, then down.
     on_scroll: Option<(M, M)>,
@@ -38,6 +40,7 @@ impl<'a, M> Slot<'a, M> {
         Self {
             content: content.into(),
             on_press: None,
+            on_inner_press: None,
             on_secondary: None,
             on_scroll: None,
         }
@@ -45,6 +48,11 @@ impl<'a, M> Slot<'a, M> {
 
     pub fn on_press(mut self, f: impl Fn(Rectangle, f32) -> M + 'a) -> Self {
         self.on_press = Some(Box::new(f));
+        self
+    }
+
+    pub fn on_inner_press(mut self, message: M) -> Self {
+        self.on_inner_press = Some(message);
         self
     }
 
@@ -145,7 +153,15 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slot<'_, M> {
             shell,
             viewport,
         );
-        if shell.is_event_captured() || !cursor.is_over(layout.bounds()) {
+        if !cursor.is_over(layout.bounds()) {
+            return;
+        }
+        if shell.is_event_captured() {
+            if let (Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)), Some(message)) =
+                (event, &self.on_inner_press)
+            {
+                shell.publish(message.clone());
+            }
             return;
         }
 

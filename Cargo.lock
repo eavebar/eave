@@ -723,6 +723,7 @@ dependencies = [
  "eave-api",
  "eave-battery",
  "eave-clock",
+ "eave-hyprland",
  "eave-keyboard",
  "eave-network",
  "eave-volume",
@@ -731,7 +732,6 @@ dependencies = [
  "iced",
  "iced_layershell",
  "rustix 1.1.5",
- "tokio",
  "toml",
  "winit-core",
 ]
