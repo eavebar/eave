@@ -52,6 +52,10 @@ pub enum Kind<M> {
         icon: Icon,
         tone: Option<Tone>,
     },
+    AppIcon {
+        app_id: String,
+        tone: Option<Tone>,
+    },
     Counter {
         value: i64,
         range: RangeInclusive<i64>,
@@ -64,6 +68,10 @@ pub enum Kind<M> {
         /// Shown instead of `current` while the pointer is over the item.
         hovered: Option<usize>,
     },
+    Expand {
+        collapsed: Box<Node<M>>,
+        expanded: Box<Node<M>>,
+    },
     Row(Vec<Node<M>>),
     Column(Vec<Node<M>>),
     Grid {
@@ -73,6 +81,7 @@ pub enum Kind<M> {
     Button {
         content: Box<Node<M>>,
         on_press: M,
+        on_secondary: Option<M>,
     },
     Switcher {
         options: Vec<(Node<M>, M)>,
@@ -100,6 +109,16 @@ pub fn heading<M>(text: impl Into<String>) -> Node<M> {
 /// A symbol, sized like a label.
 pub fn icon<M>(icon: Icon) -> Node<M> {
     Node(Kind::Icon { icon, tone: None })
+}
+
+/// An application's icon, found by its app id or window class (`firefox`, `org.gnome.Nautilus`)
+/// in the user's icon theme. Sized like an [`icon`], in the app's own colors: a tone only dims it.
+/// Until the host has found it, or if there is none, it shows the id's first letter.
+pub fn app_icon<M>(app_id: impl Into<String>) -> Node<M> {
+    Node(Kind::AppIcon {
+        app_id: app_id.into(),
+        tone: None,
+    })
 }
 
 /// A number from `range`, with a unit after it (`"%"`, `"°"`, or `""`), shown like a label. It
@@ -132,6 +151,16 @@ pub fn hover<M>(normal: Node<M>, hovered: Node<M>) -> Node<M> {
     alternate([normal, hovered], 0).on_hover(1)
 }
 
+/// `collapsed`, or `expanded` while the pointer is over this node. Unlike [`hover`], it's only as
+/// big as what it shows, so the item grows to make room and the host springs the island along: a
+/// workspace that shows every window when you point at it.
+pub fn expand<M>(collapsed: Node<M>, expanded: Node<M>) -> Node<M> {
+    Node(Kind::Expand {
+        collapsed: Box::new(collapsed),
+        expanded: Box::new(expanded),
+    })
+}
+
 /// Children side by side, vertically centered.
 pub fn row<M>(children: impl IntoIterator<Item = Node<M>>) -> Node<M> {
     Node(Kind::Row(children.into_iter().collect()))
@@ -154,6 +183,7 @@ pub fn button<M>(content: Node<M>, on_press: M) -> Node<M> {
     Node(Kind::Button {
         content: Box::new(content),
         on_press,
+        on_secondary: None,
     })
 }
 
@@ -196,11 +226,20 @@ impl<M> Node<M> {
         self
     }
 
+    /// For a [`button`]: sent on a secondary (right) click on it. Other nodes ignore it.
+    pub fn on_secondary(mut self, message: M) -> Self {
+        if let Kind::Button { on_secondary, .. } = &mut self.0 {
+            *on_secondary = Some(message);
+        }
+        self
+    }
+
     fn set_tone(&mut self, new: Tone) {
         match &mut self.0 {
             Kind::Label { tone, .. }
             | Kind::Heading { tone, .. }
             | Kind::Icon { tone, .. }
+            | Kind::AppIcon { tone, .. }
             | Kind::Counter { tone, .. } => {
                 tone.get_or_insert(new);
             }
@@ -215,6 +254,13 @@ impl<M> Node<M> {
                 children.iter_mut().for_each(|child| child.set_tone(new));
             }
             Kind::Button { content, .. } => content.set_tone(new),
+            Kind::Expand {
+                collapsed,
+                expanded,
+            } => {
+                collapsed.set_tone(new);
+                expanded.set_tone(new);
+            }
             Kind::Switcher { options, .. } => {
                 options
                     .iter_mut()
@@ -231,6 +277,7 @@ impl<M> Node<M> {
             Kind::Label { text, tone } => Kind::Label { text, tone },
             Kind::Heading { text, tone } => Kind::Heading { text, tone },
             Kind::Icon { icon, tone } => Kind::Icon { icon, tone },
+            Kind::AppIcon { app_id, tone } => Kind::AppIcon { app_id, tone },
             Kind::Counter {
                 value,
                 range,
@@ -251,15 +298,27 @@ impl<M> Node<M> {
                 current,
                 hovered,
             },
+            Kind::Expand {
+                collapsed,
+                expanded,
+            } => Kind::Expand {
+                collapsed: Box::new(collapsed.map(f)),
+                expanded: Box::new(expanded.map(f)),
+            },
             Kind::Row(children) => Kind::Row(map_all(children)),
             Kind::Column(children) => Kind::Column(map_all(children)),
             Kind::Grid { columns, cells } => Kind::Grid {
                 columns,
                 cells: map_all(cells),
             },
-            Kind::Button { content, on_press } => Kind::Button {
+            Kind::Button {
+                content,
+                on_press,
+                on_secondary,
+            } => Kind::Button {
                 content: Box::new(content.map(f)),
                 on_press: f(on_press),
+                on_secondary: on_secondary.map(f),
             },
             Kind::Switcher { options, current } => Kind::Switcher {
                 options: options
@@ -380,7 +439,7 @@ mod tests {
     #[test]
     fn map_converts_every_message() {
         let node = row([
-            button(label("a"), 1),
+            button(label("a"), 1).on_secondary(4),
             column([button(label("b"), 2), label("c")]),
             switcher([(label("d"), 3)], Some(0)),
         ]);
@@ -390,13 +449,20 @@ mod tests {
         };
         let mut messages = Vec::new();
         collect(children, &mut messages);
-        assert_eq!(messages, [10, 20, 30]);
+        assert_eq!(messages, [10, 40, 20, 30]);
     }
 
     fn collect(nodes: Vec<Node<i32>>, out: &mut Vec<i32>) {
         for node in nodes {
             match node.into_kind() {
-                Kind::Button { on_press, .. } => out.push(on_press),
+                Kind::Button {
+                    on_press,
+                    on_secondary,
+                    ..
+                } => {
+                    out.push(on_press);
+                    out.extend(on_secondary);
+                }
                 Kind::Switcher { options, .. } => {
                     out.extend(options.into_iter().map(|(_, message)| message))
                 }

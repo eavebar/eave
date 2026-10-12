@@ -14,6 +14,7 @@ use iced_layershell::actions::ActionCallback;
 use iced_layershell::reexport::KeyboardInteractivity;
 use iced_layershell::to_layer_message;
 
+use crate::apps::{self, AppIcon, Icons};
 use crate::config::{self, Config, Entry, Zone};
 use crate::island::{self, Island};
 use crate::slot::Slot;
@@ -38,6 +39,10 @@ pub struct Bar {
     /// How many nudges widgets have asked for, so each island can tell a new one from one it has
     /// already played.
     nudges: u64,
+    /// App icons loaded so far, by app id, for every widget to share.
+    icons: Icons,
+    /// App ids whose icons are being loaded.
+    loading: Vec<String>,
 }
 
 struct Instance {
@@ -72,6 +77,9 @@ pub enum Message {
     Pressed(window::Id, u64, Option<AnyMessage>),
     /// A primary click on an item that something inside it handled, e.g. a workspace button.
     InnerPressed(u64),
+    /// Any button went down on an item, on this bar: where its popover opens, if the press opens
+    /// it. Sent before anything inside the item handles the press.
+    Touched(window::Id, u64),
     /// A primary click on the bar that nothing handled: empty space, or a plain item.
     BarPressed,
     /// Hyprland saw a primary click somewhere ([`eave_hyprland::report_clicks`]).
@@ -87,6 +95,8 @@ pub enum Message {
     WindowClosed(window::Id),
     /// `config.toml` changed on disk: the new contents, or why they couldn't be loaded.
     ConfigChanged(Result<Config, String>),
+    /// An app's icon has loaded, or turned out not to exist.
+    AppIcon(String, Option<AppIcon>),
 }
 
 impl Bar {
@@ -100,6 +110,8 @@ impl Bar {
             pointer_inside: false,
             keyboard: None,
             nudges: 0,
+            icons: Icons::new(),
+            loading: Vec::new(),
         };
         let task = bar.apply(config);
         (bar, task)
@@ -111,6 +123,9 @@ impl Bar {
         for warning in &config.warnings {
             eprintln!("eave: config: {warning}");
         }
+        // The icon theme may have changed since: look every icon up again.
+        self.icons.clear();
+        self.loading.clear();
         let mut old = std::mem::take(&mut self.instances);
         let mut tasks = Vec::new();
 
@@ -153,6 +168,34 @@ impl Bar {
         tasks.extend(gone.iter().map(|popover| self.fit(popover.window)));
         self.config = config;
         Task::batch(tasks)
+    }
+
+    /// Starts loading the app icons that items and the open popover show and nobody has asked
+    /// for yet.
+    fn load_icons(&mut self) -> Vec<Task<Message>> {
+        let mut wanted = Vec::new();
+        for instance in &self.instances {
+            if let Some(content) = instance.widget.item().into_parts().content {
+                kit::app_ids(content, &mut wanted);
+            }
+            if self.popover_of(instance.id).is_some()
+                && let Some(panel) = instance.widget.popover()
+            {
+                kit::app_ids(panel.into_node(), &mut wanted);
+            }
+        }
+        let mut tasks = Vec::new();
+        for app_id in wanted {
+            if self.icons.contains_key(&app_id) || self.loading.contains(&app_id) {
+                continue;
+            }
+            self.loading.push(app_id.clone());
+            let id = app_id.clone();
+            tasks.push(Task::perform(apps::load(app_id), move |icon| {
+                Message::AppIcon(id.clone(), icon)
+            }));
+        }
+        tasks
     }
 
     fn find(&self, id: u64) -> Option<&Instance> {
@@ -278,6 +321,7 @@ pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
         tasks.push(report.discard());
     }
     tasks.extend(hand_keyboard(bar));
+    tasks.extend(bar.load_icons());
     Task::batch(tasks)
 }
 
@@ -356,6 +400,17 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
                     Task::none()
                 }
             }
+        }
+        Message::Touched(window, id) => {
+            if let Some(instance) = bar.find_mut(id) {
+                instance.window = Some(window);
+            }
+            Task::none()
+        }
+        Message::AppIcon(app_id, icon) => {
+            bar.loading.retain(|loading| *loading != app_id);
+            bar.icons.insert(app_id, icon);
+            Task::none()
         }
         Message::InnerPressed(id) if bar.popover_of(id).is_none() => {
             bar.close_popover();
@@ -438,7 +493,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         };
         let (items, groups): (Vec<_>, Vec<_>) = instances()
             .filter_map(|instance| {
-                let item = (instance.id, item_view(instance, window)?);
+                let item = (instance.id, item_view(instance, window, &bar.icons)?);
                 Some((item, instance.entry.width_group.as_deref()))
             })
             .unzip();
@@ -482,17 +537,22 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     .into()
 }
 
-fn item_view(instance: &Instance, window: window::Id) -> Option<Element<'_, Message>> {
+fn item_view<'a>(
+    instance: &'a Instance,
+    window: window::Id,
+    icons: &Icons,
+) -> Option<Element<'a, Message>> {
     let id = instance.id;
     let parts = instance.widget.item().into_parts();
     let on_press = parts.on_press;
-    let content: Element<'_, AnyMessage> = container(kit::node(parts.content?))
+    let content: Element<'_, AnyMessage> = container(kit::node(parts.content?, icons))
         .padding([0, style::ITEM_PADDING])
         .center_y(Length::Fill)
         .into();
 
     let wrap = move |message| Message::Widget(id, message);
     let mut slot = Slot::new(content.map(wrap))
+        .on_touch(Message::Touched(window, id))
         .on_inner_press(Message::InnerPressed(id))
         .on_secondary(parts.on_secondary.map(wrap))
         .on_scroll(parts.on_scroll.map(|(up, down)| (wrap(up), wrap(down))));
@@ -507,7 +567,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
     // A widget can stop offering its popover while it closes: the island morphs back empty.
     let content: Element<'_, AnyMessage> =
         match bar.find(id).and_then(|instance| instance.widget.popover()) {
-            Some(panel) => kit::node(panel.into_node()),
+            Some(panel) => kit::node(panel.into_node(), &bar.icons),
             None => Space::new().into(),
         };
     island::Popover {

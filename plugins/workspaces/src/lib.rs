@@ -1,9 +1,11 @@
-//! Hyprland workspaces that have windows in them, plus the one you are on. Click one to go there, scroll to move between them. The host slides the
-//! active mark from the old workspace to the new one, and the island gets a nudge the way it went.
+//! Hyprland workspaces that have windows in them, plus the one you are on. Each shows its name
+//! and the icons of its apps: two at most, then `+n` for the windows they leave out. Resting the
+//! pointer on one shows an icon for every window. The ones you aren't on are dimmed. Click one to
+//! go there, right-click it for a list of its windows, scroll to move between them. Switching
+//! nudges the island the way it went.
 
-use eave_api::ui::{self, Item, Tone};
+use eave_api::ui::{self, Item, Node, Panel, Tone};
 use eave_api::{Effect, Nudge, Registry, Subscription, Task, Widget};
-use std::collections::HashMap;
 
 use eave_hyprland::types::{Client, Workspace};
 use eave_hyprland::{Event, Update};
@@ -26,17 +28,32 @@ pub struct Workspaces {
     shown: Vec<Shown>,
     /// What Hyprland has open, from which `shown` is derived.
     open: Vec<(i64, String)>,
-    /// Every window's workspace, by address without the `0x`. Only workspaces in here, and the
-    /// active one, are shown.
-    windows: HashMap<String, i64>,
+    /// Every window, oldest first. Only workspaces with one, and the active one, are shown.
+    windows: Vec<Window>,
     active: Option<i64>,
+    /// The workspace whose windows the popover lists.
+    listing: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Window {
+    /// Without the `0x`.
+    address: String,
+    workspace: i64,
+    class: String,
+    title: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct Shown {
     id: i64,
     name: String,
+    /// The class of each of its windows, oldest first.
+    classes: Vec<String>,
 }
+
+/// Icons a workspace shows before the rest go into `+n`.
+const MAX_ICONS: usize = 2;
 
 #[derive(Debug, Clone)]
 pub struct Snapshot {
@@ -51,6 +68,10 @@ pub enum Message {
     Go(i64),
     Previous,
     Next,
+    /// List a workspace's windows in the popover.
+    List(i64),
+    /// Focus a window, by address without the `0x`.
+    Focus(String),
 }
 
 impl Widget for Workspaces {
@@ -62,8 +83,9 @@ impl Widget for Workspaces {
             persistent: config.persistent,
             shown: Vec::new(),
             open: Vec::new(),
-            windows: HashMap::new(),
+            windows: Vec::new(),
             active: None,
+            listing: None,
         };
         workspaces.refresh();
         (workspaces, Task::none())
@@ -81,7 +103,12 @@ impl Widget for Workspaces {
                 self.windows = snapshot
                     .clients
                     .into_iter()
-                    .map(|client| (address(&client.address), client.workspace.id))
+                    .map(|client| Window {
+                        address: address(&client.address),
+                        workspace: client.workspace.id,
+                        class: client.class,
+                        title: client.title,
+                    })
                     .collect();
                 self.active = Some(snapshot.active);
             }
@@ -90,6 +117,11 @@ impl Widget for Workspaces {
             // Relative to the monitor, over the workspaces it has open.
             Message::Previous => return focus("\"m-1\"".into()),
             Message::Next => return focus("\"m+1\"".into()),
+            Message::List(id) => {
+                self.listing = Some(id);
+                return Effect::none().open_popover();
+            }
+            Message::Focus(address) => return focus_window(address).close_popover(),
         }
         self.refresh();
         // Ids follow the order workspaces are shown in, so a higher one is further right.
@@ -108,17 +140,77 @@ impl Widget for Workspaces {
         if self.shown.is_empty() {
             return Item::hidden();
         }
-        let current = self.shown.iter().position(|w| Some(w.id) == self.active);
-        let options = self.shown.iter().enumerate().map(|(index, workspace)| {
-            let label = ui::label(workspace.name.clone());
-            let label = if Some(index) == current {
-                label.tone(Tone::Accent)
-            } else {
-                label
+        let buttons = self.shown.iter().map(|workspace| {
+            let (collapsed, expanded) = workspace.views();
+            let content = match expanded {
+                Some(expanded) => ui::expand(collapsed, expanded),
+                None => collapsed,
             };
-            (label, Message::Go(workspace.id))
+            let button = ui::button(content, Message::Go(workspace.id))
+                .on_secondary(Message::List(workspace.id));
+            if Some(workspace.id) == self.active {
+                button
+            } else {
+                button.tone(Tone::Dim)
+            }
         });
-        Item::new(ui::switcher(options, current)).on_scroll(Message::Previous, Message::Next)
+        Item::new(ui::row(buttons)).on_scroll(Message::Previous, Message::Next)
+    }
+
+    fn popover(&self) -> Option<Panel<Message>> {
+        let id = self.listing?;
+        let workspace = self.shown.iter().find(|workspace| workspace.id == id)?;
+        let rows = self
+            .windows
+            .iter()
+            .filter(|window| window.workspace == id)
+            .map(|window| {
+                let title = if window.title.is_empty() {
+                    &window.class
+                } else {
+                    &window.title
+                };
+                ui::button(
+                    ui::row([ui::app_icon(window.class.clone()), ui::label(title.clone())]),
+                    Message::Focus(window.address.clone()),
+                )
+            })
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            return None;
+        }
+        Some(Panel::new(ui::column(
+            std::iter::once(ui::heading(workspace.name.clone())).chain(rows),
+        )))
+    }
+}
+
+impl Shown {
+    /// What it shows normally, and what it shows when the pointer rests on it, if that's more:
+    /// the name and one icon per app, two at most, with `+n` for the windows they leave out; and
+    /// the name and one icon per window.
+    fn views(&self) -> (Node<Message>, Option<Node<Message>>) {
+        let name = || ui::label(self.name.clone());
+        let mut apps: Vec<&String> = Vec::new();
+        for class in &self.classes {
+            if !apps.contains(&class) {
+                apps.push(class);
+            }
+        }
+        apps.truncate(MAX_ICONS);
+        let hidden = self.classes.len() - apps.len();
+        let mut collapsed = vec![name()];
+        collapsed.extend(apps.into_iter().map(|class| ui::app_icon(class.clone())));
+        if hidden > 0 {
+            collapsed.push(ui::label(format!("+{hidden}")));
+        }
+        let expanded = (hidden > 0).then(|| {
+            ui::row(
+                std::iter::once(name())
+                    .chain(self.classes.iter().map(|class| ui::app_icon(class.clone()))),
+            )
+        });
+        (ui::row(collapsed), expanded)
     }
 }
 
@@ -137,7 +229,12 @@ impl Workspaces {
                     open.1 = name;
                 }
             }
-            Event::OpenWindow { address, workspace } => {
+            Event::OpenWindow {
+                address,
+                workspace,
+                class,
+                title,
+            } => {
                 let id = self
                     .open
                     .iter()
@@ -145,17 +242,36 @@ impl Workspaces {
                     .map(|(id, _)| *id)
                     .or_else(|| workspace.parse().ok());
                 if let Some(id) = id {
-                    self.windows.insert(address, id);
+                    self.windows.retain(|window| window.address != address);
+                    self.windows.push(Window {
+                        address,
+                        workspace: id,
+                        class,
+                        title,
+                    });
                 }
             }
             Event::CloseWindow { address } => {
-                self.windows.remove(&address);
+                self.windows.retain(|window| window.address != address);
             }
             Event::MoveWindow { address, workspace } => {
-                self.windows.insert(address, workspace);
+                if let Some(window) = self.window(&address) {
+                    window.workspace = workspace;
+                }
+            }
+            Event::WindowTitle { address, title } => {
+                if let Some(window) = self.window(&address) {
+                    window.title = title;
+                }
             }
             _ => {}
         }
+    }
+
+    fn window(&mut self, address: &str) -> Option<&mut Window> {
+        self.windows
+            .iter_mut()
+            .find(|window| window.address == address)
     }
 
     fn insert(&mut self, id: i64, name: String) {
@@ -170,22 +286,32 @@ impl Workspaces {
             .open
             .iter()
             .filter(|(id, _)| *id > 0)
-            .filter(|(id, _)| Some(*id) == self.active || self.windows.values().any(|w| w == id))
             .map(|(id, name)| Shown {
                 id: *id,
                 name: name.clone(),
+                classes: self.classes(*id),
             })
+            .filter(|w| Some(w.id) == self.active || !w.classes.is_empty())
             .collect();
         for id in 1..=i64::from(self.persistent) {
             if !shown.iter().any(|w| w.id == id) {
                 shown.push(Shown {
                     id,
                     name: id.to_string(),
+                    classes: self.classes(id),
                 });
             }
         }
         shown.sort_by_key(|w| w.id);
         self.shown = shown;
+    }
+
+    fn classes(&self, workspace: i64) -> Vec<String> {
+        self.windows
+            .iter()
+            .filter(|window| window.workspace == workspace)
+            .map(|window| window.class.clone())
+            .collect()
     }
 }
 
@@ -210,6 +336,19 @@ fn focus(workspace: String) -> Effect<Message> {
     Task::future(async move {
         let lua = format!("hl.dsp.focus({{ workspace = {workspace} }})");
         let legacy = format!("workspace {}", workspace.trim_matches('"'));
+        if let Err(error) = eave_hyprland::dispatch(&lua, &legacy).await {
+            eprintln!("eave-workspaces: {error}");
+        }
+    })
+    .discard()
+    .into()
+}
+
+/// Focuses the window at `address`, which takes you to its workspace.
+fn focus_window(address: String) -> Effect<Message> {
+    Task::future(async move {
+        let lua = format!("hl.dsp.focus({{ window = \"address:0x{address}\" }})");
+        let legacy = format!("focuswindow address:0x{address}");
         if let Err(error) = eave_hyprland::dispatch(&lua, &legacy).await {
             eprintln!("eave-workspaces: {error}");
         }
@@ -269,6 +408,17 @@ mod tests {
                 id,
                 name: id.to_string(),
             },
+            class: "kitty".into(),
+            title: String::new(),
+        }
+    }
+
+    fn open(address: &str, workspace: &str, class: &str) -> Event {
+        Event::OpenWindow {
+            address: address.into(),
+            workspace: workspace.into(),
+            class: class.into(),
+            title: format!("{class} {address}"),
         }
     }
 
@@ -300,13 +450,7 @@ mod tests {
         assert_eq!(workspaces.active, Some(1));
         assert_eq!(ids(&workspaces), [1, 2], "unless they are active");
 
-        event(
-            &mut workspaces,
-            Event::OpenWindow {
-                address: "c".into(),
-                workspace: "1".into(),
-            },
-        );
+        event(&mut workspaces, open("c", "1", "kitty"));
         assert_eq!(ids(&workspaces), [1, 2]);
 
         event(&mut workspaces, Event::DestroyWorkspace { id: 2 });
@@ -321,7 +465,8 @@ mod tests {
             workspaces.shown,
             [Shown {
                 id: 1,
-                name: "web".into()
+                name: "web".into(),
+                classes: vec!["kitty".into()],
             }]
         );
     }
@@ -345,13 +490,7 @@ mod tests {
         );
         assert_eq!(ids(&workspaces), [1]);
 
-        event(
-            &mut workspaces,
-            Event::OpenWindow {
-                address: "c".into(),
-                workspace: "web".into(),
-            },
-        );
+        event(&mut workspaces, open("c", "web", "kitty"));
         assert_eq!(ids(&workspaces), [1, 3]);
 
         event(
@@ -375,14 +514,93 @@ mod tests {
             },
         );
         assert_eq!(ids(&workspaces), [1, 2, 3]);
+        event(&mut workspaces, open("a", "7", "kitty"));
+        assert_eq!(ids(&workspaces), [1, 2, 3, 7]);
+    }
+
+    /// What a workspace shows: labels as text, app icons as `[class]`.
+    fn describe(node: Node<Message>) -> String {
+        match node.into_kind() {
+            ui::Kind::Label { text, .. } => text,
+            ui::Kind::AppIcon { app_id, .. } => format!("[{app_id}]"),
+            ui::Kind::Row(children) => children
+                .into_iter()
+                .map(describe)
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => "?".into(),
+        }
+    }
+
+    fn views(workspace: &Shown) -> (String, Option<String>) {
+        let (collapsed, expanded) = workspace.views();
+        (describe(collapsed), expanded.map(describe))
+    }
+
+    #[test]
+    fn two_icons_then_the_windows_they_leave_out() {
+        let mut workspaces = bar(3);
+        for (address, class) in [
+            ("a", "kitty"),
+            ("b", "firefox"),
+            ("c", "kitty"),
+            ("d", "slack"),
+            ("e", "kitty"),
+        ] {
+            event(&mut workspaces, open(address, "1", class));
+        }
+        event(&mut workspaces, open("f", "2", "kitty"));
+        event(&mut workspaces, open("g", "3", "foot"));
+        event(&mut workspaces, open("h", "3", "foot"));
+
+        assert_eq!(
+            views(&workspaces.shown[0]),
+            (
+                "1 [kitty] [firefox] +3".into(),
+                Some("1 [kitty] [firefox] [kitty] [slack] [kitty]".into())
+            )
+        );
+        assert_eq!(views(&workspaces.shown[1]), ("2 [kitty]".into(), None));
+        assert_eq!(
+            views(&workspaces.shown[2]),
+            ("3 [foot] +1".into(), Some("3 [foot] [foot]".into()))
+        );
+    }
+
+    #[test]
+    fn lists_windows_with_live_titles() {
+        let mut workspaces = bar(2);
+        event(&mut workspaces, open("a", "1", "kitty"));
+        event(&mut workspaces, open("b", "2", "firefox"));
+        assert!(workspaces.popover().is_none(), "nothing listed yet");
+
+        let effect = workspaces.update(Message::List(1));
+        assert_eq!(
+            effect.into_parts().1,
+            Some(eave_api::erased::PopoverRequest::Open)
+        );
         event(
             &mut workspaces,
-            Event::OpenWindow {
+            Event::WindowTitle {
                 address: "a".into(),
-                workspace: "7".into(),
+                title: "~/code, eave".into(),
             },
         );
-        assert_eq!(ids(&workspaces), [1, 2, 3, 7]);
+        let titles: Vec<_> = workspaces
+            .windows
+            .iter()
+            .map(|w| w.title.as_str())
+            .collect();
+        assert_eq!(titles, ["~/code, eave", "firefox b"]);
+        assert!(workspaces.popover().is_some());
+
+        event(
+            &mut workspaces,
+            Event::CloseWindow {
+                address: "a".into(),
+            },
+        );
+        assert!(workspaces.popover().is_none(), "closes once it's empty");
     }
 
     #[test]

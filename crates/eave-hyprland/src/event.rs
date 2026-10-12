@@ -33,6 +33,13 @@ pub enum Event {
     OpenWindow {
         address: String,
         workspace: String,
+        class: String,
+        title: String,
+    },
+    /// A window's title changed (`windowtitlev2`).
+    WindowTitle {
+        address: String,
+        title: String,
     },
     CloseWindow {
         address: String,
@@ -103,9 +110,18 @@ impl Event {
                 _ => return None,
             },
             "openwindow" => match fields(4)[..] {
-                [address, workspace, _class, _title] => Self::OpenWindow {
+                [address, workspace, class, title] => Self::OpenWindow {
                     address: address.into(),
                     workspace: workspace.into(),
+                    class: class.into(),
+                    title: title.into(),
+                },
+                _ => return None,
+            },
+            "windowtitlev2" => match fields(2)[..] {
+                [address, title] => Self::WindowTitle {
+                    address: address.into(),
+                    title: title.into(),
                 },
                 _ => return None,
             },
@@ -186,7 +202,16 @@ mod tests {
             Event::parse("openwindow>>5d1f2a0,2,kitty,a, b"),
             Some(Event::OpenWindow {
                 address: "5d1f2a0".into(),
-                workspace: "2".into()
+                workspace: "2".into(),
+                class: "kitty".into(),
+                title: "a, b".into()
+            })
+        );
+        assert_eq!(
+            Event::parse("windowtitlev2>>5d1f2a0,~/code, eave"),
+            Some(Event::WindowTitle {
+                address: "5d1f2a0".into(),
+                title: "~/code, eave".into()
             })
         );
         assert_eq!(

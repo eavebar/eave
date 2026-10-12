@@ -12,6 +12,8 @@ use crate::alternate::SetHovered;
 
 pub struct Slot<'a, M> {
     content: Element<'a, M>,
+    /// Sent when any button goes down on the item, before the content sees it.
+    on_touch: Option<M>,
     on_press: Option<M>,
     /// Sent when the content itself handles a primary click, e.g. a button inside the item.
     on_inner_press: Option<M>,
@@ -52,6 +54,7 @@ impl<'a, M> Slot<'a, M> {
     pub fn new(content: impl Into<Element<'a, M>>) -> Self {
         Self {
             content: content.into(),
+            on_touch: None,
             on_press: None,
             on_inner_press: None,
             on_secondary: None,
@@ -61,6 +64,11 @@ impl<'a, M> Slot<'a, M> {
 
     pub fn on_press(mut self, message: M) -> Self {
         self.on_press = Some(message);
+        self
+    }
+
+    pub fn on_touch(mut self, message: M) -> Self {
+        self.on_touch = Some(message);
         self
     }
 
@@ -172,6 +180,11 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slot<'_, M> {
                 &mut SetHovered { hovered, toward },
             );
             shell.request_redraw();
+        }
+        if let (Event::Mouse(mouse::Event::ButtonPressed(_)), true, Some(message)) =
+            (event, hovered, &self.on_touch)
+        {
+            shell.publish(message.clone());
         }
         self.content.as_widget_mut().update(
             &mut tree.children[0],
