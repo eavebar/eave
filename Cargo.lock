@@ -833,6 +833,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "eave-iwd"
+version = "0.1.0"
+dependencies = [
+ "eave-dbus",
+ "futures-util",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "eave-keyboard"
 version = "0.1.0"
 dependencies = [

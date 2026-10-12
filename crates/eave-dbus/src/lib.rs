@@ -44,6 +44,31 @@ where
     F: Fn(Connection) -> Fut,
     Fut: Future<Output = zbus::Result<Snapshot<S>>>,
 {
+    watching(service, snapshot, false)
+}
+
+/// Like [`watch`], but any signal from `service` makes the snapshot stale: objects coming and
+/// going (`InterfacesAdded`, `InterfacesRemoved`) as well as every property change. For services
+/// whose objects change often, like Wi-Fi networks, where listing them all would be the snapshot.
+pub fn watch_all<S, F, Fut>(service: &'static str, snapshot: F) -> impl Stream<Item = S>
+where
+    S: PartialEq + Clone,
+    F: Fn(Connection) -> Fut,
+    Fut: Future<Output = zbus::Result<Snapshot<S>>>,
+{
+    watching(service, snapshot, true)
+}
+
+fn watching<S, F, Fut>(
+    service: &'static str,
+    snapshot: F,
+    everything: bool,
+) -> impl Stream<Item = S>
+where
+    S: PartialEq + Clone,
+    F: Fn(Connection) -> Fut,
+    Fut: Future<Output = zbus::Result<Snapshot<S>>>,
+{
     struct State<S, F> {
         snapshot: F,
         signals: Option<(Connection, MessageStream)>,
@@ -62,7 +87,7 @@ where
     stream::unfold(state, move |mut state| async move {
         loop {
             if state.signals.is_none() {
-                match subscribe(service).await {
+                match subscribe(service, everything).await {
                     Ok(signals) => state.signals = Some(signals),
                     Err(error) => {
                         // No bus at all: nothing will ever change, so end quietly.
@@ -95,10 +120,11 @@ where
             }
 
             let message = signals.next().await?;
-            let mut stale = is_relevant(message, &state.watched);
+            let relevant = |message| everything || is_relevant(message, &state.watched);
+            let mut stale = relevant(message);
             // A change usually comes as a burst of signals; take them all before re-reading.
             while let Some(Some(message)) = signals.next().now_or_never() {
-                stale |= is_relevant(message, &state.watched);
+                stale |= relevant(message);
             }
             if stale {
                 // Some services update several objects one after another; let them settle.
@@ -110,14 +136,21 @@ where
     })
 }
 
-async fn subscribe(service: &'static str) -> zbus::Result<(Connection, MessageStream)> {
+async fn subscribe(
+    service: &'static str,
+    everything: bool,
+) -> zbus::Result<(Connection, MessageStream)> {
     let connection = system().await?;
     let rule = MatchRule::builder()
         .msg_type(MessageType::Signal)
-        .sender(service)?
-        .interface("org.freedesktop.DBus.Properties")?
-        .member("PropertiesChanged")?
-        .build();
+        .sender(service)?;
+    let rule = if everything {
+        rule.build()
+    } else {
+        rule.interface("org.freedesktop.DBus.Properties")?
+            .member("PropertiesChanged")?
+            .build()
+    };
     let signals = MessageStream::for_match_rule(rule, &connection, Some(64)).await?;
     Ok((connection, signals))
 }
@@ -132,6 +165,49 @@ fn is_not_installed(error: &zbus::Error) -> bool {
         }
         _ => false,
     }
+}
+
+/// The service is there, but we may not use it: its bus policy turns us away.
+pub fn is_access_denied(error: &zbus::Error) -> bool {
+    match error {
+        zbus::Error::FDO(error) => matches!(**error, zbus::fdo::Error::AccessDenied(_)),
+        zbus::Error::MethodError(name, ..) => {
+            name.as_str() == "org.freedesktop.DBus.Error.AccessDenied"
+        }
+        _ => false,
+    }
+}
+
+/// Nothing answers for the service right now: not installed, or not running.
+pub fn is_unavailable(error: &zbus::Error) -> bool {
+    let name = match error {
+        zbus::Error::FDO(error) => {
+            return matches!(
+                **error,
+                zbus::fdo::Error::ServiceUnknown(_) | zbus::fdo::Error::NameHasNoOwner(_)
+            );
+        }
+        zbus::Error::MethodError(name, ..) => name.as_str(),
+        _ => return false,
+    };
+    matches!(
+        name,
+        "org.freedesktop.DBus.Error.ServiceUnknown" | "org.freedesktop.DBus.Error.NameHasNoOwner"
+    )
+}
+
+/// Every object `service` manages under `path`, with each interface's properties, in one call.
+pub async fn managed_objects(
+    connection: &Connection,
+    service: &'static str,
+    path: &'static str,
+) -> zbus::Result<zbus::fdo::ManagedObjects> {
+    let proxy = zbus::fdo::ObjectManagerProxy::builder(connection)
+        .destination(service)?
+        .path(path)?
+        .build()
+        .await?;
+    Ok(proxy.get_managed_objects().await?)
 }
 
 fn is_relevant(message: zbus::Result<zbus::Message>, watched: &[OwnedObjectPath]) -> bool {
