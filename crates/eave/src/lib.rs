@@ -8,6 +8,7 @@ mod counter;
 mod gulp;
 mod icon;
 mod island;
+mod jelly;
 mod kit;
 mod label;
 mod slot;

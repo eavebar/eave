@@ -70,28 +70,30 @@ pub const SQUISH_CLOSE_WIDEN: f32 = 125.0;
 pub const SQUISH_LAND: f32 = 5.0;
 /// How much stretching along one axis pulls the other in, per pixel stretched.
 pub const SQUISH_BULGE: f32 = 0.5;
-/// The spring a nudged island and its bump move back on: damped nearly to critical, so they come
+/// The spring a nudged island moves back on: damped nearly to critical, so it comes
 /// back without swinging past.
 pub const NUDGE_STIFFNESS: f32 = 600.0;
 pub const NUDGE_DAMPING: f32 = 0.85;
 /// How fast a nudge sets an island off, in logical pixels per second. A push sideways peaks at
-/// about 5 px. Up or down, the whole island moves about half a pixel, and the bump in its edge
-/// peaks at about 2 px.
+/// about 5 px. Up or down, the whole island moves about half a pixel.
 pub const NUDGE_PUSH_SPEED: f32 = 300.0;
 pub const NUDGE_LIFT_SPEED: f32 = 30.0;
-pub const NUDGE_BUMP_SPEED: f32 = 120.0;
-/// How much a nudged island leans into where it's going, per pixel it has moved: the end it's
-/// going toward taller and the one it's leaving flatter (sideways), or the edge it's going toward
-/// wider and the other narrower (up and down). About 3 px taller than the far end at the height of
-/// a push, and 4 px wider than the far edge at the height of a lift.
-pub const NUDGE_TAPER_X: f32 = 0.6;
-pub const NUDGE_TAPER_Y: f32 = 8.0;
-/// How much of its bump the nudged item moves with: it rides along, by less than the edge.
-pub const NUDGE_ITEM_FOLLOW: f32 = 0.5;
-/// How wide a bump in an island's edge is, end to end.
+/// The jelly an island's outline is made of ([`crate::jelly`]): how hard each piece of the edge
+/// is pulled back where it belongs, its damping ratio (just under critical, so it settles without
+/// wobbling), and how hard it's pulled toward its neighbors, which is what smooths a poke out.
+pub const JELLY_STIFFNESS: f32 = 600.0;
+pub const JELLY_DAMPING: f32 = 0.85;
+pub const JELLY_COUPLING: f32 = 1400.0;
+/// How hard a nudge pokes the jelly, outward in logical pixels per second. The bump: the edge
+/// over the nudged item, going up or down, about 2 px out at its peak. The lean: the end (or
+/// edge) the island is going toward swells and the one it's leaving flattens, about 1.5 px each
+/// way.
+pub const JELLY_BUMP: f32 = 150.0;
+pub const JELLY_LEAN: f32 = 120.0;
+/// How wide a nudge's bump in an island's edge is, end to end.
 pub const NUDGE_BUMP_WIDTH: f32 = 64.0;
-/// The furthest a bump reaches out of the island: it stays inside `EDGE_GAP` above and `DRAG_ROOM`
-/// below.
+/// The furthest the outline reaches out of the island: it stays inside `EDGE_GAP` above and at
+/// the sides, and `DRAG_ROOM` below.
 pub const NUDGE_BUMP_ROOM: f32 = 4.0;
 /// Horizontal padding inside each item, so its click target is wider than its text.
 pub const ITEM_PADDING: u16 = 6;

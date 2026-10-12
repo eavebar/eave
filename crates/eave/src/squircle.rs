@@ -6,17 +6,7 @@ use iced::{Point, Rectangle, Size, Vector};
 /// A rectangle with continuous ("squircle") corners: each corner is a short circular arc that
 /// eases into the straight edges through a cubic on either side, instead of meeting them abruptly.
 /// This is Figma's corner smoothing; `smoothing` 0 gives a plain rounded rectangle.
-///
-/// With a bump, the top or bottom of the shape is bent out around it, corners included, so the
-/// bump looks the same wherever it is. With a taper, one end is taller than the other, or one edge
-/// wider.
-pub fn squircle(
-    bounds: Rectangle,
-    radius: f32,
-    smoothing: f32,
-    bump: Option<Bump>,
-    taper: Taper,
-) -> Path {
+pub fn squircle(bounds: Rectangle, radius: f32, smoothing: f32) -> Path {
     let corner = Corner::new(bounds.size(), radius, smoothing);
     let (left, top) = (bounds.x, bounds.y);
     let (right, bottom) = (left + bounds.width, top + bounds.height);
@@ -45,7 +35,7 @@ pub fn squircle(
         ),
     ];
 
-    let path = Path::new(|builder| {
+    Path::new(|builder| {
         for (index, (at, incoming, outgoing)) in corners.into_iter().enumerate() {
             let place = |(x, y): (f32, f32)| at + incoming * x + outgoing * y;
             let [start, curve_in, arc, curve_out] = corner.points();
@@ -65,97 +55,21 @@ pub fn squircle(
             );
         }
         builder.close();
-    });
-    let bump = bump.filter(|bump| bump.amount.abs() >= 0.01 && bump.width >= 1.0);
-    if bump.is_none() && taper.is_none() {
-        return path;
-    }
-    warp(&path, bounds, bump, taper)
-}
-
-/// A squircle leaning one way: the right end taller than the left by `x` (half above, half
-/// below), and the top wider than the bottom by `y` (half each side). Negative leans the other way.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Taper {
-    pub x: f32,
-    pub y: f32,
-}
-
-impl Taper {
-    pub const NONE: Self = Self { x: 0.0, y: 0.0 };
-
-    fn is_none(self) -> bool {
-        self.x.abs() < 0.01 && self.y.abs() < 0.01
-    }
-
-    /// How much taller (`x`) and wider (`y`) than it is the shape is at `at`, in `bounds`.
-    pub fn at(self, bounds: Rectangle, at: Point) -> (f32, f32) {
-        let center = bounds.center();
-        let across = ((at.x - center.x) / (bounds.width / 2.0)).clamp(-1.0, 1.0);
-        let up = ((center.y - at.y) / (bounds.height / 2.0)).clamp(-1.0, 1.0);
-        (
-            1.0 + self.x * across / bounds.height,
-            1.0 + self.y * up / bounds.width,
-        )
-    }
-}
-
-/// A bump in a squircle's top or bottom: the edge rises out of the shape (or dents into it) in
-/// a raised cosine around `x`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Bump {
-    pub edge: Edge,
-    /// Where its peak is, along the edge.
-    pub x: f32,
-    pub width: f32,
-    /// How far its peak is pushed out of the shape; negative dents it in.
-    pub amount: f32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Edge {
-    Top,
-    Bottom,
+    })
 }
 
 /// How far a flattened curve may stray from the real one, in logical pixels.
 const WARP_TOLERANCE: f32 = 0.05;
-/// The longest straight piece of a warped path: short enough that the bump reads as a curve.
+/// The longest straight piece of a warped path: short enough that a bend reads as a curve.
 const WARP_STEP: f32 = 1.0;
 
-/// Tapers `path`, then bends it out around the bump. Tapering stretches each point away from the
-/// middle line in proportion to how far along it is. For the bump, every point moves straight up
-/// (or down) by the bump's height at its `x`, fully on the bumped edge and less the further it is
-/// from it, down to nothing halfway across the shape. So a bump near a corner lifts the corner's
-/// end along with it, and the opposite edge never moves. The path is flattened to do it, so it's
-/// only worth it while a bump or taper shows.
-fn warp(path: &Path, bounds: Rectangle, bump: Option<Bump>, taper: Taper) -> Path {
+/// `path` with every point moved by `map`. The path is flattened and its lines cut into short
+/// pieces to do it, so they can bend, which makes it only worth it while something bends it.
+pub fn warp(path: &Path, map: impl Fn(Point) -> Point) -> Path {
     use path::lyon_path::Event;
     use path::lyon_path::iterator::PathIterator;
 
-    let center = bounds.center();
-    let reach = bounds.height / 2.0;
-    let lift = |x: f32, y: f32| {
-        let (taller, wider) = taper.at(bounds, Point::new(x, y));
-        let (x, y) = (
-            center.x + (x - center.x) * wider,
-            center.y + (y - center.y) * taller,
-        );
-        let Some(bump) = bump else {
-            return Point::new(x, y);
-        };
-        let half = bump.width / 2.0;
-        let along = ((x - bump.x) / half).clamp(-1.0, 1.0);
-        let bell = 0.5 * (1.0 + (std::f32::consts::PI * along).cos());
-        let (from_edge, out) = match bump.edge {
-            Edge::Top => (y - bounds.y, -bump.amount),
-            Edge::Bottom => (bounds.y + bounds.height - y, bump.amount),
-        };
-        let near = (1.0 - from_edge / reach).clamp(0.0, 1.0);
-        // Eased, so the bend has no crease where it starts.
-        let near = near * near * (3.0 - 2.0 * near);
-        Point::new(x, y + out * bell * near)
-    };
+    let lift = |x: f32, y: f32| map(Point::new(x, y));
     // Straight lines are cut into short pieces, so they can bend.
     let line = |builder: &mut path::Builder, from: Point, to: Point| {
         let pieces = (from.distance(to) / WARP_STEP).ceil().max(1.0);
@@ -328,15 +242,15 @@ mod tests {
     }
 
     #[test]
-    fn a_bump_pushes_out_of_its_edge_only() {
+    fn a_warp_bends_only_what_it_moves() {
         let bounds = Rectangle::new(Point::new(0.0, 4.0), Size::new(120.0, 30.0));
-        let up = Bump {
-            edge: Edge::Top,
-            x: 60.0,
-            width: 28.0,
-            amount: 3.0,
+        // Lifts the top's middle by up to 3 px, and nothing else.
+        let lift = |at: Point| {
+            let bell = (1.0 - ((at.x - 60.0) / 20.0).abs()).max(0.0);
+            let near = if at.y < 5.0 { 1.0 } else { 0.0 };
+            Point::new(at.x, at.y - 3.0 * bell * near)
         };
-        let points = ends(&squircle(bounds, 14.0, 0.6, Some(up), Taper::NONE));
+        let points = ends(&warp(&squircle(bounds, 14.0, 0.6), lift));
         let highest = points
             .iter()
             .copied()
@@ -345,96 +259,16 @@ mod tests {
             (highest.0 - 60.0).abs() < 0.5 && (highest.1 - 1.0).abs() < 1e-3,
             "{highest:?}"
         );
-        assert!(
-            points
-                .iter()
-                .all(|(_, y)| (1.0 - 1e-3..=34.0 + 1e-3).contains(y))
-        );
-        // Away from it, the edge stays put.
+        // The straight top was cut into pieces, so it bends; away from the lift it stays put.
         assert!(
             points
                 .iter()
                 .any(|&(x, y)| x > 80.0 && x < 100.0 && y == 4.0)
         );
-
-        let down = Bump {
-            edge: Edge::Bottom,
-            ..up
-        };
-        let points = ends(&squircle(bounds, 14.0, 0.6, Some(down), Taper::NONE));
         assert!(
             points
                 .iter()
-                .any(|&(x, y)| (x - 60.0).abs() < 0.5 && (y - 37.0).abs() < 1e-3)
+                .all(|(_, y)| (1.0 - 1e-3..=34.0 + 1e-3).contains(y))
         );
-        assert!(
-            points
-                .iter()
-                .all(|(_, y)| (4.0 - 1e-3..=37.0 + 1e-3).contains(y))
-        );
-    }
-
-    #[test]
-    fn a_bump_by_a_corner_bends_the_corner_too() {
-        let bounds = Rectangle::new(Point::ORIGIN, Size::new(120.0, 30.0));
-        let flat = ends(&squircle(bounds, 14.0, 0.6, None, Taper::NONE));
-        let bump = Bump {
-            edge: Edge::Top,
-            x: 20.0,
-            width: 64.0,
-            amount: 3.0,
-        };
-        let points = ends(&squircle(bounds, 14.0, 0.6, Some(bump), Taper::NONE));
-        // The peak stays over the item, though the corner reaches 15 in.
-        let highest = points
-            .iter()
-            .copied()
-            .fold((0.0, f32::MAX), |a, b| if b.1 < a.1 { b } else { a });
-        assert!(
-            (highest.0 - 20.0).abs() < 0.5 && (highest.1 + 3.0).abs() < 1e-3,
-            "{highest:?}"
-        );
-        // The corner's end rises along with it; its far end, halfway down the side, doesn't.
-        assert!(points.iter().any(|&(x, y)| x < 15.0 && y < -1.0));
-        let side = |points: &[(f32, f32)]| {
-            points
-                .iter()
-                .copied()
-                .filter(|(x, _)| *x < 1e-3)
-                .map(|(_, y)| y)
-                .fold(f32::MAX, f32::min)
-        };
-        assert!((side(&points) - side(&flat)).abs() < 0.2);
-        // The bottom never moves.
-        assert!(points.iter().all(|(_, y)| *y <= 30.0 + 1e-3));
-    }
-
-    #[test]
-    fn a_taper_leans_one_way() {
-        let bounds = Rectangle::new(Point::new(0.0, 4.0), Size::new(120.0, 30.0));
-        let flat = ends(&squircle(bounds, 14.0, 0.6, None, Taper::NONE));
-        let height = |points: &[(f32, f32)], from: f32, to: f32| {
-            let ys = points.iter().filter(|(x, _)| (from..=to).contains(x));
-            let top = ys.clone().map(|p| p.1).fold(f32::MAX, f32::min);
-            let bottom = ys.map(|p| p.1).fold(f32::MIN, f32::max);
-            bottom - top
-        };
-
-        let right = ends(&squircle(bounds, 14.0, 0.6, None, Taper { x: 4.0, y: 0.0 }));
-        // Along the straight part (cut into pieces by the warp, so it has points there): taller
-        // toward the right, flatter toward the left, as tall as before in the middle.
-        assert!(height(&right, 100.0, 105.0) > 32.0);
-        assert!(height(&right, 15.0, 20.0) < 28.0);
-        assert!((height(&right, 59.0, 61.0) - 30.0).abs() < 0.2);
-
-        let up = ends(&squircle(bounds, 14.0, 0.6, None, Taper { x: 0.0, y: 4.0 }));
-        let width = |points: &[(f32, f32)], y: f32| {
-            let xs = points.iter().filter(|p| (p.1 - y).abs() < 1e-3);
-            let left = xs.clone().map(|p| p.0).fold(f32::MAX, f32::min);
-            let right = xs.map(|p| p.0).fold(f32::MIN, f32::max);
-            right - left
-        };
-        assert!(width(&up, 4.0) > width(&flat, 4.0) + 1.0);
-        assert!(width(&up, 34.0) < width(&flat, 34.0) - 1.0);
     }
 }
