@@ -318,10 +318,11 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
     // host and every plugin share one eave-api, published on crates.io or not.
     // Same for the service crates plugins may use.
     manifest += &format!(
-        "\n[patch.crates-io]\neave-api = {{ path = {} }}\neave-dbus = {{ path = {} }}\neave-hyprland = {{ path = {} }}\n",
+        "\n[patch.crates-io]\neave-api = {{ path = {} }}\neave-dbus = {{ path = {} }}\neave-hyprland = {{ path = {} }}\neave-pulse = {{ path = {} }}\n",
         quote(&api_dir),
         quote(&eave_dir.join("crates/eave-dbus")),
-        quote(&eave_dir.join("crates/eave-hyprland"))
+        quote(&eave_dir.join("crates/eave-hyprland")),
+        quote(&eave_dir.join("crates/eave-pulse"))
     );
     // Same profile as eave's own release builds (D-10).
     manifest += "\n[profile.release]\nlto = \"thin\"\ncodegen-units = 1\nstrip = true\npanic = \"abort\"\n\n\

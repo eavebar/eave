@@ -25,12 +25,12 @@ We build it ourselves, not on a framework like Quickshell or AGS, because we wan
 - Stack: **Rust + iced 0.14 + iced_layershell 0.19**, with the **tiny-skia** (CPU) renderer by default.
 - **Everything is a plugin.** With no `~/.config/eave/config.toml` the bar is empty. Plugins are crates compiled in by `eave-build`, never loaded at runtime ([docs/plugins.md](docs/plugins.md)).
 - Run it: `cargo run --release`. GPU renderer: `cargo run --release --features gpu`. Tests: `cargo test --workspace`.
-- Code: `crates/eave-api` (plugin SDK: `Widget`, closed `ui` vocabulary), `crates/eave` (host: surfaces, layout, theme, popovers), `crates/eave-build` (builds a binary with third-party plugins), `crates/eave-hyprland` and `crates/eave-dbus` (shared services), `plugins/{clock,workspaces,window,keyboard,battery,network}`.
+- Code: `crates/eave-api` (plugin SDK: `Widget`, closed `ui` vocabulary), `crates/eave` (host: surfaces, layout, theme, popovers), `crates/eave-build` (builds a binary with third-party plugins), `crates/eave-{hyprland,dbus,pulse}` (shared services), `plugins/{clock,workspaces,window,keyboard,battery,network,volume}`.
 - Baseline: ~11.8 MB RSS with two clocks and ~0% idle CPU (see [docs/development.md](docs/development.md#measuring)). Don't regress it without a reason written down in `docs/decisions.md`.
 
 ## Rules for agents
 
-- **No polling** when an event source exists. Use Hyprland socket2, D-Bus signals and PipeWire listeners. `/proc` and `/sys` counters are the only things polled.
+- **No polling** when an event source exists. Use Hyprland socket2, D-Bus signals and audio server subscriptions. `/proc` and `/sys` counters are the only things polled.
 - **Never block the UI thread.** All I/O goes through iced subscriptions or tasks.
 - **Every new dependency needs a reason.** Prefer `default-features = false`. Record non-obvious ones in `docs/decisions.md`.
 - **Measure** RSS, idle CPU and binary size before and after any change that might affect them (dependencies, renderer, animation).

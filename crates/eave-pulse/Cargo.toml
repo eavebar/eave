@@ -1,0 +1,13 @@
+[package]
+name = "eave-pulse"
+version = "0.1.0"
+description = "Audio for eave plugins, over the PulseAudio protocol (PipeWire's pipewire-pulse)"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Pure-Rust PulseAudio protocol: no libpulse, no libpipewire, no bindgen (D-19).
+pulseaudio = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio = { version = "1", default-features = false, features = ["sync", "rt"] }

@@ -1,0 +1,15 @@
+[package]
+name = "eave-volume"
+version = "0.1.0"
+description = "Output volume: scroll to change, right click to mute, outputs in the popover, for eave"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+eave-pulse.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

@@ -28,7 +28,7 @@ eave keeps these apart. The **host** does the first job and owns everything visu
 
 - **Host** ([D-11](decisions.md)): owns every surface, the layout, the look and the motion. It is not pluggable.
 - **Widgets** implement `eave_api::Widget`. They can't pick colors or sizes, can't build raw iced elements, and can't move other items or the bar ([D-13](decisions.md)).
-- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-dbus` shares one system bus connection ([D-18](decisions.md)). PipeWire comes with volume.
+- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-dbus` shares one system bus connection ([D-18](decisions.md)). `crates/eave-pulse` holds the one audio event subscription ([D-19](decisions.md)).
 
 ## Data flow
 
@@ -62,14 +62,14 @@ A click on an item that has a popover and no `on_press`:
 | Workspaces, active window, monitors | Hyprland | `.socket2.sock` events + `.socket.sock` queries (our own client) |
 | Clock | system time | 1 s timer (`eave_api::time::every`) |
 | Battery | UPower | D-Bus (`zbus`), `PropertiesChanged` signals |
-| Volume | PipeWire / WirePlumber | `pipewire` crate listener |
+| Volume | PipeWire (through pipewire-pulse) | PulseAudio native protocol, pure Rust, subscribed to sink/server events ([D-19](decisions.md)) |
 | Media | MPRIS | D-Bus (`zbus`) |
 | Network | NetworkManager or iwd | D-Bus (`zbus`) |
 | Bluetooth | BlueZ | D-Bus (`zbus`) |
 | Tray | StatusNotifierItem | D-Bus. We must act as the watcher/host. The hardest widget. |
 | CPU / RAM / temps | `/proc`, `/sys` | timer (the only legitimate polling) |
 
-So far: clock, workspaces, active window, keyboard layout, battery and network. Volume is next. See [roadmap.md](roadmap.md).
+So far: clock, workspaces, active window, keyboard layout, battery, network and volume. Media is next. See [roadmap.md](roadmap.md).
 
 ## Code layout
 
@@ -93,6 +93,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/measure.rs           popover sizing
 crates/eave-build/         builds a binary with the plugins from plugins.toml
 crates/eave-dbus/          service: shared system bus, snapshot-on-PropertiesChanged watcher
+crates/eave-pulse/         service: audio over the PulseAudio protocol (one event thread)
 crates/eave-hyprland/      service: shared socket2 events, socket1 queries and dispatches
 plugins/clock/             the clock plugin (crate eave-clock) + eave-plugin.toml
 plugins/workspaces/        Hyprland workspaces (eave-workspaces)
@@ -100,6 +101,7 @@ plugins/window/            focused window title (eave-window)
 plugins/keyboard/          keyboard layout (eave-keyboard)
 plugins/battery/           battery from UPower (eave-battery)
 plugins/network/           network from NetworkManager (eave-network)
+plugins/volume/            output volume and switching (eave-volume)
 ```
 
 The rule: **split a file when it gets a second responsibility, not before.** Each service is its own crate (`eave-hyprland`, later a D-Bus one), so a plugin only compiles in the sources it uses.

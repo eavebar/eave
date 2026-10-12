@@ -51,6 +51,7 @@ They ship in the default binary, and with `eave-build` you list them like the cl
 | `window` | focused window title, hidden when nothing has focus | `max_chars` (default 60) |
 | `battery` | percent, `↑` while charging, warning/critical tones; time left and power draw in the popover; hidden without a battery | `warning` (default 20), `critical` (default 10) |
 | `network` | Wi-Fi name and signal, `Wired`, `Offline`; address, gateway, band in the popover | `show_name` (default true) |
+| `volume` | default output volume, `Muted`; scroll to change, right click to mute; −/+, mute, output list in the popover | `step` (default 5), `max` (default 100) |
 | `keyboard` | active layout, click for the next one; hidden with a single layout | `aliases` (`{ "English (US)" = "us" }`) |
 
 ```toml
@@ -152,7 +153,9 @@ async fn snapshot() -> std::io::Result<eave_hyprland::types::Window> {
 
 `eave_hyprland::dispatch("hl.dsp.focus({ workspace = 3 })", "workspace 3")` runs a dispatcher. Give it in both the Lua syntax of Hyprland 0.56+ and the older one, and it uses whichever this Hyprland speaks. `request("…")` sends any other command.
 
-For D-Bus, depend on `eave-dbus`: `eave_dbus::watch(service, snapshot)` yields a snapshot of the service's state, then a new one after each `PropertiesChanged` on the objects the snapshot depends on. Unchanged snapshots are skipped. `properties(...)` reads every property of an interface in one call. Run them in a `Task`.
+For D-Bus, depend on `eave-dbus`: `eave_dbus::watch(service, snapshot)` yields a snapshot of the service's state, then a new one after each `PropertiesChanged` on the objects the snapshot depends on. Unchanged snapshots are skipped. `properties(...)` reads every property of an interface in one call.
+
+For audio, depend on `eave-pulse`: `watch()` yields the outputs (sinks, default, volume, mute) after every change, and `set_volume`, `set_mute` and `set_default` send commands. Run them in a `Task`.
 
 ### The rules
 

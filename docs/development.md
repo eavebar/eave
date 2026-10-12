@@ -59,6 +59,7 @@ Current baseline (Asahi, aarch64, release, tiny-skia, default binary). Measured 
 | two clocks, popover open | | ~14.5 MB | |
 | workspaces, window, clock, keyboard (after D-16/D-17) | 6.1 MiB | ~12.2 MB | 0.1% |
 | + network, battery (after D-18, zbus) | 7.0 MiB | ~13.5 MB | 0.1% |
+| + volume (after D-19) | 7.3 MiB | ~13.9 MB | 0.1% |
 
 Before the plugin split (skeleton, clock + date hard-coded): binary 5.6 MiB, RSS ~11.5 MB. The +0.2 MiB of binary and +0.3 MB of RSS are the price of the registry, config parsing (`toml`) and popover surfaces ([D-12](decisions.md), [D-14](decisions.md)).
 

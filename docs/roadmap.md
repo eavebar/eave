@@ -13,10 +13,10 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **3.5 Keyboard layout.** `plugins/keyboard`: `activelayout` events, click to switch, hidden with a single layout.
 - [x] **4. Battery.** `plugins/battery`: UPower's display device over zbus, re-read only on `PropertiesChanged` ([D-18](decisions.md)).
 - [x] **4.5 Network.** `plugins/network`: NetworkManager's primary connection, with Wi-Fi strength, band, address and gateway in the popover. iwd-only systems (no NetworkManager) aren't covered yet.
+- [x] **5. Volume.** `plugins/volume` on `crates/eave-pulse`: the PulseAudio protocol served by pipewire-pulse ([D-19](decisions.md)). Scroll changes it, right click mutes, and the popover has −/+, mute and output switching.
 
 ## Next
 
-- [ ] **5. Volume.** PipeWire listener. Scroll to change it, click to mute.
 - [ ] **6. Media.** MPRIS over zbus.
 - [ ] **7. Bluetooth.** BlueZ over zbus, on `eave-dbus`.
 - [ ] **8. System tray.** StatusNotifierItem watcher and host, with menus.
