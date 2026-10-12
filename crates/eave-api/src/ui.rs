@@ -174,6 +174,8 @@ pub enum Kind<M> {
         text: String,
         tone: Option<Tone>,
     },
+    /// Pages and their names. The host shows one at a time and owns which.
+    Tabs(Vec<(String, Node<M>)>),
 }
 
 pub fn label<M>(text: impl Into<String>) -> Node<M> {
@@ -429,6 +431,18 @@ pub fn badge<M>(text: impl Into<String>) -> Node<M> {
     })
 }
 
+/// Pages behind a row of tabs, one page showing at a time: a popover's Output, Input and Apps.
+/// The host draws the tabs, switches pages when one is clicked and starts on the first each time
+/// the popover opens, so the plugin keeps no state for it. In the bar, only the first page shows.
+pub fn tabs<M>(pages: impl IntoIterator<Item = (impl Into<String>, Node<M>)>) -> Node<M> {
+    Node(Kind::Tabs(
+        pages
+            .into_iter()
+            .map(|(name, page)| (name.into(), page))
+            .collect(),
+    ))
+}
+
 impl<M> Node<M> {
     /// Sets the tone of this text, or of every text inside this node that has none yet.
     pub fn tone(mut self, tone: Tone) -> Self {
@@ -592,6 +606,11 @@ impl<M> Node<M> {
                     .iter_mut()
                     .chain(trailing.iter_mut())
                     .for_each(|child| child.set_tone(new));
+            }
+            Kind::Tabs(pages) => {
+                for (_, page) in pages {
+                    page.set_tone(new);
+                }
             }
             Kind::Switcher { options, .. } => {
                 options
@@ -760,6 +779,12 @@ impl<M> Node<M> {
             Kind::Display(content) => Kind::Display(Box::new(content.map(f))),
             Kind::Mark(content) => Kind::Mark(Box::new(content.map(f))),
             Kind::Badge { text, tone } => Kind::Badge { text, tone },
+            Kind::Tabs(pages) => Kind::Tabs(
+                pages
+                    .into_iter()
+                    .map(|(name, page)| (name, page.map(f)))
+                    .collect(),
+            ),
         })
     }
 
@@ -1045,6 +1070,36 @@ mod tests {
             panic!("text input lost");
         };
         assert_eq!(on_input("abcd".into()), 40);
+    }
+
+    #[test]
+    fn tabs_map_and_tone_every_page() {
+        let node = tabs([("a", button(label("x"), 1)), ("b", button(label("y"), 2))])
+            .tone(Tone::Dim)
+            .map(&|n: i32| n * 10);
+        let Kind::Tabs(pages) = node.into_kind() else {
+            panic!("tabs became something else");
+        };
+        let names: Vec<_> = pages.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["a", "b"]);
+        let mut messages = Vec::new();
+        for (_, page) in pages {
+            let Kind::Button {
+                content, on_press, ..
+            } = page.into_kind()
+            else {
+                panic!("page lost its button");
+            };
+            assert!(matches!(
+                content.into_kind(),
+                Kind::Label {
+                    tone: Some(Tone::Dim),
+                    ..
+                }
+            ));
+            messages.push(on_press);
+        }
+        assert_eq!(messages, [10, 20]);
     }
 
     #[test]

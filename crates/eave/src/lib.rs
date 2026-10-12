@@ -16,6 +16,7 @@ mod meter;
 mod slot;
 mod squircle;
 mod switcher;
+mod tabs;
 mod theme;
 mod toggle;
 mod watch;

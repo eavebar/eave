@@ -126,6 +126,11 @@ pub const GRID_ROW: f32 = 32.0;
 pub const BADGE_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
 /// A scrolling list's scrollbar.
 pub const SCROLLER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.20);
+/// Tabs: a pill-shaped track with a mark sliding behind the current tab, inset by `TAB_INSET`.
+pub const TAB_HEIGHT: f32 = 28.0;
+pub const TAB_INSET: f32 = 2.0;
+pub const TAB_TRACK: Color = BUTTON_BG;
+pub const TAB_MARK: Color = SELECTED_BG;
 /// The width at the end of a long title that fades out instead of being cut.
 pub const TEXT_FADE: f32 = 16.0;
 

@@ -37,11 +37,11 @@ impl<'a, M> Switcher<'a, M> {
     }
 }
 
-/// The mark's motion. Positions are relative to the switcher.
+/// The mark's motion. Positions are relative to the switcher. Tabs slide their mark with it too.
 #[derive(Debug, Default)]
-struct Motion {
+pub(crate) struct Motion {
     /// Where the mark is drawn this frame.
-    shown: Option<Rectangle>,
+    pub(crate) shown: Option<Rectangle>,
     from: Rectangle,
     to: Option<Rectangle>,
     start: Option<Instant>,
@@ -49,7 +49,7 @@ struct Motion {
 
 impl Motion {
     /// Advances to `now`, heading for `target`. Returns whether another frame is needed.
-    fn step(&mut self, target: Option<Rectangle>, now: Instant) -> bool {
+    pub(crate) fn step(&mut self, target: Option<Rectangle>, now: Instant) -> bool {
         let Some(target) = target else {
             *self = Self::default();
             return false;

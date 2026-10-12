@@ -22,6 +22,7 @@ use crate::gulp::Gulp;
 use crate::icon;
 use crate::meter::Meter;
 use crate::switcher::Switcher;
+use crate::tabs::Tabs;
 use crate::theme;
 use crate::toggle::Toggle;
 
@@ -50,6 +51,7 @@ pub fn app_ids<M: 'static>(node: Node<M>, out: &mut Vec<String>) {
         | Kind::Mark(content)
         | Kind::Detail { value: content, .. } => all(vec![*content]),
         Kind::Switcher { options, .. } => all(options.into_iter().map(|(node, _)| node).collect()),
+        Kind::Tabs(pages) => all(pages.into_iter().map(|(_, page)| page).collect()),
         Kind::ListItem {
             leading, trailing, ..
         } => all(leading
@@ -415,6 +417,18 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                     ..container::Style::default()
                 })
                 .into()
+        }
+        Kind::Tabs(pages) if pages.is_empty() => text("").into(),
+        Kind::Tabs(pages) if ctx.panel() => {
+            let (names, pages): (Vec<_>, Vec<_>) = pages
+                .into_iter()
+                .map(|(name, page)| (name, render(page, ctx, icons)))
+                .unzip();
+            Tabs::new(names, pages).into()
+        }
+        Kind::Tabs(pages) => {
+            let (_, first) = pages.into_iter().next().expect("not empty");
+            render(first, ctx, icons)
         }
         Kind::Badge {
             text: content,
