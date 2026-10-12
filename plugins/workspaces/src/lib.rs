@@ -1,9 +1,11 @@
-//! Hyprland workspaces. Click one to go there, scroll to move between them. The host slides the
+//! Hyprland workspaces that have windows in them, plus the one you are on. Click one to go there, scroll to move between them. The host slides the
 //! active mark from the old workspace to the new one.
 
 use eave_api::ui::{self, Item, Tone};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
-use eave_hyprland::types::Workspace;
+use std::collections::HashMap;
+
+use eave_hyprland::types::{Client, Workspace};
 use eave_hyprland::{Event, Update};
 use serde::Deserialize;
 
@@ -14,7 +16,7 @@ pub fn register(registry: &mut Registry) {
 #[derive(Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// Workspaces 1 to `persistent` are always shown, even when Hyprland has none open.
+    /// Workspaces 1 to `persistent` are always shown, even when empty or not open.
     persistent: u32,
 }
 
@@ -24,6 +26,9 @@ pub struct Workspaces {
     shown: Vec<Shown>,
     /// What Hyprland has open, from which `shown` is derived.
     open: Vec<(i64, String)>,
+    /// Every window's workspace, by address without the `0x`. Only workspaces in here, and the
+    /// active one, are shown.
+    windows: HashMap<String, i64>,
     active: Option<i64>,
 }
 
@@ -36,6 +41,7 @@ struct Shown {
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     workspaces: Vec<Workspace>,
+    clients: Vec<Client>,
     active: i64,
 }
 
@@ -56,6 +62,7 @@ impl Widget for Workspaces {
             persistent: config.persistent,
             shown: Vec::new(),
             open: Vec::new(),
+            windows: HashMap::new(),
             active: None,
         };
         workspaces.refresh();
@@ -69,6 +76,11 @@ impl Widget for Workspaces {
                     .workspaces
                     .into_iter()
                     .map(|workspace| (workspace.id, workspace.name))
+                    .collect();
+                self.windows = snapshot
+                    .clients
+                    .into_iter()
+                    .map(|client| (address(&client.address), client.workspace.id))
                     .collect();
                 self.active = Some(snapshot.active);
             }
@@ -119,6 +131,23 @@ impl Workspaces {
                     open.1 = name;
                 }
             }
+            Event::OpenWindow { address, workspace } => {
+                let id = self
+                    .open
+                    .iter()
+                    .find(|(_, name)| *name == workspace)
+                    .map(|(id, _)| *id)
+                    .or_else(|| workspace.parse().ok());
+                if let Some(id) = id {
+                    self.windows.insert(address, id);
+                }
+            }
+            Event::CloseWindow { address } => {
+                self.windows.remove(&address);
+            }
+            Event::MoveWindow { address, workspace } => {
+                self.windows.insert(address, workspace);
+            }
             _ => {}
         }
     }
@@ -135,6 +164,7 @@ impl Workspaces {
             .open
             .iter()
             .filter(|(id, _)| *id > 0)
+            .filter(|(id, _)| Some(*id) == self.active || self.windows.values().any(|w| w == id))
             .map(|(id, name)| Shown {
                 id: *id,
                 name: name.clone(),
@@ -155,11 +185,18 @@ impl Workspaces {
 
 async fn snapshot() -> std::io::Result<Snapshot> {
     let workspaces = eave_hyprland::query("workspaces").await?;
+    let clients = eave_hyprland::query("clients").await?;
     let active: Workspace = eave_hyprland::query("activeworkspace").await?;
     Ok(Snapshot {
         workspaces,
+        clients,
         active: active.id,
     })
+}
+
+/// `clients` gives addresses as `0x5d1f2a0`, events as `5d1f2a0`.
+fn address(address: &str) -> String {
+    address.trim_start_matches("0x").to_string()
 }
 
 /// Goes to `workspace`, a Lua value: a number, or a quoted relative target like `"m+1"`.
@@ -191,22 +228,30 @@ mod tests {
         workspaces.update(Message::Hyprland(Update::Event(event)));
     }
 
+    fn workspace(id: i64, name: &str) -> Workspace {
+        Workspace {
+            id,
+            name: name.into(),
+            ..Workspace::default()
+        }
+    }
+
+    fn client(address: &str, id: i64) -> Client {
+        Client {
+            address: address.into(),
+            workspace: eave_hyprland::types::WorkspaceRef {
+                id,
+                name: id.to_string(),
+            },
+        }
+    }
+
     #[test]
     fn follows_events() {
         let mut workspaces = bar(0);
         workspaces.update(Message::Hyprland(Update::Snapshot(Snapshot {
-            workspaces: vec![
-                Workspace {
-                    id: 2,
-                    name: "2".into(),
-                    ..Workspace::default()
-                },
-                Workspace {
-                    id: -98,
-                    name: "special:scratch".into(),
-                    ..Workspace::default()
-                },
-            ],
+            workspaces: vec![workspace(2, "2"), workspace(-98, "special:scratch")],
+            clients: vec![client("0xa", 2), client("0xb", -98)],
             active: 2,
         })));
         assert_eq!(ids(&workspaces), [2]);
@@ -218,6 +263,7 @@ mod tests {
                 name: "1".into(),
             },
         );
+        assert_eq!(ids(&workspaces), [2], "empty workspaces stay hidden");
         event(
             &mut workspaces,
             Event::Workspace {
@@ -225,8 +271,17 @@ mod tests {
                 name: "1".into(),
             },
         );
-        assert_eq!(ids(&workspaces), [1, 2]);
         assert_eq!(workspaces.active, Some(1));
+        assert_eq!(ids(&workspaces), [1, 2], "unless they are active");
+
+        event(
+            &mut workspaces,
+            Event::OpenWindow {
+                address: "c".into(),
+                workspace: "1".into(),
+            },
+        );
+        assert_eq!(ids(&workspaces), [1, 2]);
 
         event(&mut workspaces, Event::DestroyWorkspace { id: 2 });
         event(
@@ -246,6 +301,43 @@ mod tests {
     }
 
     #[test]
+    fn hides_workspaces_once_their_windows_leave() {
+        let mut workspaces = bar(0);
+        workspaces.update(Message::Hyprland(Update::Snapshot(Snapshot {
+            workspaces: vec![workspace(1, "1"), workspace(3, "web")],
+            clients: vec![client("0xa", 1), client("0xb", 3)],
+            active: 1,
+        })));
+        assert_eq!(ids(&workspaces), [1, 3]);
+
+        event(
+            &mut workspaces,
+            Event::MoveWindow {
+                address: "b".into(),
+                workspace: 1,
+            },
+        );
+        assert_eq!(ids(&workspaces), [1]);
+
+        event(
+            &mut workspaces,
+            Event::OpenWindow {
+                address: "c".into(),
+                workspace: "web".into(),
+            },
+        );
+        assert_eq!(ids(&workspaces), [1, 3]);
+
+        event(
+            &mut workspaces,
+            Event::CloseWindow {
+                address: "c".into(),
+            },
+        );
+        assert_eq!(ids(&workspaces), [1]);
+    }
+
+    #[test]
     fn persistent_workspaces_fill_the_gaps() {
         let mut workspaces = bar(3);
         assert_eq!(ids(&workspaces), [1, 2, 3]);
@@ -254,6 +346,14 @@ mod tests {
             Event::CreateWorkspace {
                 id: 7,
                 name: "7".into(),
+            },
+        );
+        assert_eq!(ids(&workspaces), [1, 2, 3]);
+        event(
+            &mut workspaces,
+            Event::OpenWindow {
+                address: "a".into(),
+                workspace: "7".into(),
             },
         );
         assert_eq!(ids(&workspaces), [1, 2, 3, 7]);

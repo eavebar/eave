@@ -22,6 +22,23 @@ pub struct Window {
     pub title: String,
 }
 
+/// From `clients`: every window Hyprland manages.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Client {
+    /// Like `0x5d1f2a0`. Events give the same address without the `0x`.
+    pub address: String,
+    pub workspace: WorkspaceRef,
+}
+
+/// A window's workspace, as `clients` names it.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct WorkspaceRef {
+    pub id: i64,
+    pub name: String,
+}
+
 /// From `devices`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -62,6 +79,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!((workspaces[0].id, workspaces[0].windows), (1, 2));
+
+        let clients: Vec<Client> = serde_json::from_str(
+            r#"[{"address":"0x5d1f2a0","mapped":true,"workspace":{"id":3,"name":"3"},"class":"kitty"}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (clients[0].address.as_str(), clients[0].workspace.id),
+            ("0x5d1f2a0", 3)
+        );
 
         let none: Window = serde_json::from_str("{}").unwrap();
         assert!(none.title.is_empty());
