@@ -27,6 +27,25 @@ use iced_layershell::settings::{LayerShellSettings, Settings};
 pub use eave_api;
 pub use iced_layershell::Error;
 
+/// Points the text engine's sans-serif at the first family in [`theme::SANS_FAMILIES`] that's
+/// installed, so every weight of the bar's text comes from one sans face.
+fn use_installed_sans() {
+    let mut fonts = iced::advanced::graphics::text::font_system()
+        .write()
+        .expect("the font system");
+    let db = fonts.raw().db_mut();
+    let installed = |family: &str| {
+        db.faces()
+            .any(|face| face.families.iter().any(|(name, _)| name == family))
+    };
+    match theme::SANS_FAMILIES.iter().find(|family| installed(family)) {
+        Some(family) => db.set_sans_serif_family(*family),
+        None => eprintln!(
+            "eave: none of the usual sans-serif fonts is installed; bold text may not match"
+        ),
+    }
+}
+
 /// Builds the registry from `plugins`, reads `config.toml` (and keeps watching it), and runs the
 /// bar until it exits.
 pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
@@ -42,6 +61,8 @@ pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
         );
         std::process::exit(1);
     }
+
+    use_installed_sans();
 
     let config = config::load().unwrap_or_else(|error| {
         eprintln!("eave: config: {error}");

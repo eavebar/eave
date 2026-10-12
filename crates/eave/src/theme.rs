@@ -184,6 +184,21 @@ pub const STRONG_FONT: Font = Font {
 /// The large number of a popover ([`eave_api::ui::display`]).
 pub const DISPLAY_SIZE: f32 = 32.0;
 
+/// Sans-serif families, most wanted first. iced's text engine asks for one it names itself (Open
+/// Sans); when that isn't installed, plain text still finds a sans face, but bold and semibold
+/// fall back to whatever has that weight, often a serif. So the host names one that is there.
+pub const SANS_FAMILIES: &[&str] = &[
+    "Open Sans",
+    "Noto Sans",
+    "Inter",
+    "Cantarell",
+    "DejaVu Sans",
+    "Liberation Sans",
+    "Roboto",
+    "Ubuntu",
+    "FreeSans",
+];
+
 pub fn tone(tone: Tone) -> Color {
     match tone {
         Tone::Normal => Color::from_rgb(0.90, 0.90, 0.92),
