@@ -29,6 +29,19 @@ pub enum Event {
         id: i64,
         name: String,
     },
+    /// A window opened on the workspace named `workspace` (`openwindow`). `address` has no `0x`.
+    OpenWindow {
+        address: String,
+        workspace: String,
+    },
+    CloseWindow {
+        address: String,
+    },
+    /// A window moved to another workspace (`movewindowv2`).
+    MoveWindow {
+        address: String,
+        workspace: i64,
+    },
     /// Both empty when no window has focus.
     ActiveWindow {
         class: String,
@@ -84,6 +97,23 @@ impl Event {
                 [workspace, name] => Self::RenameWorkspace {
                     id: id(workspace)?,
                     name: name.into(),
+                },
+                _ => return None,
+            },
+            "openwindow" => match fields(4)[..] {
+                [address, workspace, _class, _title] => Self::OpenWindow {
+                    address: address.into(),
+                    workspace: workspace.into(),
+                },
+                _ => return None,
+            },
+            "closewindow" => Self::CloseWindow {
+                address: data.into(),
+            },
+            "movewindowv2" => match fields(3)[..] {
+                [address, workspace, _name] => Self::MoveWindow {
+                    address: address.into(),
+                    workspace: id(workspace)?,
                 },
                 _ => return None,
             },
@@ -148,6 +178,30 @@ mod tests {
     }
 
     #[test]
+    fn parses_window_events() {
+        assert_eq!(
+            Event::parse("openwindow>>5d1f2a0,2,kitty,a, b"),
+            Some(Event::OpenWindow {
+                address: "5d1f2a0".into(),
+                workspace: "2".into()
+            })
+        );
+        assert_eq!(
+            Event::parse("closewindow>>5d1f2a0"),
+            Some(Event::CloseWindow {
+                address: "5d1f2a0".into()
+            })
+        );
+        assert_eq!(
+            Event::parse("movewindowv2>>5d1f2a0,4,4"),
+            Some(Event::MoveWindow {
+                address: "5d1f2a0".into(),
+                workspace: 4
+            })
+        );
+    }
+
+    #[test]
     fn titles_keep_their_commas() {
         assert_eq!(
             Event::parse("activewindow>>firefox,Hello, world — Mozilla Firefox"),
@@ -167,7 +221,8 @@ mod tests {
 
     #[test]
     fn ignores_unknown_and_malformed_lines() {
-        assert_eq!(Event::parse("openwindow>>abc,1,kitty,kitty"), None);
+        assert_eq!(Event::parse("openwindowv3>>abc,1,kitty,kitty"), None);
+        assert_eq!(Event::parse("movewindowv2>>abc,web"), None);
         assert_eq!(Event::parse("workspacev2>>three,3"), None);
         assert_eq!(Event::parse("workspacev2>>3"), None);
         assert_eq!(Event::parse("garbage"), None);

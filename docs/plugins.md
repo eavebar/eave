@@ -52,7 +52,7 @@ They ship in the default binary, and with `eave-build` you list them like the cl
 | Widget | Shows | Options |
 |---|---|---|
 | `clock` | time, calendar in the popover | `format` (strftime, default `%H:%M`) |
-| `workspaces` | Hyprland workspaces, active one marked; click to go, scroll to move | `persistent` (workspaces 1..N always shown, default 0) |
+| `workspaces` | Hyprland workspaces that have windows, plus the active one (marked); click to go, scroll to move | `persistent` (workspaces 1..N always shown, even empty, default 0) |
 | `window` | focused window title, hidden when nothing has focus | `max_chars` (default 60) |
 | `battery` | percent, `↑` while charging, warning/critical tones; time left and power draw in the popover; hidden without a battery | `warning` (default 20), `critical` (default 10) |
 | `network` | Wi-Fi name and signal, `Wired`, `Offline`; address, gateway, band in the popover | `show_name` (default true) |
