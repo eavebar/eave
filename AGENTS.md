@@ -40,10 +40,12 @@ We build it ourselves, not on a framework like Quickshell or AGS, because we wan
 - **Keep both architectures building:** aarch64 (Asahi) and x86_64 (CachyOS). No arch-specific code without a fallback.
 - **Plugins describe, the host draws.** Never give plugins colors, sizes, raw iced elements or control over layout. Extend the `ui` vocabulary in `eave-api` and render it in `crates/eave/src/kit.rs` instead.
 - **Built-in widgets are plugins.** They use only the public `eave-api`. No private shortcuts into the host.
+- **Leave visual testing to the user.** Don't take screenshots or record the screen to judge how something looks or moves. Run the tests, start the bar, and ask the user to try it and tell you what they see.
 - **Keep the docs true.** If you change a decision, update `docs/decisions.md` and say why. Don't just delete the old reasoning: mark it superseded.
 
 ## Git workflow for agents
 
 - **Work in your own worktree and branch.** Never edit on `main` directly. Create a branch and a worktree for it under `.worktrees/` (git ignores that folder), e.g. `git worktree add .worktrees/<branch> -b <branch>`.
+- **Commit without asking in your own worktree.** Commit each finished step on your branch as you go. Merging into `main` and pushing still wait for the user.
 - **Merging means cleaning up.** When asked to merge a branch, merge it, then delete the branch both locally and on the remote (`git push origin --delete <branch>`), and remove its worktree (`git worktree remove .worktrees/<branch>`).
 - **Check before deleting work that isn't yours.** If asked to merge branches or worktrees you did not create in the current session, first check them for uncommitted changes (`git -C <worktree> status`) and for commits that haven't been pushed or merged. If you find any, stop and ask the user what to do. Don't delete anything until they answer.
