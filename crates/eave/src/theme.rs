@@ -6,9 +6,17 @@ use std::time::Duration;
 use eave_api::ui::Tone;
 use iced::{Color, Font, font};
 
-pub const BAR_HEIGHT: u32 = 32;
+/// Height of an island, the visible part of the bar.
+pub const ISLAND_HEIGHT: u32 = 32;
+/// Space between the islands and the top, left and right screen edges. Same as [`PANEL_GAP`], so
+/// popovers line up with the islands.
+pub const EDGE_GAP: u16 = 6;
+/// Transparent space below the islands, so a dragged island can dip down without being cut off.
+pub const DRAG_ROOM: u16 = 6;
+/// The bar surface and its exclusive zone: an island, the gap above it and the room below it.
+pub const BAR_HEIGHT: u32 = EDGE_GAP as u32 + ISLAND_HEIGHT + DRAG_ROOM as u32;
 
-pub const BAR_BG: Color = Color::from_rgba(0.07, 0.07, 0.09, 0.85);
+pub const ISLAND_BG: Color = Color::BLACK;
 pub const PANEL_BG: Color = Color::from_rgba(0.09, 0.09, 0.11, 0.95);
 pub const PANEL_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 pub const HOVER_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
@@ -17,8 +25,26 @@ pub const SEPARATOR: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);
 /// Behind the current option of a switcher (the active workspace).
 pub const SWITCHER_MARK: Color = Color::from_rgba(0.53, 0.70, 1.00, 0.22);
 
-/// Horizontal padding at the bar's ends.
-pub const BAR_PADDING: u16 = 12;
+/// Horizontal padding inside each island, at its ends.
+pub const ISLAND_PADDING: u16 = 14;
+/// Corner radius of an island, before smoothing.
+pub const ISLAND_RADIUS: f32 = 14.0;
+/// How far each corner's curve blends into the straight edges (0 is a plain rounded rectangle,
+/// 0.6 is the iOS look). On an island too short for the full spread, the curve is squeezed to fit
+/// rather than the smoothing reduced, so a radius up to half the island's height stays smooth.
+pub const ISLAND_SMOOTHING: f32 = 0.6;
+/// How far each side of a pressed island moves in, in logical pixels.
+pub const PRESS_INSET: f32 = 1.5;
+/// The most a dragged island moves, sideways and up or down. It only approaches these: the further
+/// the pointer goes, the harder it pulls back.
+pub const DRAG_LIMIT_X: f32 = 10.0;
+pub const DRAG_LIMIT_Y: f32 = 5.0;
+/// How directly a drag moves the island at first: 1 follows the pointer, lower feels heavier.
+pub const DRAG_RESISTANCE: f32 = 0.5;
+/// The spring that moves an island back into place: stiffness, and damping ratio (below 1 it
+/// overshoots a little before settling).
+pub const SPRING_STIFFNESS: f32 = 600.0;
+pub const SPRING_DAMPING: f32 = 0.5;
 /// Horizontal padding inside each item, so its click target is wider than its text.
 pub const ITEM_PADDING: u16 = 6;
 pub const ITEM_SPACING: u32 = 4;
@@ -33,6 +59,9 @@ pub const BUTTON_RADIUS: f32 = 6.0;
 
 /// How long a switcher's mark takes to reach a newly current option.
 pub const SWITCHER_SLIDE: Duration = Duration::from_millis(180);
+/// A primary press held at least this long is a long press: it plays with the island, but the
+/// item's action and popover don't fire on release.
+pub const LONG_PRESS: Duration = Duration::from_millis(400);
 /// Touchpad scrolling distance, in logical pixels, that counts as one scroll step.
 pub const SCROLL_STEP: f32 = 30.0;
 

@@ -2,6 +2,7 @@
 
 mod app;
 mod config;
+mod island;
 mod kit;
 mod measure;
 mod slot;

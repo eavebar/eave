@@ -464,6 +464,11 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
         quote(&eave_dir.join("crates/eave-hyprland")),
         quote(&eave_dir.join("crates/eave-pulse"))
     );
+    // eave's patched softbuffer, so transparent pixels stay transparent (D-24).
+    manifest += &format!(
+        "softbuffer = {{ path = {} }}\n",
+        quote(&eave_dir.join("vendor/softbuffer"))
+    );
     // Same profile as eave's own release builds (D-10).
     manifest += "\n[profile.release]\nlto = \"thin\"\ncodegen-units = 1\nstrip = true\npanic = \"abort\"\n\n\
                  # Standalone: never part of an enclosing workspace.\n[workspace]\n";

@@ -8,7 +8,7 @@ repository.workspace = true
 
 [dependencies]
 eave-api.workspace = true
-iced = { version = "0.14", default-features = false, features = ["tiny-skia", "wayland", "tokio", "crisp", "advanced"] }
+iced = { version = "0.14", default-features = false, features = ["tiny-skia", "wayland", "tokio", "crisp", "advanced", "canvas"] }
 iced_layershell = "0.19"
 # Only for the popover's pointer-leave grace timer; already in the tree through iced.
 tokio = { version = "1", default-features = false, features = ["time"] }

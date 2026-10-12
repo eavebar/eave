@@ -33,7 +33,7 @@ The bar is idle almost all the time. It wakes up only when the world changes: Hy
 "From scratch" means we own the architecture and the data layer. It does not mean writing a font rasterizer. We use solid building blocks (iced for UI and layout, zbus for D-Bus, the layer-shell binding) and write ourselves the parts that are small and central to the bar. A Hyprland IPC client is about 100 lines, so we write it instead of pulling in a crate.
 
 ### Empty by default, everything is a plugin
-With no plugins configured, the bar is an empty strip. The clock, the battery and the workspaces are all plugins written against the same public API a third party would use. That keeps the API honest: if a built-in widget needs something, every plugin gets it too.
+With no plugins configured, the bar draws nothing. The clock, the battery and the workspaces are all plugins written against the same public API a third party would use. That keeps the API honest: if a built-in widget needs something, every plugin gets it too.
 
 ### Simple code over clever code
 The Elm-style architecture (`Message → update → view`) keeps all state in one place and every change explicit. Modules should read like the code around them. No abstraction until there's a second user of it.

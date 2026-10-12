@@ -1,5 +1,9 @@
 //! The wrapper around every bar item. It turns clicks and scrolls the content didn't handle into
-//! messages, and reports where the item is, so a popover can open under it.
+//! messages, and reports where the item is, so a popover can open under it. A primary click counts
+//! on release, and only if it was short: a long press is for playing with the island, not for
+//! opening things.
+
+use std::time::Instant;
 
 use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
@@ -14,6 +18,13 @@ pub struct Slot<'a, M> {
     on_secondary: Option<M>,
     /// Up, then down.
     on_scroll: Option<(M, M)>,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    scrolled: Scrolled,
+    /// When the primary button went down on this item, until it comes back up.
+    pressed: Option<Instant>,
 }
 
 /// Touchpad scrolling that hasn't added up to a whole step yet. Positive is up.
@@ -61,11 +72,11 @@ impl<'a, M> Slot<'a, M> {
 
 impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slot<'_, M> {
     fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<Scrolled>()
+        tree::Tag::of::<State>()
     }
 
     fn state(&self) -> tree::State {
-        tree::State::new(Scrolled::default())
+        tree::State::new(State::default())
     }
 
     fn size(&self) -> Size<Length> {
@@ -145,6 +156,17 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slot<'_, M> {
             shell,
             viewport,
         );
+        // A release anywhere ends the press; it only counts as a click over the item, and if short.
+        if let Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) = event
+            && let Some(pressed) = tree.state.downcast_mut::<State>().pressed.take()
+            && pressed.elapsed() < crate::theme::LONG_PRESS
+            && cursor.is_over(layout.bounds())
+            && let Some(on_press) = &self.on_press
+        {
+            shell.publish(on_press(layout.bounds(), viewport.width));
+            shell.capture_event();
+            return;
+        }
         if shell.is_event_captured() || !cursor.is_over(layout.bounds()) {
             return;
         }
@@ -152,7 +174,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slot<'_, M> {
         if let (Event::Mouse(mouse::Event::WheelScrolled { delta }), Some((up, down))) =
             (event, &self.on_scroll)
         {
-            let steps = tree.state.downcast_mut::<Scrolled>().steps(*delta);
+            let steps = tree.state.downcast_mut::<State>().scrolled.steps(*delta);
             // A flung wheel can report many lines at once; a handful of steps is plenty.
             let message = if steps > 0 { up } else { down };
             for _ in 0..steps.unsigned_abs().min(5) {
@@ -162,19 +184,20 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slot<'_, M> {
             return;
         }
 
-        let message = match event {
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => self
-                .on_press
-                .as_ref()
-                .map(|f| f(layout.bounds(), viewport.width)),
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
-                self.on_secondary.clone()
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                if self.on_press.is_some() =>
+            {
+                tree.state.downcast_mut::<State>().pressed = Some(Instant::now());
+                shell.capture_event();
             }
-            _ => None,
-        };
-        if let Some(message) = message {
-            shell.publish(message);
-            shell.capture_event();
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+                if let Some(message) = self.on_secondary.clone() {
+                    shell.publish(message);
+                    shell.capture_event();
+                }
+            }
+            _ => {}
         }
     }
 
