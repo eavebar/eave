@@ -216,6 +216,8 @@ A key press closes it too, since 2026-10-12 ([D-36](#d-36-popovers-take-the-keyb
 
 **Measured** (Asahi, release, workspaces + window + clock + keyboard): binary 6.1 MiB (from 5.8), RSS ~12.2 MB, idle CPU 0.1%. Not yet measured: CPU *during* a slide (roadmap step 2).
 
+**Superseded for workspaces by [D-38](#d-38-app-icons-found-and-drawn-by-the-host)** (2026-10-12). Once workspaces showed their app icons, dimming the ones you aren't on made the active one clear enough, so the workspaces widget dropped the switcher, its mark and the accent color. The switcher primitive stays for other "one of N" choices.
+
 ---
 
 ## D-17: One shared Hyprland event reader: snapshot, then events
@@ -605,6 +607,8 @@ The volume item is now `alternate([icon, counter(volume, 0..=max, "%")], showing
 
 **Cost:** a bool compare per pointer event over the bar, inside the widget tree. Entering or leaving an item redraws for one fade (240 ms). Nothing reaches `update` in the app.
 
+**Revised by [D-39](#d-39-expand-is-a-growing-alternate-secondary-clicks-on-buttons)** (2026-10-12): the slot still is the only thing following the pointer, but `SetHovered` now hands alternates the pointer and the item's bounds, and each alternate decides whether it's hovered. Ordinary ones still go by the whole item, as above. Growing ones (`expand`) go by their own width, and wait for the pointer to rest.
+
 ## D-36: Popovers take the keyboard while open
 
 **Status:** accepted (2026-10-12)
@@ -621,6 +625,7 @@ The volume item is now `alternate([icon, counter(volume, 0..=max, "%")], showing
 
 **Measured** (Asahi, release, the user's config, no popover open): binary 7,498,776 bytes, the same as before. RSS ~14.3 MB for both main and this branch, run one after the other.
 
+---
 
 ## D-37: A charging battery ripples and gulps
 
@@ -643,3 +648,53 @@ The volume item is now `alternate([icon, counter(volume, 0..=max, "%")], showing
 So it costs **~3–4% CPU for as long as it's charging**. Not charging: unchanged. 15 and 30 fps are not distinguishable through the noise, so a frame's cost isn't the whole cost, and we keep 30 fps, which moves more smoothly. Not looked into yet. The 120 Hz version read ~12% with an earlier script that rounded down to whole percents. We accept the cost because it only runs on AC power. Binary unchanged (7,498,776 bytes), RSS within noise.
 
 **Superseded first version:** gulps only, in bursts, with the ripple settling after each one and no frames in between (`RedrawRequest::At`). It cost ~5% (7% with longer, more frequent bursts). The user found the gulps too faint and the liquid too lively, and wanted it to ripple all the time, but more subtly.
+
+---
+
+## D-38: App icons, found and drawn by the host
+
+**Status:** accepted (2026-10-12)
+
+**What:** `ui::app_icon(app_id)` adds an application's icon to the vocabulary. The plugin names the app by its window class or app id. The host finds the icon, loads it and draws it at `ICON_SIZE`. `crates/eave/src/apps.rs` finds the app's desktop entry in `$XDG_DATA_HOME` and `$XDG_DATA_DIRS`. It matches the file name first, then `StartupWMClass`, then the name ignoring case or a reverse-DNS prefix, and reads `Icon=`. That name is looked up in the user's icon theme and the themes it `Inherits=`, then in `hicolor`, then in `pixmaps`. The best file is the smallest one at least 32 px, or a scalable one, with SVG winning ties. It falls back to the biggest. The theme is `gtk-icon-theme-name` from GTK 3's (or GTK 4's) `settings.ini`. The lookup runs on tokio's blocking pool, once per app id. The result is drawn there, once, into a 32 px square bitmap: SVGs with resvg, and PNGs halved bilinearly until close, then fitted bicubically. The host keeps the bitmaps in `Bar::icons`, shared by every widget. After each update it walks the items, and the open popover, for app ids it hasn't loaded or started loading. A reload clears the cache, so a new icon theme shows. Until an icon has loaded, or when there is none, the host shows the id's first letter in the same box, so nothing moves when it arrives. `Tone::Dim` draws an icon at `DIM_APP_ICON` opacity (0.45), and other tones leave it as it is: an app icon keeps its own colors.
+
+The workspaces widget is its first user. Each workspace shows its name and the icons of its apps, two at most and one per app, then `+n`, where n counts the windows those icons leave out. Resting the pointer on a workspace shows one icon per window (`expand`, [D-39](#d-39-expand-is-a-growing-alternate-secondary-clicks-on-buttons)). Right-clicking one lists its windows with their titles, kept live by `windowtitlev2`, and clicking a window there focuses it. Workspaces you aren't on are dimmed. That replaces the switcher's mark and the accent color (D-16).
+
+**Why the host and not the plugin:** "plugins describe, the host draws" (D-13). Plugins would otherwise each read the filesystem and hand raw images to the kit. The tray and a future dock need the same lookup.
+
+**Why `settings.ini` and not gsettings:** gsettings means dconf, a daemon or a binary, which D-23 rules out. Every GTK setup writes `settings.ini`, nwg-look and lxappearance included. Without one, `hicolor` still has almost every app's own icon.
+
+**Why resvg after D-29 said no:** D-29 turned down SVG for five status glyphs that are simpler as paths. App icons are third-party art, and most themes ship only SVGs. We use resvg directly with `default-features = false`, so no text, no system fonts and no embedded raster images, and draw into a bitmap ourselves. We tried iced's `svg` feature first. It turns on resvg's defaults (rustybuzz, fontdb loading, gif, jpeg, webp) and costs +1.94 MiB of binary. It would also keep every parsed SVG tree in memory and render on the UI thread. PNG decoding comes from tiny-skia's own `png-format`, which resvg already pulls in. Drawing the bitmaps needs iced's `image-without-codecs`.
+
+**Measured** (Asahi, release, the user's config: workspaces + volume + network + battery + clock, two to three workspaces with windows; each run 10 s after a 5 s settle, alternating):
+- binary: 7,498,776 → 8,285,248 bytes (+0.75 MiB). With iced's `svg` feature it was 9,530,432 bytes.
+- RSS: ~14.3 MB → ~15.7 MB.
+- idle CPU: unchanged, 0.2–0.4 % in quiet runs for both.
+
+**Alternatives:**
+- An icon font: it can't hold arbitrary apps' icons.
+- Plugins passing image bytes: that breaks D-13, and every plugin would repeat the lookup.
+- `freedesktop-icons` or `linicon` crates: they're thin wrappers over the same lookup, without our size choice, and one more dependency for ~150 lines.
+- Following the full icon theme spec (`MinSize`/`MaxSize`/`Threshold` matching): we only ever want 32 px, so "smallest at or above 32, else the biggest" is enough.
+
+---
+
+## D-39: `expand` is a growing alternate; secondary clicks on buttons
+
+**Status:** accepted (2026-10-12)
+
+**What:** `ui::expand(collapsed, expanded)` is an alternate (D-33) with `grows: true`. `Kind::Alternate` gains that field, and `expand` builds `alternate([collapsed, expanded], 0).on_hover(1)` with it set. So it fades and slides exactly like `hover` on volume, battery and clock, and turns around mid-fade the same way. A growing alternate differs only where its changing size calls for it:
+- **Size:** it's as wide as the option on screen, not the widest one. The height stays the tallest, so nothing jumps up or down. The width changes at the fade's midpoint, when the new option comes on screen. The island springs to it (D-27), so the old option fades out at its own size and the new one fades in as the island grows or shrinks.
+- **Hover area:** it's hovered by the pointer over its own width, at any height within the item, not by the whole item. The full height still counts, so a pointer pushed against the screen edge hovers it, and each workspace in a row has its own hover.
+- **Rest:** it changes only once the pointer has rested on it for `HOVER_REST` (200 ms), and changes back as soon as the pointer leaves. It waits with `request_redraw_at`, never polling.
+
+There's still one hover path for everything. `Slot` follows the pointer, and nothing else does. `SetHovered` no longer carries a verdict. It carries the item's bounds, the pointer now and before, and the time, and each alternate decides for itself: an ordinary one by the item, a growing one by its own width. The slide direction (`toward`) moved from the slot into the alternate, so it's worked out from whichever region was crossed. The slot runs `SetHovered` when the pointer comes onto or leaves the item, as before. It also runs it on moves within the item, but only when the item has a growing alternate, which it learns through a `HasGrowing` query once per view. It asks for a frame only if an alternate reports a change.
+
+`button(...).on_secondary(message)` sends a message on a right click on that button. The kit wraps the button in a `mouse_area`. A popover opens on the bar where its item was last pressed. A press on an inner button is captured before `Slot` sees it, so `Slot` now sends `Touched(window, id)` before its content sees any press on the item. That lets a right click on a workspace open the popover even if the item was never left-clicked.
+
+**Why the rest:** growing shifts everything after it. Without the rest, sweeping the pointer across the workspaces opens each in turn, and the one you're heading for keeps moving away. Only growing alternates wait, because only they move their neighbors. The volume percent still shows at once.
+
+**Superseded:** the first version of this decision, on the same branch. `expand` was its own node and its own host widget (`expand.rs`). It tracked hover itself, by checking the pointer against its own bounds, and swapped its two views instantly. That made two hover paths and two motions, so an expanding workspace moved differently from every other hover in the bar. Any plugin choosing between `hover` and `expand` would have got different behavior. The rule is one behavior for every plugin: one hover path, through the slot, and one widget that changes what it shows, the alternate. The original text:
+
+> `ui::expand(collapsed, expanded)` shows `collapsed`, or `expanded` once the pointer has rested over it for `EXPAND_DELAY` (200 ms). It collapses as soon as the pointer leaves. It's only as big as what it shows, so the item grows and the island springs to its new width (D-27). It counts as hovered across its whole width, from the top of the bar to its bottom edge, so a pointer pushed against the screen edge still hovers it. `crates/eave/src/expand.rs` lays out only the child it shows. When hover changes what it shows, it invalidates the layout, and it waits for the delay with `request_redraw_at`, never polling.
+>
+> **Why not `alternate`/`hover` (D-33, D-35):** an alternate keeps room for its biggest option, so the item doesn't change size, and it reacts to the whole item. Here the extra room is the point, and each workspace in the row needs its own hover.

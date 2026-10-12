@@ -283,6 +283,7 @@ mod tests {
             mut options,
             current: 0,
             hovered: Some(1),
+            grows: false,
         } = content.into_kind()
         else {
             panic!("the icon first");

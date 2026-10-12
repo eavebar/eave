@@ -10,7 +10,12 @@ repository.workspace = true
 eave-api.workspace = true
 # Reports clicks anywhere while a popover is open, so a click outside closes it (D-14).
 eave-hyprland.workspace = true
-iced = { version = "0.14", default-features = false, features = ["tiny-skia", "wayland", "tokio", "crisp", "advanced", "canvas"] }
+iced = { version = "0.14", default-features = false, features = ["tiny-skia", "wayland", "tokio", "crisp", "advanced", "canvas", "image-without-codecs"] }
+# App icons (D-38): draws SVG icons, and through its tiny-skia decodes and scales PNG ones, into
+# small bitmaps. No text, fonts or embedded raster images, which app icons don't need.
+resvg = { version = "0.45", default-features = false }
+# Loads app icons on the blocking pool. Already in the build through iced's tokio backend.
+tokio = { version = "1", default-features = false, features = ["rt"] }
 iced_layershell = "0.19"
 toml.workspace = true
 # inotify for config hot reload (D-21); already in the tree through the Wayland stack.

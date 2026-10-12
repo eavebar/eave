@@ -85,6 +85,8 @@ pub const ALTERNATE_FADE: Duration = Duration::from_millis(240);
 /// sideways, or up and down (less, to stay inside the island).
 pub const ALTERNATE_SLIDE_X: f32 = 6.0;
 pub const ALTERNATE_SLIDE_Y: f32 = 4.0;
+/// How long the pointer rests on a growing alternate before it changes.
+pub const HOVER_REST: Duration = Duration::from_millis(200);
 /// How long a counter takes to count to a new number, through every one in between.
 pub const COUNTER_COUNT: Duration = Duration::from_millis(320);
 /// How long a switcher's mark takes to reach a newly current option.
@@ -115,6 +117,8 @@ pub const BATTERY_ICON_WIDTH: f32 = 24.0;
 pub const ICON_STROKE: f32 = 1.5;
 /// How visible the parts of an icon that are off stay, against the parts that are on.
 pub const ICON_OFF_ALPHA: f32 = 0.3;
+/// The opacity of an app icon in `Tone::Dim`, like a workspace you're not on.
+pub const DIM_APP_ICON: f32 = 0.45;
 pub const HEADING_SIZE: f32 = 17.0;
 pub const HEADING_FONT: Font = Font {
     weight: font::Weight::Bold,

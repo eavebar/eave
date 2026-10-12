@@ -2,6 +2,7 @@
 
 mod alternate;
 mod app;
+mod apps;
 mod config;
 mod counter;
 mod gulp;

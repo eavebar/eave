@@ -29,6 +29,8 @@ pub struct Client {
     /// Like `0x5d1f2a0`. Events give the same address without the `0x`.
     pub address: String,
     pub workspace: WorkspaceRef,
+    pub class: String,
+    pub title: String,
 }
 
 /// A window's workspace, as `clients` names it.
