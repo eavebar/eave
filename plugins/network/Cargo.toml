@@ -1,7 +1,7 @@
 [package]
 name = "eave-network"
 version = "0.1.0"
-description = "Network connection, with signal and addresses in the popover, for eave"
+description = "Network connection, with Wi-Fi networks to join in the popover, for eave"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -9,6 +9,8 @@ repository.workspace = true
 [dependencies]
 eave-api.workspace = true
 eave-net.workspace = true
+# Wi-Fi controls in the popover, through iwd (D-42).
+eave-iwd.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

@@ -347,7 +347,7 @@ Both new watchers publish through a `tokio::sync::watch` channel, so every widge
 **Crates:** `netlink-packet-core`, `netlink-packet-route` and `netlink-packet-generic` (rust-netlink, pure Rust) build and parse the messages. The sockets are plain blocking rustix sockets on our own thread, so there's no `netlink-sys`/`netlink-proto` and no tokio `net` or mio, for the same reason as D-21. We parse the few nl80211 attributes ourselves (SSID, frequency, station signal), because `wl-nl80211` comes with an async stack (`netlink-proto`, `genetlink`, `futures-executor`, two `thiserror`s) for what is three requests. rustix needs its `fs` feature next to `net`, because rustix 1.1 doesn't build `net` alone.
 
 **Alternatives:**
-- Keep NetworkManager and add iwd's D-Bus API as a fallback: two backends that still miss systemd-networkd and dhcpcd, and a "which daemon is this?" check on every machine.
+- Keep NetworkManager and add iwd's D-Bus API as a fallback: two backends that still miss systemd-networkd and dhcpcd, and a "which daemon is this?" check on every machine. *(Partly superseded by D-42: the item and details stay kernel-only, but the popover's Wi-Fi controls use iwd when it's there.)*
 - `/proc/net/wireless` for the signal: it needs the kernel's wireless-extensions compatibility, which isn't always built in, and has no SSID.
 - Keep UPower and fall back to sysfs: two code paths for the same number.
 - Listen to nl80211's `mlme` multicast group for connect/disconnect events: rtnetlink already reports those through link and address changes, and roaming within one network is picked up by the 10 s signal re-read.
@@ -619,7 +619,7 @@ The volume item is now `alternate([icon, counter(volume, 0..=max, "%")], showing
 
 **Trade-offs:**
 - The key that closes the popover is consumed, so it doesn't reach the window that had focus. Hyprland handles its own keybinds before clients, so Super+… binds still work. A lone modifier press closes the popover too.
-- A popover can't hold text input that ignores keys. A future search field would need its own rule.
+- A popover can't hold text input that ignores keys. A future search field would need its own rule. *(Revised by D-41: keys stay with a focused text field, and Esc always closes.)*
 
 **Rejected:** a Hyprland submap with a `catchall` bind, set while a popover is open, like the click bind. It would take over the user's own submaps, and would also consume the key.
 
@@ -698,3 +698,75 @@ There's still one hover path for everything. `Slot` follows the pointer, and not
 > `ui::expand(collapsed, expanded)` shows `collapsed`, or `expanded` once the pointer has rested over it for `EXPAND_DELAY` (200 ms). It collapses as soon as the pointer leaves. It's only as big as what it shows, so the item grows and the island springs to its new width (D-27). It counts as hovered across its whole width, from the top of the bar to its bottom edge, so a pointer pushed against the screen edge still hovers it. `crates/eave/src/expand.rs` lays out only the child it shows. When hover changes what it shows, it invalidates the layout, and it waits for the delay with `request_redraw_at`, never polling.
 >
 > **Why not `alternate`/`hover` (D-33, D-35):** an alternate keeps room for its biggest option, so the item doesn't change size, and it reacts to the whole item. Here the extra room is the point, and each workspace in the row needs its own hover.
+
+---
+
+## D-40: A popover vocabulary: lists, sections, controls, one panel width
+
+**Status:** accepted (2026-10-13)
+
+**What:** popovers were a heading, labels and plain buttons, laid out at their natural size. That can't show a Wi-Fi list with the current network marked and an info button at the right edge, a volume slider, or battery health that reads at a glance. The `ui` vocabulary grows by:
+- **Rows:** `list_item(title)` with `.subtitle`, `.leading`, `.trailing`, `.selected` and `.on_press`; `list(rows)`, which scrolls past `LIST_MAX_ROWS`.
+- **Structure:** `section(title)` (a small caption, with an optional trailing node), `header(title)` (the page title, with `.on_back` for sub-pages), `detail(name, value)` (a dim name, the value right-aligned), `fill()` (pushes what follows to the end of a row).
+- **Controls:** `slider`, `toggle`, `meter`, `text_input` (D-41), and `button(..).prominent()` for the one main action of a page.
+- **Emphasis:** `display(node)` (large text: the battery's percent), `mark(node)` (a filled accent circle: today), `badge(text)` (a keyboard layout code).
+- **Icons:** lock, info, back, forward, check, refresh, close, reveal, bolt, plug, mic, speaker, headphones, display.
+- **`Panel::on_open` / `on_close`:** messages the host sends when the popover opens and starts closing, so a plugin scans or subscribes only while it's open, and resets its pages after.
+
+Every popover is laid out at one width, `PANEL_WIDTH`. Height stays natural. With a known width, rows can push trailing content to the edge, sliders can fill, and the calendar spans the panel. Moving between pages of one popover then only morphs the height.
+
+The designs were agreed first as mockups, kept in `docs/mockups/`.
+
+**Why one width:** the island's overlay laid panels out unbounded, so `Fill` anywhere inside resolved to infinity. Letting plugins pick a width would break D-13. Sizes are the host's.
+
+**Alternatives:**
+- A few panel widths chosen by plugins (`Panel::compact()`): the short lists look fine at the one width, so not yet.
+- A canvas node: D-13 says primitives first.
+
+**How it's drawn:** `kit::panel` renders a popover's nodes knowing it's in a panel (`kit::node` for the bar collapses `fill` and doesn't scroll lists). New host widgets: `toggle.rs` and `meter.rs` ease on the frame clock and ask for no frames at rest, `field.rs` boxes iced's text input, `clip.rs` cuts a long line and fades its end into what's behind it (iced 0.14 can't ellipsize). The island lays the panel out at `PANEL_WIDTH` and passes the visible part of its shape as the viewport, so a scrolling list clips to the shape while it grows. `Node::map` now takes `Clone + 'static` functions, because sliders and text fields keep it to map the messages they make later. The counter got a size and font for `display`.
+
+**Measured** (Asahi, release, the user's config, alternating runs, no popover open): binary 8,285,248 → 8,547,392 bytes for the kit (+256 KB: iced's text input, slider and scrollable, and the new widgets). RSS ~15.7 → ~16.5 MB, idle CPU unchanged (6–7 ticks per 10 s for both). The rest of the branch's growth is in D-42.
+
+---
+
+## D-41: Text fields in popovers
+
+**Status:** accepted (2026-10-13). Amends D-36.
+
+**What:** `ui::text_input(placeholder, value, on_input)`, with `.on_submit` and `.secret()`. It's for joining a Wi-Fi network with a password. It focuses itself when it appears. D-36's rule changes to: any key closes the popover unless a text field in it is focused. Esc always closes it, focused or not. The island asks the panel's widgets whether a field has focus (a widget operation) and keeps every key while one does, so a lone Shift or an arrow doesn't close it.
+
+**Why Esc always closes:** iced's own text input unfocuses on the first Esc. A second press would then be needed, and closing resets the page anyway.
+
+**Secrets:** a plugin holding a password keeps it out of `Debug`, clears it on submit and in `on_close`.
+
+---
+
+## D-42: Wi-Fi controls through iwd
+
+**Status:** accepted (2026-10-13). Amends D-23 for the network popover.
+
+**What:** the kernel can list networks but can't join a WPA one, so the network popover's controls go through iwd's D-Bus API, in `crates/eave-iwd` on `eave-dbus`: the list of networks with signal, security and whether they're saved; scan; connect (with a passphrase through an iwd agent eave serves); disconnect; forget; auto-join; power. The bar item and the connection details stay kernel-only (`eave-net`). Without iwd, or without permission to use it (iwd allows root and the `wheel` and `network` groups), the popover shows the kernel's details and says Wi-Fi controls need iwd.
+
+The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). With it closed, nothing listens.
+
+**Why iwd and not NetworkManager:** iwd's API is small (station, network, known network, agent), and NetworkManager can run on top of it. NetworkManager's API is much larger and doesn't cover iwd-only or systemd-networkd setups.
+
+**What we give up:** controls on wpa_supplicant-only machines. They keep the read-only details.
+
+**How:** `eave_dbus::watch_all` re-reads on any signal from iwd (objects come and go while it scans), and the snapshot is one `GetManagedObjects` plus `Station.GetOrderedNetworks` for the signal order. Being turned away (`AccessDenied`) or iwd not running are states, not errors, so the popover can say which. The agent is a zbus interface served on the shared system connection and registered before each password join. iwd sends the request to the agent of whoever called `Connect`, so NetworkManager's agent doesn't get it. Checked live on this machine, where NetworkManager runs on top of iwd: the listing, signal order, saved networks and diagnostics come through.
+
+**Measured** (Asahi, release): the network popover, eave-dbus (first used here) and eave-iwd add ~787 KB of binary (8,612,928 → 9,399,648 bytes): zbus's object server, the `interface` macro's code, the fdo proxies, and zbus's tokio integration. zbus was already in the binary through `mundy`, on async-io. Building eave-dbus on zbus's `async-io` instead of `tokio` saves ~200 KB (9,202,864 bytes) but brings back the second executor D-7 avoided, so it stays on tokio. With the popover closed nothing watches iwd, so idle RSS and CPU don't change.
+
+**Other popovers on this branch:** eave-pulse now lists inputs (monitors left out) and apps' streams, with each device's kind from its port or properties. Its one event thread subscribes to sinks, sources, sink inputs and the server, and tells watchers what changed, so stream events never wake the bar item. Streams are read only while the sound popover is open, and a slider drag sends one level at a time. +64 KB. The battery reads design capacity, cycles, temperature, health, its charge limit and whether a charger is plugged in, from the same sysfs files on the same events. The keyboard reads layout names once from xkb's `evdev.lst`, a static data file, not a daemon.
+
+## D-43: Tabs, and the host owns the current tab
+
+**Status:** accepted (2026-10-13).
+
+**What:** `tabs([(name, page), …])` puts a popover's pages behind a pill-shaped strip of names, one page showing at a time: the battery's Power and Health, the sound popover's Output, Input and Apps. A tinted mark slides behind the current name with the switcher's slide, and the panel's shape eases to the new page's height through the morph it already has. Which tab is current lives in the host's widget state. The panel's state goes away when the popover closes, so each popover opens on its first tab. Pages that aren't showing keep their state (a scrolled list stays scrolled), but get no events and no operations, so a field on a hidden tab can't take focus. In the bar, only the first page shows.
+
+**Why the host owns it:** which tab is on screen is like hover, scrolling or focus: it's about looking, not about the plugin's state. Owning it in the host keeps plugins to describing pages, with no index to store and no message to handle, and it can't go stale against the tabs a plugin shows (a tab that goes away falls back to the first).
+
+**Alternatives:** a `switcher`-style strip where the plugin keeps the index and handles a message per tab: more code in every plugin, for control nobody needed yet (opening on a tab other than the first). An underline under the current name instead of a pill: the pill matches the switcher and the list's selected rows.
+
+**Measured** (Asahi, release): the binary's size didn't change (9,399,648 bytes; the code fits in existing section padding). All pages are described each time a popover is built, but only while it's open, so idle RSS and CPU don't change.

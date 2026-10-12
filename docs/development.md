@@ -68,6 +68,7 @@ Current baseline (Asahi, aarch64, release, tiny-skia, default binary). Measured 
 | same seven, battery and network from the kernel (after D-23) | 7.0 MiB | ~14.5 MB (unchanged: 14.6 before it, in the same session) | unchanged within noise |
 | workspaces, clock, volume, network, battery, morphing islands (after D-27/D-28) | 7.1 MiB | ~14.1 MB; ~22.4 MB once a popover has opened (kept, see D-28) | 0% |
 | same five, app icons on workspaces (after D-38) | 7.9 MiB | ~15.7 MB (from ~14.3 in the same session) | unchanged within noise |
+| the user's config, real popovers and Wi-Fi through iwd (after D-40–D-42) | 9.0 MiB | ~16.5 MB (from ~15.7 in the same session), no popover open | unchanged within noise |
 
 Before the plugin split (skeleton, clock + date hard-coded): binary 5.6 MiB, RSS ~11.5 MB. The +0.2 MiB of binary and +0.3 MB of RSS are the price of the registry, config parsing (`toml`) and popover surfaces ([D-12](decisions.md), [D-14](decisions.md)).
 

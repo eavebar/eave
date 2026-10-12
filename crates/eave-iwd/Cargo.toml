@@ -1,0 +1,17 @@
+[package]
+name = "eave-iwd"
+version = "0.1.0"
+description = "Wi-Fi controls for eave plugins, through iwd's D-Bus API"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The shared system bus connection and its watching (D-42).
+eave-dbus.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# The agent's interface macros name `::zbus`. The same zbus eave-dbus uses, not another.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt"] }

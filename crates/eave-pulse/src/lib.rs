@@ -17,47 +17,130 @@ use tokio::sync::broadcast;
 
 pub use futures_util::Stream;
 
-/// The output side of the audio server.
+/// The audio server's devices: where sound goes, and where it comes from.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Outputs {
-    pub sinks: Vec<Sink>,
+pub struct Audio {
+    pub sinks: Vec<Device>,
+    /// Microphones and other inputs. Monitors of outputs are left out.
+    pub sources: Vec<Device>,
     /// Index into `sinks` of the default sink.
-    pub default: Option<usize>,
+    pub default_sink: Option<usize>,
+    /// Index into `sources` of the default source.
+    pub default_source: Option<usize>,
 }
 
+/// A sink (output) or source (input).
 #[derive(Debug, Clone, PartialEq)]
-pub struct Sink {
+pub struct Device {
     pub index: u32,
+    pub direction: Direction,
     pub description: String,
     /// Percent of normal volume, per channel: 100 is 0 dB. Can go above 100.
+    pub volume: u32,
+    pub muted: bool,
+    /// What it is, from its active port or its properties.
+    pub form: Form,
+    /// How it's connected, when that's worth saying: `Bluetooth`, `USB`, `HDMI`.
+    pub connection: Option<&'static str>,
+    name: String,
+    channels: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Output,
+    Input,
+}
+
+/// What kind of device it is, for its icon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Form {
+    #[default]
+    Speaker,
+    Headphones,
+    Headset,
+    /// A monitor or TV.
+    Display,
+    Microphone,
+}
+
+/// An app playing sound.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Playback {
+    pub index: u32,
+    /// The app's name, like `Firefox`.
+    pub app: String,
+    /// What to find its icon by, like `firefox`.
+    pub app_id: Option<String>,
+    /// What it's playing, when it says.
+    pub title: Option<String>,
     pub volume: u32,
     pub muted: bool,
     channels: u8,
 }
 
-/// A stereo sink at `volume` percent, for plugin tests.
+/// A stereo output at `volume` percent, for plugin tests.
 #[doc(hidden)]
-pub fn test_sink(volume: u32) -> Sink {
-    Sink {
+pub fn test_device(volume: u32) -> Device {
+    Device {
         index: 0,
+        direction: Direction::Output,
         description: "Speakers".into(),
         volume,
         muted: false,
+        form: Form::Speaker,
+        connection: None,
+        name: "speakers".into(),
         channels: 2,
     }
 }
 
-impl Outputs {
-    pub fn default_sink(&self) -> Option<&Sink> {
-        self.default.and_then(|index| self.sinks.get(index))
+impl Audio {
+    pub fn default_sink(&self) -> Option<&Device> {
+        self.default_sink.and_then(|index| self.sinks.get(index))
+    }
+
+    pub fn default_source(&self) -> Option<&Device> {
+        self.default_source
+            .and_then(|index| self.sources.get(index))
     }
 }
 
-/// The outputs, then again after every change on the server. Unchanged readings are skipped.
-pub fn watch() -> impl Stream<Item = Outputs> {
-    struct State {
-        events: Option<broadcast::Receiver<()>>,
-        last: Option<Outputs>,
+/// What a change on the server was about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Change {
+    devices: bool,
+    streams: bool,
+}
+
+impl Change {
+    const ALL: Self = Self {
+        devices: true,
+        streams: true,
+    };
+}
+
+/// The devices, then again after every change to them. Unchanged readings are skipped, and
+/// changes that only concern apps' streams don't wake it.
+pub fn watch() -> impl Stream<Item = Audio> {
+    watching(|change| change.devices, || audio().boxed())
+}
+
+/// The apps playing sound, then again after every change to them. Meant to be watched only while
+/// something shows them, like an open popover.
+pub fn watch_streams() -> impl Stream<Item = Vec<Playback>> {
+    watching(|change| change.streams, || streams().boxed())
+}
+
+type Reading<T> = futures_util::future::BoxFuture<'static, io::Result<T>>;
+
+fn watching<T: Clone + PartialEq + Send + 'static>(
+    wanted: fn(Change) -> bool,
+    read: fn() -> Reading<T>,
+) -> impl futures_util::Stream<Item = T> {
+    struct State<T> {
+        events: Option<broadcast::Receiver<Change>>,
+        last: Option<T>,
         stale: bool,
     }
 
@@ -66,110 +149,279 @@ pub fn watch() -> impl Stream<Item = Outputs> {
         last: None,
         stale: true,
     };
-    stream::unfold(state, |mut state| async move {
+    stream::unfold(state, move |mut state| async move {
         // Subscribed before reading, so a change during the read still marks it stale.
         let events = state.events.get_or_insert_with(|| bus().subscribe());
         loop {
             if state.stale {
                 state.stale = false;
-                match outputs().await {
-                    Ok(outputs) if state.last.as_ref() != Some(&outputs) => {
-                        state.last = Some(outputs.clone());
-                        return Some((outputs, state));
+                match read().await {
+                    Ok(reading) if state.last.as_ref() != Some(&reading) => {
+                        state.last = Some(reading.clone());
+                        return Some((reading, state));
                     }
                     Ok(_) => {}
-                    Err(error) => eprintln!("eave-pulse: reading outputs: {error}"),
+                    Err(error) => eprintln!("eave-pulse: reading: {error}"),
                 }
             }
+            let mut take = |change: Result<Change, _>| match change {
+                Ok(change) => state.stale |= wanted(change),
+                Err(broadcast::error::RecvError::Lagged(_)) => state.stale = true,
+                Err(broadcast::error::RecvError::Closed) => {}
+            };
             match events.recv().await {
-                Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => {
-                    // One volume drag is dozens of events; read once for the lot.
-                    while let Some(Ok(())) = events.recv().now_or_never() {}
-                    state.stale = true;
-                }
                 Err(broadcast::error::RecvError::Closed) => return None,
+                change => take(change),
+            }
+            // One volume drag is dozens of events; read once for the lot.
+            while let Some(change) = events.recv().now_or_never() {
+                take(change);
             }
         }
     })
     .boxed()
 }
 
-/// Sets every channel of `sink` to `percent` of normal volume.
-pub async fn set_volume(sink: &Sink, percent: u32) -> io::Result<()> {
+fn channel_volume(channels: u8, percent: u32) -> ChannelVolume {
     let raw = (u64::from(Volume::NORM.as_u32()) * u64::from(percent) / 100) as u32;
     let mut volume = ChannelVolume::empty();
-    for _ in 0..sink.channels.max(1) {
+    for _ in 0..channels.max(1) {
         volume.push(Volume::from_u32_clamped(raw));
     }
-    command(Command::SetSinkVolume(protocol::SetDeviceVolumeParams {
-        device_index: Some(sink.index),
+    volume
+}
+
+/// Sets every channel of `device` to `percent` of normal volume.
+pub async fn set_volume(device: &Device, percent: u32) -> io::Result<()> {
+    let params = protocol::SetDeviceVolumeParams {
+        device_index: Some(device.index),
         device_name: None,
-        volume,
-    }))
+        volume: channel_volume(device.channels, percent),
+    };
+    command(match device.direction {
+        Direction::Output => Command::SetSinkVolume(params),
+        Direction::Input => Command::SetSourceVolume(params),
+    })
     .await
 }
 
-pub async fn set_mute(sink: &Sink, mute: bool) -> io::Result<()> {
-    command(Command::SetSinkMute(protocol::SetDeviceMuteParams {
-        device_index: Some(sink.index),
+pub async fn set_mute(device: &Device, mute: bool) -> io::Result<()> {
+    let params = protocol::SetDeviceMuteParams {
+        device_index: Some(device.index),
         device_name: None,
+        mute,
+    };
+    command(match device.direction {
+        Direction::Output => Command::SetSinkMute(params),
+        Direction::Input => Command::SetSourceMute(params),
+    })
+    .await
+}
+
+/// Makes `device` where sound goes (an output) or comes from (an input).
+pub async fn set_default(device: &Device) -> io::Result<()> {
+    let name = CString::new(device.name.clone()).map_err(io::Error::other)?;
+    command(match device.direction {
+        Direction::Output => Command::SetDefaultSink(name),
+        Direction::Input => Command::SetDefaultSource(name),
+    })
+    .await
+}
+
+pub async fn set_stream_volume(stream: &Playback, percent: u32) -> io::Result<()> {
+    command(Command::SetSinkInputVolume(
+        protocol::SetStreamVolumeParams {
+            index: stream.index,
+            volume: channel_volume(stream.channels, percent),
+        },
+    ))
+    .await
+}
+
+pub async fn set_stream_mute(stream: &Playback, mute: bool) -> io::Result<()> {
+    command(Command::SetSinkInputMute(protocol::SetStreamMuteParams {
+        index: stream.index,
         mute,
     }))
     .await
 }
 
-pub async fn set_default(sink: &Sink) -> io::Result<()> {
-    // The server takes a name, which we don't keep; look it up by index.
-    let index = sink.index;
-    blocking(move || {
-        let (mut socket, version) = connect()?;
-        let info: protocol::SinkInfo = roundtrip(
-            &mut socket,
-            version,
-            2,
-            Command::GetSinkInfo(protocol::GetSinkInfo {
-                index: Some(index),
-                name: None,
-            }),
-        )?;
-        ack(&mut socket, version, 3, Command::SetDefaultSink(info.name))
-    })
-    .await
-}
-
-async fn outputs() -> io::Result<Outputs> {
+async fn audio() -> io::Result<Audio> {
     blocking(|| {
         let (mut socket, version) = connect()?;
         let server: protocol::ServerInfo =
             roundtrip(&mut socket, version, 2, Command::GetServerInfo)?;
         let sinks: protocol::SinkInfoList =
             roundtrip(&mut socket, version, 3, Command::GetSinkInfoList)?;
-        Ok(read_outputs(server.default_sink_name.as_ref(), sinks))
+        let sources: protocol::SourceInfoList =
+            roundtrip(&mut socket, version, 4, Command::GetSourceInfoList)?;
+        Ok(read_audio(&server, sinks, sources))
     })
     .await
 }
 
-fn read_outputs(default: Option<&CString>, sinks: protocol::SinkInfoList) -> Outputs {
-    let default = default.and_then(|name| sinks.iter().position(|sink| sink.name == *name));
-    let sinks = sinks
-        .into_iter()
+async fn streams() -> io::Result<Vec<Playback>> {
+    blocking(|| {
+        let (mut socket, version) = connect()?;
+        let inputs: protocol::SinkInputInfoList =
+            roundtrip(&mut socket, version, 2, Command::GetSinkInputInfoList)?;
+        Ok(inputs.into_iter().filter_map(read_stream).collect())
+    })
+    .await
+}
+
+fn text(bytes: Option<&[u8]>) -> Option<String> {
+    let bytes = bytes?;
+    let bytes = bytes.strip_suffix(&[0]).unwrap_or(bytes);
+    let text = String::from_utf8_lossy(bytes).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+fn lossy(text: &CString) -> String {
+    text.to_string_lossy().into_owned()
+}
+
+/// What a device is, from its active port's type, else its form factor property.
+fn form(
+    port: Option<&protocol::port_info::PortInfo>,
+    props: &protocol::Props,
+    direction: Direction,
+) -> Form {
+    use protocol::port_info::PortType;
+    let by_port = port.and_then(|port| match port.port_type {
+        PortType::Headphones => Some(Form::Headphones),
+        PortType::Headset | PortType::Handsfree | PortType::Handset | PortType::Earpiece => {
+            Some(Form::Headset)
+        }
+        PortType::Hdmi | PortType::Tv | PortType::Video => Some(Form::Display),
+        PortType::Speaker => Some(Form::Speaker),
+        PortType::Mic => Some(Form::Microphone),
+        _ => None,
+    });
+    let by_factor = || match text(props.get(protocol::Prop::DeviceFormFactor))?.as_str() {
+        "headphone" => Some(Form::Headphones),
+        "headset" | "hands-free" | "handset" => Some(Form::Headset),
+        "tv" | "computer" => Some(Form::Display),
+        "speaker" => Some(Form::Speaker),
+        "microphone" | "webcam" => Some(Form::Microphone),
+        _ => None,
+    };
+    by_port.or_else(by_factor).unwrap_or(match direction {
+        Direction::Output => Form::Speaker,
+        Direction::Input => Form::Microphone,
+    })
+}
+
+fn connection(
+    port: Option<&protocol::port_info::PortInfo>,
+    props: &protocol::Props,
+) -> Option<&'static str> {
+    if port.is_some_and(|port| port.port_type == protocol::port_info::PortType::Hdmi) {
+        return Some("HDMI");
+    }
+    match text(props.get(protocol::Prop::DeviceBus))?.as_str() {
+        "bluetooth" => Some("Bluetooth"),
+        "usb" => Some("USB"),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn device(
+    index: u32,
+    direction: Direction,
+    name: &CString,
+    description: Option<&CString>,
+    volume: &ChannelVolume,
+    muted: bool,
+    port: Option<&protocol::port_info::PortInfo>,
+    props: &protocol::Props,
+) -> Device {
+    let channels = volume.channels();
+    Device {
+        index,
+        direction,
+        description: lossy(description.unwrap_or(name)),
+        volume: percent(channels),
+        muted,
+        form: form(port, props, direction),
+        connection: connection(port, props),
+        name: lossy(name),
+        channels: channels.len() as u8,
+    }
+}
+
+fn read_audio(
+    server: &protocol::ServerInfo,
+    sinks: protocol::SinkInfoList,
+    sources: protocol::SourceInfoList,
+) -> Audio {
+    let sinks: Vec<Device> = sinks
+        .iter()
         .map(|sink| {
-            let channels = sink.cvolume.channels();
-            Sink {
-                index: sink.index,
-                description: sink
-                    .description
-                    .as_ref()
-                    .unwrap_or(&sink.name)
-                    .to_string_lossy()
-                    .into_owned(),
-                volume: percent(channels),
-                muted: sink.muted,
-                channels: channels.len() as u8,
-            }
+            device(
+                sink.index,
+                Direction::Output,
+                &sink.name,
+                sink.description.as_ref(),
+                &sink.cvolume,
+                sink.muted,
+                sink.ports.get(sink.active_port),
+                &sink.props,
+            )
         })
         .collect();
-    Outputs { sinks, default }
+    let sources: Vec<Device> = sources
+        .iter()
+        .filter(|source| source.monitor_of_sink_index.is_none())
+        .map(|source| {
+            device(
+                source.index,
+                Direction::Input,
+                &source.name,
+                source.description.as_ref(),
+                &source.cvolume,
+                source.muted,
+                source.ports.get(source.active_port),
+                &source.props,
+            )
+        })
+        .collect();
+    let find = |devices: &[Device], name: Option<&CString>| {
+        let name = lossy(name?);
+        devices.iter().position(|device| device.name == name)
+    };
+    Audio {
+        default_sink: find(&sinks, server.default_sink_name.as_ref()),
+        default_source: find(&sources, server.default_source_name.as_ref()),
+        sinks,
+        sources,
+    }
+}
+
+fn read_stream(input: protocol::SinkInputInfo) -> Option<Playback> {
+    use protocol::Prop;
+    if !input.has_volume {
+        return None;
+    }
+    let props = &input.props;
+    let title = text(props.get(Prop::MediaName));
+    let app = text(props.get(Prop::ApplicationName))
+        .or_else(|| title.clone())
+        .unwrap_or_else(|| lossy(&input.name));
+    let app_id = text(props.get(Prop::ApplicationIconName))
+        .or_else(|| text(props.get(Prop::ApplicationProcessBinary)));
+    let channels = input.cvolume.channels();
+    Some(Playback {
+        index: input.index,
+        // A title that only repeats the app's name says nothing.
+        title: title.filter(|title| *title != app),
+        app,
+        app_id,
+        volume: percent(channels),
+        muted: input.muted,
+        channels: channels.len() as u8,
+    })
 }
 
 /// The loudest channel, as a rounded percent of normal volume, the way `pactl` reports it.
@@ -245,9 +497,9 @@ fn protocol_error(error: protocol::ProtocolError) -> io::Error {
     io::Error::other(error)
 }
 
-/// The one subscription, started by the first watcher. Each message means "something changed".
-fn bus() -> &'static broadcast::Sender<()> {
-    static BUS: OnceLock<broadcast::Sender<()>> = OnceLock::new();
+/// The one subscription, started by the first watcher. Each message says what changed.
+fn bus() -> &'static broadcast::Sender<Change> {
+    static BUS: OnceLock<broadcast::Sender<Change>> = OnceLock::new();
     BUS.get_or_init(|| {
         let (sender, _) = broadcast::channel(16);
         let events = sender.clone();
@@ -260,7 +512,7 @@ fn bus() -> &'static broadcast::Sender<()> {
 }
 
 /// Blocks on the event socket, forever. Reconnects with a growing delay if the server goes away.
-fn listen(events: &broadcast::Sender<()>) {
+fn listen(events: &broadcast::Sender<Change>) {
     const MAX_DELAY: Duration = Duration::from_secs(30);
     let mut delay = Duration::from_secs(1);
     loop {
@@ -268,11 +520,11 @@ fn listen(events: &broadcast::Sender<()>) {
             Ok((mut socket, version)) => {
                 delay = Duration::from_secs(1);
                 // Whatever happened while we were away.
-                let _ = events.send(());
+                let _ = events.send(Change::ALL);
                 loop {
                     match protocol::read_command_message(&mut socket, version) {
-                        Ok((_, Command::SubscribeEvent(_))) => {
-                            let _ = events.send(());
+                        Ok((_, Command::SubscribeEvent(event))) => {
+                            let _ = events.send(change(event.event_facility));
                         }
                         Ok(_) => {}
                         Err(error) => {
@@ -289,9 +541,27 @@ fn listen(events: &broadcast::Sender<()>) {
     }
 }
 
+/// What an event from `facility` is about.
+fn change(facility: protocol::SubscriptionEventFacility) -> Change {
+    use protocol::SubscriptionEventFacility as Facility;
+    match facility {
+        Facility::SinkInput => Change {
+            devices: false,
+            streams: true,
+        },
+        // A stream follows its sink, and a new default moves streams along.
+        Facility::Sink | Facility::Source | Facility::Server => Change {
+            devices: true,
+            streams: facility != Facility::Source,
+        },
+        _ => Change::ALL,
+    }
+}
+
 fn subscribe() -> io::Result<(Socket, u16)> {
     let (mut socket, version) = connect()?;
-    let mask = protocol::SubscriptionMask::SINK | protocol::SubscriptionMask::SERVER;
+    use protocol::SubscriptionMask as Mask;
+    let mask = Mask::SINK | Mask::SOURCE | Mask::SINK_INPUT | Mask::SERVER;
     ack(&mut socket, version, 2, Command::Subscribe(mask))?;
     Ok((socket, version))
 }
@@ -313,5 +583,101 @@ mod tests {
             100
         );
         assert_eq!(percent(&[]), 0);
+    }
+
+    #[test]
+    fn stream_events_leave_devices_alone() {
+        use protocol::SubscriptionEventFacility as Facility;
+        assert!(!change(Facility::SinkInput).devices);
+        assert!(change(Facility::SinkInput).streams);
+        assert!(change(Facility::Sink).devices);
+        assert!(!change(Facility::Source).streams);
+    }
+
+    fn props(pairs: &[(protocol::Prop, &str)]) -> protocol::Props {
+        let mut props = protocol::Props::new();
+        for (prop, value) in pairs {
+            props.set(*prop, CString::new(*value).unwrap().as_c_str());
+        }
+        props
+    }
+
+    #[test]
+    fn devices_get_their_form_from_the_port_then_the_props() {
+        use protocol::Prop;
+        let headphones = protocol::port_info::PortInfo {
+            name: c"headphones".into(),
+            port_type: protocol::port_info::PortType::Headphones,
+            description: None,
+            dir: protocol::port_info::PortDirection::Input,
+            priority: 0,
+            available: protocol::port_info::PortAvailable::Unknown,
+            availability_group: None,
+        };
+        let none = protocol::Props::new();
+        assert_eq!(
+            form(Some(&headphones), &none, Direction::Output),
+            Form::Headphones
+        );
+        let headset = props(&[
+            (Prop::DeviceFormFactor, "headset"),
+            (Prop::DeviceBus, "bluetooth"),
+        ]);
+        assert_eq!(form(None, &headset, Direction::Output), Form::Headset);
+        assert_eq!(connection(None, &headset), Some("Bluetooth"));
+        assert_eq!(form(None, &none, Direction::Input), Form::Microphone);
+    }
+
+    #[test]
+    fn monitors_are_not_inputs_and_defaults_are_found_by_name() {
+        let sink = protocol::SinkInfo {
+            index: 7,
+            name: c"speakers".into(),
+            ..Default::default()
+        };
+        let mic = protocol::SourceInfo {
+            index: 3,
+            name: c"mic".into(),
+            ..Default::default()
+        };
+        let monitor = protocol::SourceInfo {
+            index: 4,
+            name: c"speakers.monitor".into(),
+            monitor_of_sink_index: Some(7),
+            ..Default::default()
+        };
+        let server = protocol::ServerInfo {
+            default_sink_name: Some(c"speakers".into()),
+            default_source_name: Some(c"mic".into()),
+            ..Default::default()
+        };
+        let audio = read_audio(&server, vec![sink], vec![monitor, mic]);
+        assert_eq!(audio.sources.len(), 1);
+        assert_eq!(audio.default_source().unwrap().index, 3);
+        assert_eq!(audio.default_sink().unwrap().index, 7);
+        assert_eq!(audio.sources[0].direction, Direction::Input);
+    }
+
+    #[test]
+    fn streams_are_named_by_their_app() {
+        use protocol::Prop;
+        let input = protocol::SinkInputInfo {
+            index: 1,
+            name: c"playback".into(),
+            has_volume: true,
+            props: props(&[
+                (Prop::ApplicationName, "Firefox"),
+                (Prop::ApplicationIconName, "firefox"),
+                (Prop::MediaName, "Firefox"),
+            ]),
+            ..Default::default()
+        };
+        let stream = read_stream(input).unwrap();
+        assert_eq!(stream.app, "Firefox");
+        assert_eq!(stream.app_id.as_deref(), Some("firefox"));
+        assert_eq!(
+            stream.title, None,
+            "a title that repeats the app says nothing"
+        );
     }
 }

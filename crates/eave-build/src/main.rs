@@ -839,7 +839,13 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
         "\n[patch.crates-io]\neave-api = {{ path = {} }}\n",
         quote(&api_dir)
     );
-    for service in ["eave-dbus", "eave-hyprland", "eave-net", "eave-pulse"] {
+    for service in [
+        "eave-dbus",
+        "eave-hyprland",
+        "eave-iwd",
+        "eave-net",
+        "eave-pulse",
+    ] {
         let dir = eave_dir.join("crates").join(service);
         manifest += &format!("{service} = {{ path = {} }}\n", quote(&dir));
     }

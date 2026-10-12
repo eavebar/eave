@@ -42,6 +42,20 @@ pub struct Reading {
     time_to_full: i64,
     /// Watts.
     energy_rate: f64,
+    /// Watt-hours stored now, and when full.
+    energy: Option<f64>,
+    energy_full: Option<f64>,
+    /// Full capacity over what it was designed for.
+    health: Option<f64>,
+    cycles: Option<u32>,
+    /// °C.
+    temperature: Option<f64>,
+    /// The kernel's word for the battery's health, like `Good`.
+    condition: Option<String>,
+    /// The charge it stops at, in percent, when that's under 100.
+    charge_limit: Option<u8>,
+    /// Whether a charger is plugged in, when the machine says.
+    ac_online: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -123,35 +137,104 @@ impl Widget for Battery {
             return None;
         }
         let reading = &self.reading;
-        let status = match reading.state {
+        let percent = self.percent();
+        let limit = reading.charge_limit.map(|limit| format!("{limit}%"));
+        let (when, what) = match reading.state {
             State::Charging if reading.time_to_full > 0 => {
-                format!("Charging, full in {}", duration(reading.time_to_full))
+                (duration(reading.time_to_full), "until full".to_string())
             }
-            State::Charging => "Charging".into(),
+            State::Charging => ("Charging".into(), String::new()),
             State::Discharging if reading.time_to_empty > 0 => {
-                format!("{} left", duration(reading.time_to_empty))
+                (duration(reading.time_to_empty), "until empty".to_string())
             }
-            State::Discharging => "On battery".into(),
-            State::Full => "Fully charged".into(),
-            State::NotCharging => "Plugged in, not charging".into(),
-            State::Unknown => "Unknown state".into(),
+            State::Discharging => ("On battery".into(), String::new()),
+            State::Full => ("Fully charged".into(), String::new()),
+            State::NotCharging => (
+                "Not charging".into(),
+                match &limit {
+                    Some(limit) => format!("held at the {limit} limit"),
+                    None => "plugged in".into(),
+                },
+            ),
+            State::Unknown => ("Unknown state".into(), String::new()),
         };
+        let mut side = vec![ui::label(when)];
+        if !what.is_empty() {
+            side.push(ui::label(what).tone(Tone::Dim));
+        }
+        let hero = ui::row([
+            ui::display(ui::counter(percent.into(), 0..=100, "%")),
+            ui::fill(),
+            ui::column(side),
+        ])
+        .tone(self.tone());
+        let mut meter = ui::meter(f32::from(percent) / 100.0).tone(self.tone());
+        if let Some(limit) = reading.charge_limit {
+            meter = meter.limit(f32::from(limit) / 100.0);
+        }
 
-        let mut lines = vec![
-            ui::heading(format!("Battery {}%", self.percent())),
-            ui::label(status),
-        ];
+        let mut power = Vec::new();
+        let plugged = reading.ac_online.unwrap_or(matches!(
+            reading.state,
+            State::Charging | State::Full | State::NotCharging
+        ));
+        let source = if plugged { "Charger" } else { "Battery" };
+        power.push(ui::detail("Source", ui::label(source)));
         if reading.energy_rate > 0.05 {
             let direction = match reading.state {
                 State::Charging => "Charging at",
                 _ => "Drawing",
             };
-            lines.push(
-                ui::label(format!("{direction} {:.1} W", reading.energy_rate)).tone(Tone::Dim),
-            );
+            let watts = ui::label(format!("{:.1} W", reading.energy_rate));
+            power.push(ui::detail(direction, watts));
         }
-        Some(Panel::new(ui::column(lines)))
+        if let (Some(energy), Some(full)) = (reading.energy, reading.energy_full) {
+            power.push(ui::detail(
+                "Energy",
+                of(format!("{energy:.1}"), format!("of {full:.1} Wh")),
+            ));
+        }
+        if let Some(limit) = limit {
+            power.push(ui::detail("Charge limit", ui::label(limit)));
+        }
+
+        let mut health = Vec::new();
+        if let Some(fraction) = reading.health {
+            let capacity = format!("{:.0}%", fraction * 100.0);
+            health.push(ui::detail("Capacity", of(capacity, "of design".into())));
+        }
+        if let Some(cycles) = reading.cycles {
+            health.push(ui::detail("Cycles", ui::label(cycles.to_string())));
+        }
+        if let Some(temperature) = reading.temperature {
+            health.push(ui::detail(
+                "Temperature",
+                ui::label(format!("{temperature:.0} °C")),
+            ));
+        }
+        if let Some(condition) = &reading.condition {
+            let tone = if condition == "Good" {
+                Tone::Good
+            } else {
+                Tone::Warning
+            };
+            health.push(ui::detail(
+                "Condition",
+                ui::label(condition.clone()).tone(tone),
+            ));
+        }
+        let details = if health.is_empty() {
+            ui::column(power)
+        } else {
+            ui::tabs([("Power", ui::column(power)), ("Health", ui::column(health))])
+        };
+        Some(Panel::new(ui::column([hero, meter, details])))
     }
+}
+
+/// A value and, dimmed after it, what it's out of: `36.5 of 57.8 Wh`.
+fn of(value: String, whole: String) -> ui::Node<Message> {
+    ui::row([ui::label(value), ui::label(whole).tone(Tone::Dim)])
 }
 
 impl Battery {

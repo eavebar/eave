@@ -58,6 +58,18 @@ struct Instance {
     nudge: Option<(u64, Nudge)>,
 }
 
+/// Messages for widgets whose popover just opened or started closing, by instance id.
+type Hooks = Vec<(u64, AnyMessage)>;
+
+/// Sends each hook to its widget.
+fn send(hooks: Hooks) -> Task<Message> {
+    Task::batch(
+        hooks
+            .into_iter()
+            .map(|(id, message)| Task::done(Message::Widget(id, message))),
+    )
+}
+
 struct Popover {
     /// The id of the instance it belongs to.
     instance: u64,
@@ -206,22 +218,24 @@ impl Bar {
         self.instances.iter_mut().find(|instance| instance.id == id)
     }
 
-    fn open_popover(&mut self, id: u64) {
+    /// Opens `id`'s popover, closing any other. Returns the messages the widgets asked for on
+    /// opening and closing ([`eave_api::ui::Panel::on_open`]).
+    fn open_popover(&mut self, id: u64) -> Hooks {
         let Some(instance) = self.find(id) else {
-            return;
+            return Hooks::new();
         };
         if !instance.has_popover {
-            return;
+            return Hooks::new();
         }
         let Some(window) = instance.window else {
             eprintln!(
                 "eave: a widget asked for its popover before its item was ever clicked; not opening it"
             );
-            return;
+            return Hooks::new();
         };
         let zone = instance.entry.zone;
 
-        self.close_popover();
+        let mut hooks = self.close_popover();
         // Popovers open from a click on the bar, so that's where the pointer is.
         self.pointer_inside = true;
         // An island turns into one popover at a time: one still closing in it gives way.
@@ -246,13 +260,30 @@ impl Bar {
                 rect: None,
             }),
         }
+        let opened = self
+            .find(id)
+            .and_then(|instance| instance.widget.popover())
+            .and_then(|panel| panel.on_open_message());
+        hooks.extend(opened.map(|message| (id, message)));
+        hooks
     }
 
-    /// Starts closing whatever is open. It stays until its island has morphed back.
-    fn close_popover(&mut self) {
-        for popover in &mut self.popovers {
+    /// Starts closing whatever is open. It stays until its island has morphed back. Returns the
+    /// messages the widgets asked for on closing ([`eave_api::ui::Panel::on_close`]).
+    fn close_popover(&mut self) -> Hooks {
+        let mut hooks = Hooks::new();
+        for popover in self.popovers.iter_mut().filter(|popover| popover.open) {
             popover.open = false;
+            let id = popover.instance;
+            let message = self
+                .instances
+                .iter()
+                .find(|instance| instance.id == id)
+                .and_then(|instance| instance.widget.popover())
+                .and_then(|panel| panel.on_close_message());
+            hooks.extend(message.map(|message| (id, message)));
         }
+        hooks
     }
 
     fn is_open(&self) -> bool {
@@ -369,14 +400,17 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
                 }
             }
 
-            match request {
+            let popover = match request {
                 Some(PopoverRequest::Open) => bar.open_popover(id),
                 Some(PopoverRequest::Close) if bar.popover_of(id).is_some() => bar.close_popover(),
                 // A widget that stops offering a popover closes it.
                 _ if bar.popover_of(id).is_some() && !has_popover => bar.close_popover(),
-                _ => {}
-            }
-            task.map(move |message| Message::Widget(id, message))
+                _ => Hooks::new(),
+            };
+            Task::batch([
+                task.map(move |message| Message::Widget(id, message)),
+                send(popover),
+            ])
         }
         Message::Pressed(window, id, on_press) => {
             let Some(instance) = bar.find_mut(id) else {
@@ -386,19 +420,15 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             match on_press {
                 // Any other item's popover closes, as on a click anywhere else.
                 Some(message) => {
-                    if bar.popover_of(id).is_none() {
-                        bar.close_popover();
-                    }
-                    handle(bar, Message::Widget(id, message))
+                    let closed = if bar.popover_of(id).is_none() {
+                        bar.close_popover()
+                    } else {
+                        Hooks::new()
+                    };
+                    Task::batch([send(closed), handle(bar, Message::Widget(id, message))])
                 }
-                None if bar.popover_of(id).is_some() => {
-                    bar.close_popover();
-                    Task::none()
-                }
-                None => {
-                    bar.open_popover(id);
-                    Task::none()
-                }
+                None if bar.popover_of(id).is_some() => send(bar.close_popover()),
+                None => send(bar.open_popover(id)),
             }
         }
         Message::Touched(window, id) => {
@@ -412,19 +442,10 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             bar.icons.insert(app_id, icon);
             Task::none()
         }
-        Message::InnerPressed(id) if bar.popover_of(id).is_none() => {
-            bar.close_popover();
-            Task::none()
-        }
+        Message::InnerPressed(id) if bar.popover_of(id).is_none() => send(bar.close_popover()),
         // Clicks on our own surfaces are handled where they land.
-        Message::BarPressed => {
-            bar.close_popover();
-            Task::none()
-        }
-        Message::Clicked if !bar.pointer_inside => {
-            bar.close_popover();
-            Task::none()
-        }
+        Message::BarPressed => send(bar.close_popover()),
+        Message::Clicked if !bar.pointer_inside => send(bar.close_popover()),
         Message::PointerEntered => {
             bar.pointer_inside = true;
             Task::none()
@@ -433,10 +454,7 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             bar.pointer_inside = false;
             Task::none()
         }
-        Message::KeyPressed => {
-            bar.close_popover();
-            Task::none()
-        }
+        Message::KeyPressed => send(bar.close_popover()),
         Message::PopoverPlaced(id, rect) => {
             let Some(popover) = bar
                 .popovers
@@ -567,7 +585,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
     // A widget can stop offering its popover while it closes: the island morphs back empty.
     let content: Element<'_, AnyMessage> =
         match bar.find(id).and_then(|instance| instance.widget.popover()) {
-            Some(panel) => kit::node(panel.into_node(), &bar.icons),
+            Some(panel) => kit::panel(panel.into_node(), &bar.icons),
             None => Space::new().into(),
         };
     island::Popover {
@@ -610,8 +628,12 @@ fn popover_event(event: Event, status: iced::event::Status, _: window::Id) -> Op
         }
         Event::Mouse(mouse::Event::CursorEntered) => Some(Message::PointerEntered),
         Event::Mouse(mouse::Event::CursorLeft) => Some(Message::PointerLeft),
-        // Any key closes it, Esc or not.
-        Event::Keyboard(keyboard::Event::KeyPressed { .. }) => Some(Message::KeyPressed),
+        // Any key closes it, Esc or not, unless the popover kept it for a text field (D-41).
+        Event::Keyboard(keyboard::Event::KeyPressed { .. })
+            if status == iced::event::Status::Ignored =>
+        {
+            Some(Message::KeyPressed)
+        }
         _ => None,
     }
 }
@@ -831,5 +853,60 @@ mod tests {
         let mut bar = open_bar();
         let _ = bar.apply(config("[[left]]\nwidget = \"d\""));
         assert!(bar.popovers.is_empty());
+    }
+
+    struct Hooked;
+
+    impl Widget for Hooked {
+        type Config = toml::Table;
+        type Message = &'static str;
+
+        fn new(_: Self::Config) -> (Self, eave_api::Task<&'static str>) {
+            (Self, eave_api::Task::none())
+        }
+
+        fn update(&mut self, _: &'static str) -> Effect<&'static str> {
+            Effect::none()
+        }
+
+        fn item(&self) -> eave_api::ui::Item<&'static str> {
+            eave_api::ui::Item::new(label("item"))
+        }
+
+        fn popover(&self) -> Option<eave_api::ui::Panel<&'static str>> {
+            Some(
+                eave_api::ui::Panel::new(label("panel"))
+                    .on_open("opened")
+                    .on_close("closed"),
+            )
+        }
+    }
+
+    fn said(hooks: Hooks) -> Vec<(u64, &'static str)> {
+        hooks
+            .into_iter()
+            .map(|(id, message)| (id, message.downcast().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn popovers_tell_their_widget_when_they_open_and_close() {
+        let mut registry = Registry::new();
+        registry.widget::<Hooked>("h");
+        let (mut bar, _) = Bar::new(
+            registry,
+            config("[[left]]\nwidget = \"h\"\n[[right]]\nwidget = \"h\""),
+        );
+        let window = window::Id::unique();
+        for id in [0, 1] {
+            bar.find_mut(id).unwrap().window = Some(window);
+        }
+        assert_eq!(said(bar.open_popover(0)), [(0, "opened")]);
+        // Opening another closes the first.
+        assert_eq!(said(bar.open_popover(1)), [(0, "closed"), (1, "opened")]);
+        assert_eq!(said(bar.close_popover()), [(1, "closed")]);
+        assert_eq!(said(bar.close_popover()), [], "already closing");
+        // Turning around while it closes opens it again.
+        assert_eq!(said(bar.open_popover(1)), [(1, "opened")]);
     }
 }

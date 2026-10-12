@@ -39,7 +39,8 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 - [x] Shared services crate (with step 1), so widgets on the same source share one connection. Hyprland is done ([D-17](decisions.md)); D-Bus is done too (`eave-dbus`, [D-18](decisions.md)), and so is the kernel's network state (`eave-net`, [D-23](decisions.md)).
 - [ ] Publish `eave-api` on crates.io, so plugins build standalone without a `[patch]`.
 - [ ] Packages (AUR first), once the install flow has settled.
-- [ ] Kit primitives as widgets need them: meter, slider, toggle. Switcher and item scroll are done ([D-16](decisions.md)), and so are status icons ([D-29](decisions.md)).
+- [x] Kit primitives as widgets need them: meter, slider, toggle, lists, sections, details, text fields ([D-40](decisions.md), [D-41](decisions.md)). Switcher and item scroll are done ([D-16](decisions.md)), and so are status icons ([D-29](decisions.md)).
+- [x] Real popovers: Wi-Fi networks to join through iwd ([D-42](decisions.md)), sound devices, inputs and apps, battery health, a six-week calendar, workspace windows, keyboard layouts.
 - [ ] Per-monitor workspaces once there's one bar per monitor (the widget shows every monitor's workspaces today).
 
 ## Later

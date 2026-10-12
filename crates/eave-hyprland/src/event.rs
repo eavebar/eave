@@ -54,6 +54,10 @@ pub enum Event {
         class: String,
         title: String,
     },
+    /// The focused window's address, without `0x`; empty when none has focus (`activewindowv2`).
+    FocusedWindow {
+        address: String,
+    },
     /// A keyboard switched layout. `layout` is the long name, like `English (US)`.
     ActiveLayout {
         keyboard: String,
@@ -134,6 +138,9 @@ impl Event {
                     workspace: id(workspace)?,
                 },
                 _ => return None,
+            },
+            "activewindowv2" => Self::FocusedWindow {
+                address: data.trim_start_matches("0x").into(),
             },
             "activewindow" => match fields(2)[..] {
                 [class, title] => Self::ActiveWindow {
@@ -231,6 +238,12 @@ mod tests {
 
     #[test]
     fn titles_keep_their_commas() {
+        assert_eq!(
+            Event::parse("activewindowv2>>5d1f2a0"),
+            Some(Event::FocusedWindow {
+                address: "5d1f2a0".into()
+            })
+        );
         assert_eq!(
             Event::parse("activewindow>>firefox,Hello, world — Mozilla Firefox"),
             Some(Event::ActiveWindow {

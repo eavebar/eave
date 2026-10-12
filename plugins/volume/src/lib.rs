@@ -1,13 +1,13 @@
 //! The default output's volume, as a speaker with up to three sound waves, struck through when
-//! muted. Scroll to change it, right click to mute. The popover has the level, fine control and the
-//! list of outputs to switch between. Whenever the level goes up or down, from here or anywhere
+//! muted. Scroll to change it, right click to mute. The popover has a slider for the output and
+//! the input, the devices to switch between, and a slider for each app playing sound. Whenever the level goes up or down, from here or anywhere
 //! else, the island gets a nudge that way, and the item shows the percent for a moment instead of
 //! the icon. It shows the percent while hovered, too.
 
 use eave_api::time::{Duration, sleep};
 use eave_api::ui::{self, Icon, Item, Panel, Tone};
 use eave_api::{Effect, Nudge, Registry, Subscription, Task, Widget};
-use eave_pulse::{Outputs, Sink};
+use eave_pulse::{Audio, Device, Direction, Form, Playback};
 use serde::Deserialize;
 
 /// How long the percent shows after the last change.
@@ -34,7 +34,13 @@ impl Default for Config {
 
 pub struct Volume {
     config: Config,
-    outputs: Outputs,
+    audio: Audio,
+    /// Apps playing sound, watched only while the popover is open.
+    streams: Vec<Playback>,
+    open: bool,
+    /// Levels being sent: one request at a time per slider, and the latest level dragged to
+    /// while it was out, so a drag never queues up requests.
+    sending: Vec<(Target, Option<u32>)>,
     /// The default sink and its level as the server last reported them, which our own changes
     /// only show ahead of. A change in the level is what nudges.
     heard: Option<(u32, u32)>,
@@ -44,13 +50,31 @@ pub struct Volume {
     changes: u64,
 }
 
+/// What a slider sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    Output,
+    Input,
+    /// An app's stream, by index.
+    Stream(u32),
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
-    Read(Outputs),
+    Read(Audio),
+    Streams(Vec<Playback>),
     Up,
     Down,
     ToggleMute,
-    Choose(usize),
+    ToggleMic,
+    MuteStream(u32),
+    /// A slider moved.
+    Set(Target, u32),
+    /// The level last sent for this target got there.
+    Sent(Target),
+    Choose(Direction, usize),
+    Opened,
+    Closed,
     /// The percent has shown long enough after change number this.
     HideLevel(u64),
 }
@@ -65,7 +89,10 @@ impl Widget for Volume {
                 step: config.step.max(1),
                 max: config.max.max(1),
             },
-            outputs: Outputs::default(),
+            audio: Audio::default(),
+            streams: Vec::new(),
+            open: false,
+            sending: Vec::new(),
             heard: None,
             showing_level: false,
             changes: 0,
@@ -75,23 +102,83 @@ impl Widget for Volume {
 
     fn update(&mut self, message: Message) -> Effect<Message> {
         match message {
-            Message::Read(outputs) => self.read(outputs),
+            Message::Read(audio) => self.read(audio),
+            Message::Streams(mut streams) => {
+                for stream in &mut streams {
+                    let dragged = self
+                        .sending
+                        .iter()
+                        .any(|(t, _)| *t == Target::Stream(stream.index));
+                    let ours = self.streams.iter().find(|s| s.index == stream.index);
+                    if let (true, Some(ours)) = (dragged, ours) {
+                        stream.volume = ours.volume;
+                    }
+                }
+                self.streams = streams;
+                Effect::none()
+            }
             Message::Up => self.change(self.config.step as i64),
             Message::Down => self.change(-(self.config.step as i64)),
-            Message::ToggleMute => {
-                let Some(sink) = self.sink_mut() else {
+            Message::ToggleMute => self.toggle(Direction::Output),
+            Message::ToggleMic => self.toggle(Direction::Input),
+            Message::MuteStream(index) => {
+                let Some(stream) = self.streams.iter_mut().find(|s| s.index == index) else {
                     return Effect::none();
                 };
-                sink.muted = !sink.muted;
-                let (sink, mute) = (sink.clone(), sink.muted);
-                run(async move { eave_pulse::set_mute(&sink, mute).await }).into()
+                stream.muted = !stream.muted;
+                let (stream, mute) = (stream.clone(), stream.muted);
+                run(async move { eave_pulse::set_stream_mute(&stream, mute).await }).into()
             }
-            Message::Choose(index) => {
-                let Some(sink) = self.outputs.sinks.get(index).cloned() else {
+            Message::Set(target, level) => {
+                match target {
+                    Target::Output | Target::Input => {
+                        let direction = direction(target);
+                        let Some(device) = self.device_mut(direction) else {
+                            return Effect::none();
+                        };
+                        device.volume = level;
+                    }
+                    Target::Stream(index) => {
+                        let Some(stream) = self.streams.iter_mut().find(|s| s.index == index)
+                        else {
+                            return Effect::none();
+                        };
+                        stream.volume = level;
+                    }
+                }
+                self.send(target, level).into()
+            }
+            Message::Sent(target) => {
+                let Some(at) = self.sending.iter().position(|(t, _)| *t == target) else {
                     return Effect::none();
                 };
-                self.outputs.default = Some(index);
-                run(async move { eave_pulse::set_default(&sink).await }).into()
+                match self.sending[at].1.take() {
+                    Some(level) => self.set(target, level).into(),
+                    None => {
+                        self.sending.remove(at);
+                        Effect::none()
+                    }
+                }
+            }
+            Message::Choose(direction, index) => {
+                let (devices, default) = match direction {
+                    Direction::Output => (&self.audio.sinks, &mut self.audio.default_sink),
+                    Direction::Input => (&self.audio.sources, &mut self.audio.default_source),
+                };
+                let Some(device) = devices.get(index).cloned() else {
+                    return Effect::none();
+                };
+                *default = Some(index);
+                run(async move { eave_pulse::set_default(&device).await }).into()
+            }
+            Message::Opened => {
+                self.open = true;
+                Effect::none()
+            }
+            Message::Closed => {
+                self.open = false;
+                self.streams.clear();
+                Effect::none()
             }
             Message::HideLevel(change) => {
                 if change == self.changes {
@@ -103,11 +190,16 @@ impl Widget for Volume {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::run(eave_pulse::watch).map(Message::Read)
+        let devices = Subscription::run(eave_pulse::watch).map(Message::Read);
+        if !self.open {
+            return devices;
+        }
+        let streams = Subscription::run(eave_pulse::watch_streams).map(Message::Streams);
+        Subscription::batch([devices, streams])
     }
 
     fn item(&self) -> Item<Message> {
-        let Some(sink) = self.outputs.default_sink() else {
+        let Some(sink) = self.audio.default_sink() else {
             return Item::hidden();
         };
         let icon = ui::icon(Icon::Volume {
@@ -128,52 +220,231 @@ impl Widget for Volume {
     }
 
     fn popover(&self) -> Option<Panel<Message>> {
-        let sink = self.outputs.default_sink()?;
-        let level = if sink.muted {
-            "Muted".to_string()
-        } else {
-            format!("{}%", sink.volume)
-        };
-        let mut lines = vec![
-            ui::heading(format!("Volume {level}")),
-            ui::row([
-                ui::button(ui::label("−"), Message::Down),
-                ui::button(
-                    ui::label(if sink.muted { "Unmute" } else { "Mute" }),
-                    Message::ToggleMute,
-                ),
-                ui::button(ui::label("+"), Message::Up),
-            ]),
-        ];
-        if self.outputs.sinks.len() > 1 {
-            lines.push(ui::separator());
-            lines.push(ui::label("Output").tone(Tone::Dim));
-            lines.extend(self.outputs.sinks.iter().enumerate().map(|(index, sink)| {
-                let label = ui::label(sink.description.clone());
-                let label = if Some(index) == self.outputs.default {
-                    label.tone(Tone::Accent)
-                } else {
-                    label
-                };
-                ui::button(label, Message::Choose(index))
-            }));
+        let sink = self.audio.default_sink()?;
+        let mut pages = vec![("Output", self.group(Direction::Output, sink))];
+        if let Some(source) = self.audio.default_source() {
+            pages.push(("Input", self.group(Direction::Input, source)));
         }
-        Some(Panel::new(ui::column(lines)))
+        let apps = if self.streams.is_empty() {
+            ui::label("Nothing is playing").tone(Tone::Dim)
+        } else {
+            ui::column(self.streams.iter().map(|stream| self.app(stream)))
+        };
+        pages.push(("Apps", apps));
+        let panel = Panel::new(ui::column([ui::header("Sound"), ui::tabs(pages)]))
+            .on_open(Message::Opened)
+            .on_close(Message::Closed);
+        Some(panel)
+    }
+}
+
+/// Which device a slider target sets.
+fn direction(target: Target) -> Direction {
+    match target {
+        Target::Input => Direction::Input,
+        _ => Direction::Output,
+    }
+}
+
+fn form_icon(form: Form) -> Icon {
+    match form {
+        Form::Speaker => Icon::Speaker,
+        Form::Headphones | Form::Headset => Icon::Headphones,
+        Form::Display => Icon::Display,
+        Form::Microphone => Icon::Mic { muted: false },
     }
 }
 
 impl Volume {
-    fn sink_mut(&mut self) -> Option<&mut Sink> {
-        let index = self.outputs.default?;
-        self.outputs.sinks.get_mut(index)
+    /// The output's or input's page: its mute button, slider and level, then the devices to
+    /// choose from when there's more than one, or the only one's name.
+    fn group(&self, direction: Direction, device: &Device) -> ui::Node<Message> {
+        let (devices, default, target, toggle) = match direction {
+            Direction::Output => (
+                &self.audio.sinks,
+                self.audio.default_sink,
+                Target::Output,
+                Message::ToggleMute,
+            ),
+            Direction::Input => (
+                &self.audio.sources,
+                self.audio.default_source,
+                Target::Input,
+                Message::ToggleMic,
+            ),
+        };
+        let icon = match direction {
+            Direction::Output => Icon::Volume {
+                level: device.volume as f32 / 100.0,
+                muted: device.muted,
+            },
+            Direction::Input => Icon::Mic {
+                muted: device.muted,
+            },
+        };
+        let mut lines = vec![self.control(icon, toggle, target, device.volume, device.muted)];
+        if devices.len() == 1 {
+            lines.push(ui::label(device.description.clone()).tone(Tone::Dim));
+        } else {
+            let rows = devices.iter().enumerate().map(|(index, device)| {
+                let current = Some(index) == default;
+                let mut row = ui::list_item(device.description.clone())
+                    .leading(ui::icon(form_icon(device.form)))
+                    .selected(current)
+                    .on_press(Message::Choose(direction, index));
+                if let Some(connection) = device.connection {
+                    row = row.subtitle(connection);
+                }
+                if current {
+                    row = row.trailing(ui::icon(Icon::Check));
+                }
+                row
+            });
+            lines.push(ui::list(rows));
+        }
+        ui::column(lines)
+    }
+
+    /// A mute button, a slider and the level.
+    fn control(
+        &self,
+        icon: Icon,
+        toggle: Message,
+        target: Target,
+        volume: u32,
+        muted: bool,
+    ) -> ui::Node<Message> {
+        let max = self.config.max.max(volume);
+        let level = ui::counter(volume.into(), 0..=max.into(), "%");
+        let level = if muted { level.tone(Tone::Dim) } else { level };
+        ui::row([
+            ui::button(ui::icon(icon), toggle),
+            ui::slider(volume as f32, 0.0..=max as f32, move |level| {
+                Message::Set(target, level.round() as u32)
+            }),
+            level,
+        ])
+    }
+
+    /// An app playing sound: its icon, its name over a slider, and a mute button.
+    fn app(&self, stream: &Playback) -> ui::Node<Message> {
+        let max = self.config.max.max(stream.volume);
+        let target = Target::Stream(stream.index);
+        let name = match &stream.title {
+            Some(title) => format!("{} · {title}", stream.app),
+            None => stream.app.clone(),
+        };
+        let id = stream
+            .app_id
+            .clone()
+            .unwrap_or_else(|| stream.app.to_lowercase());
+        ui::row([
+            ui::app_icon(id),
+            ui::column([
+                ui::label(name),
+                ui::slider(stream.volume as f32, 0.0..=max as f32, move |level| {
+                    Message::Set(target, level.round() as u32)
+                }),
+            ]),
+            ui::button(
+                ui::icon(Icon::Volume {
+                    level: stream.volume as f32 / 100.0,
+                    muted: stream.muted,
+                }),
+                Message::MuteStream(stream.index),
+            ),
+        ])
+    }
+
+    fn device_mut(&mut self, direction: Direction) -> Option<&mut Device> {
+        match direction {
+            Direction::Output => {
+                let index = self.audio.default_sink?;
+                self.audio.sinks.get_mut(index)
+            }
+            Direction::Input => {
+                let index = self.audio.default_source?;
+                self.audio.sources.get_mut(index)
+            }
+        }
+    }
+
+    fn toggle(&mut self, direction: Direction) -> Effect<Message> {
+        let Some(device) = self.device_mut(direction) else {
+            return Effect::none();
+        };
+        device.muted = !device.muted;
+        let (device, mute) = (device.clone(), device.muted);
+        run(async move { eave_pulse::set_mute(&device, mute).await }).into()
+    }
+
+    /// Sends `level` for `target`, unless a level is already on its way: then it goes once that
+    /// one is there, replacing any other still waiting.
+    fn send(&mut self, target: Target, level: u32) -> Task<Message> {
+        if let Some((_, pending)) = self.sending.iter_mut().find(|(t, _)| *t == target) {
+            *pending = Some(level);
+            return Task::none();
+        }
+        self.sending.push((target, None));
+        self.set(target, level)
+    }
+
+    fn set(&self, target: Target, level: u32) -> Task<Message> {
+        let done = move |result: std::io::Result<()>| {
+            if let Err(error) = result {
+                eprintln!("eave-volume: {error}");
+            }
+            Message::Sent(target)
+        };
+        match target {
+            Target::Output | Target::Input => {
+                let device = match direction(target) {
+                    Direction::Output => self.audio.default_sink(),
+                    Direction::Input => self.audio.default_source(),
+                };
+                let Some(device) = device.cloned() else {
+                    return Task::done(Message::Sent(target));
+                };
+                Task::future(async move { eave_pulse::set_volume(&device, level).await }).map(done)
+            }
+            Target::Stream(index) => {
+                let Some(stream) = self.streams.iter().find(|s| s.index == index).cloned() else {
+                    return Task::done(Message::Sent(target));
+                };
+                Task::future(async move { eave_pulse::set_stream_volume(&stream, level).await })
+                    .map(done)
+            }
+        }
     }
 
     /// Takes in the server's reading. A level that went up or down on the same sink nudges that
     /// way. Our own changes come back here too, one reading per step, so each nudges once.
-    fn read(&mut self, outputs: Outputs) -> Effect<Message> {
-        let heard = outputs.default_sink().map(|sink| (sink.index, sink.volume));
+    fn read(&mut self, mut audio: Audio) -> Effect<Message> {
+        // A slider still being dragged keeps the level it was dragged to: readings lag behind it.
+        for direction in [Direction::Output, Direction::Input] {
+            let target = match direction {
+                Direction::Output => Target::Output,
+                Direction::Input => Target::Input,
+            };
+            if !self.sending.iter().any(|(t, _)| *t == target) {
+                continue;
+            }
+            let ours = self
+                .device_mut(direction)
+                .map(|device| (device.index, device.volume));
+            let theirs = match direction {
+                Direction::Output => audio.default_sink.and_then(|i| audio.sinks.get_mut(i)),
+                Direction::Input => audio.default_source.and_then(|i| audio.sources.get_mut(i)),
+            };
+            if let (Some((index, volume)), Some(device)) = (ours, theirs)
+                && device.index == index
+            {
+                device.volume = volume;
+            }
+        }
+        let heard = audio.default_sink().map(|sink| (sink.index, sink.volume));
         let before = std::mem::replace(&mut self.heard, heard);
-        self.outputs = outputs;
+        self.audio = audio;
         let nudge = match (before, heard) {
             (Some((sink, from)), Some((same, to))) if sink == same && to > from => Nudge::Up,
             (Some((sink, from)), Some((same, to))) if sink == same && to < from => Nudge::Down,
@@ -194,7 +465,7 @@ impl Volume {
     /// server's own reading follows and confirms it. Steps land on multiples of the step size.
     fn change(&mut self, delta: i64) -> Effect<Message> {
         let (step, max) = (i64::from(self.config.step), i64::from(self.config.max));
-        let Some(sink) = self.sink_mut() else {
+        let Some(sink) = self.device_mut(Direction::Output) else {
             return Effect::none();
         };
         let current = i64::from(sink.volume);
@@ -230,19 +501,19 @@ mod tests {
 
     fn volume_at(percent: u32) -> Volume {
         let (mut volume, _) = Volume::new(Config::default());
-        volume.outputs = test_outputs(percent);
+        volume.audio = test_outputs(percent);
         volume
     }
 
-    fn test_outputs(percent: u32) -> Outputs {
-        let mut outputs = Outputs::default();
-        outputs.sinks.push(eave_pulse::test_sink(percent));
-        outputs.default = Some(0);
-        outputs
+    fn test_outputs(percent: u32) -> Audio {
+        let mut audio = Audio::default();
+        audio.sinks.push(eave_pulse::test_device(percent));
+        audio.default_sink = Some(0);
+        audio
     }
 
     fn level(volume: &Volume) -> u32 {
-        volume.outputs.default_sink().unwrap().volume
+        volume.audio.default_sink().unwrap().volume
     }
 
     #[test]
@@ -343,6 +614,55 @@ mod tests {
     fn mute_shows_at_once() {
         let mut volume = volume_at(50);
         volume.update(Message::ToggleMute);
-        assert!(volume.outputs.default_sink().unwrap().muted);
+        assert!(volume.audio.default_sink().unwrap().muted);
+    }
+
+    #[test]
+    fn a_drag_sends_one_level_at_a_time() {
+        let mut volume = volume_at(50);
+        volume.update(Message::Set(Target::Output, 60));
+        assert_eq!(level(&volume), 60, "shown at once");
+        assert_eq!(volume.sending, [(Target::Output, None)]);
+        volume.update(Message::Set(Target::Output, 70));
+        volume.update(Message::Set(Target::Output, 80));
+        assert_eq!(
+            volume.sending,
+            [(Target::Output, Some(80))],
+            "only the latest waits"
+        );
+        volume.update(Message::Sent(Target::Output));
+        assert_eq!(volume.sending, [(Target::Output, None)], "and goes next");
+        volume.update(Message::Sent(Target::Output));
+        assert!(volume.sending.is_empty());
+    }
+
+    #[test]
+    fn apps_are_watched_only_while_open() {
+        let mut volume = volume_at(50);
+        volume.update(Message::Opened);
+        assert!(volume.open);
+        volume.update(Message::Closed);
+        assert!(!volume.open);
+        assert!(volume.streams.is_empty());
+    }
+
+    #[test]
+    fn output_and_apps_are_tabs_under_the_header() {
+        let content = volume_at(50).popover().unwrap().into_node();
+        let ui::Kind::Column(children) = content.into_kind() else {
+            panic!("a column");
+        };
+        let mut children = children.into_iter().map(ui::Node::into_kind);
+        assert!(matches!(children.next(), Some(ui::Kind::Header { .. })));
+        let Some(ui::Kind::Tabs(pages)) = children.next() else {
+            panic!("tabs under the header");
+        };
+        let names: Vec<_> = pages.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["Output", "Apps"], "no input without a source");
+        let (_, apps) = pages.into_iter().nth(1).unwrap();
+        assert!(matches!(
+            apps.into_kind(),
+            ui::Kind::Label { text, .. } if text == "Nothing is playing"
+        ));
     }
 }

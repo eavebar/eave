@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Popover kit</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&amp;family=Noto+Sans+Mono:wght@400&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#87B3FF}a:hover{color:#b3cfff}
+.board{box-sizing:border-box;background:#24272e;color:#E6E6EB;font:14px/1.3 'Noto Sans',sans-serif;padding:40px 48px;display:flex;flex-direction:column;gap:28px}
+.board h1{margin:0;font-size:22px;font-weight:700}
+.lede{margin:6px 0 0;color:#a3a3ae;max-width:900px}
+.states{display:flex;gap:40px;align-items:flex-start}
+.state{display:flex;flex-direction:column;gap:10px;width:320px}
+.cap{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#a3a3ae}
+.pop{width:320px;box-sizing:border-box;padding:12px;background:#000;border:1px solid rgba(255,255,255,.08);border-radius:14px;display:flex;flex-direction:column;gap:8px;color:#E6E6EB;font:14px/1.3 'Noto Sans',sans-serif}
+.code{font:12px/1.3 'Noto Sans Mono',monospace;color:#7d8aa3;margin-top:6px}
+.code:first-child{margin-top:0}
+.hdr{display:flex;align-items:center;gap:6px;min-height:28px}
+.hdr h2{margin:0;font-size:17px;font-weight:700;flex:1}
+.sec{display:flex;align-items:center;gap:8px;min-height:28px;font-size:12px;font-weight:600;letter-spacing:.04em;color:#8C8C99}
+.sec span{flex:1}
+.li{display:flex;align-items:center;gap:10px;min-height:36px;padding:5px 6px 5px 8px;border-radius:6px;box-sizing:border-box;background:none;border:0;color:inherit;font:inherit;text-align:left;width:100%;cursor:default}
+.li.two{min-height:46px}
+.li.hov{background:rgba(255,255,255,.08)}
+.li.sel{background:rgba(135,179,255,.22)}
+.li .tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.ti{white-space:nowrap;overflow:hidden}
+.sel .ti{font-weight:600}
+.st{font-size:12px;color:#8C8C99}
+.sel .st{color:#a9b9d6}
+.lead{width:16px;height:16px;flex:none;color:#E6E6EB}
+.sel .lead{color:#87B3FF}
+.trail{display:flex;align-items:center;gap:2px;color:#8C8C99;flex:none}
+.sel .trail{color:#87B3FF}
+.ic{width:16px;height:16px;flex:none;display:block}
+.ib{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;background:none;border:0;color:#E6E6EB;padding:0;flex:none}
+.ib.hov{background:rgba(255,255,255,.08)}
+.btn{height:30px;padding:0 14px;border-radius:6px;background:rgba(255,255,255,.08);border:0;color:#E6E6EB;font:inherit;font-weight:600}
+.btn.hov{background:rgba(255,255,255,.14)}
+.btn.pro{background:#87B3FF;color:#000}
+.btn.crit{color:#F76B6B}
+.btn.ghost{background:none}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dt{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:26px}
+.dt .n{color:#8C8C99}
+.tog{width:34px;height:20px;border-radius:10px;background:rgba(255,255,255,.14);position:relative;flex:none;border:0;padding:0}
+.tog::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:7px;background:#8C8C99}
+.tog.on{background:#87B3FF}
+.tog.on::after{left:17px;background:#000}
+.sl{flex:1;height:16px;position:relative;min-width:0}
+.sl .rail,.sl .fill{position:absolute;left:0;top:6px;height:4px;border-radius:2px}
+.sl .rail{right:0;background:rgba(255,255,255,.14)}
+.sl .fill{background:#87B3FF}
+.sl .knob{position:absolute;top:1px;width:14px;height:14px;margin-left:-7px;border-radius:7px;background:#E6E6EB}
+.meter{height:6px;border-radius:3px;background:rgba(255,255,255,.10);position:relative;flex:1}
+.meter i{position:absolute;left:0;top:0;bottom:0;border-radius:3px}
+.field{height:34px;box-sizing:border-box;border-radius:6px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);padding:0 4px 0 10px;display:flex;align-items:center;gap:6px}
+.field.focus{border-color:#87B3FF}
+.field.err{border-color:#F76B6B}
+.field input{flex:1;min-width:0;background:none;border:0;outline:0;color:#E6E6EB;font:inherit}
+.field input::placeholder{color:#6c6c78}
+.big{font-size:32px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.mark{width:28px;height:28px;border-radius:14px;background:#87B3FF;color:#000;display:grid;place-items:center;font-weight:700}
+.kbd{min-width:22px;height:18px;padding:0 4px;box-sizing:border-box;border-radius:4px;border:1px solid rgba(255,255,255,.18);display:grid;place-items:center;font-size:11px;font-weight:600;flex:none}
+.icons{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px 8px}
+.icons span{display:flex;align-items:center;gap:10px;min-height:30px;font:12px 'Noto Sans Mono',monospace;color:#a3a3ae}
+.icons svg{color:#E6E6EB}
+.sep{height:1px;background:rgba(255,255,255,.10)}
+.dim{color:#8C8C99}
+</style>
+</helmet>
+<div class="board" style="width:1496px;height:800px">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+<symbol id="w3" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="13.5" r="1.25" fill="currentColor" stroke="none"></circle><path d="M5.45 10.42A4 4 0 0 1 10.55 10.42"></path><path d="M3.38 7.91A7.25 7.25 0 0 1 12.62 7.91"></path><path d="M1.31 5.41A10.5 10.5 0 0 1 14.69 5.41"></path></symbol>
+<symbol id="lock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7.25" width="9" height="6.75" rx="1.75"></rect><path d="M5.5 7.25V5.25a2.5 2.5 0 0 1 5 0v2"></path></symbol>
+<symbol id="info" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6.25"></circle><path d="M8 7.5V11"></path><circle cx="8" cy="5" r=".9" fill="currentColor" stroke="none"></circle></symbol>
+<symbol id="chl" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5L5.5 8L10 12.5"></path></symbol>
+<symbol id="chr" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5L10.5 8L6 12.5"></path></symbol>
+<symbol id="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5L6.5 12L13 4.5"></path></symbol>
+<symbol id="refresh" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.25 8A5.25 5.25 0 1 1 11.7 4.3"></path><path d="M12.25 1.75V4.75H9.25"></path></symbol>
+<symbol id="eye" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z"></path><circle cx="8" cy="8" r="2"></circle></symbol>
+<symbol id="close" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5"></path></symbol>
+<symbol id="spk" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3.5" y="1.75" width="9" height="12.5" rx="2"></rect><circle cx="8" cy="9.75" r="2.25"></circle><circle cx="8" cy="4.75" r=".9" fill="currentColor" stroke="none"></circle></symbol>
+<symbol id="hp" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 11V8.5a5.5 5.5 0 0 1 11 0V11"></path><rect x="1.75" y="9.5" width="3" height="4.75" rx="1" fill="currentColor" stroke="none"></rect><rect x="11.25" y="9.5" width="3" height="4.75" rx="1" fill="currentColor" stroke="none"></rect></symbol>
+<symbol id="tv" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.75" y="2.75" width="12.5" height="8.5" rx="1.5"></rect><path d="M5.5 13.75H10.5"></path></symbol>
+<symbol id="mic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="5.75" y="1.75" width="4.5" height="8" rx="2.25"></rect><path d="M3.5 7.75a4.5 4.5 0 0 0 9 0M8 12.25V14.5"></path></symbol>
+<symbol id="bolt" viewBox="0 0 16 16"><path d="M9 1.5L3.5 9H7.5L6.5 14.5L12.5 7H8.5Z" fill="currentColor"></path></symbol>
+<symbol id="plug" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 1.5V4.5M10.5 1.5V4.5M3.5 4.5H12.5V7A4.5 4.5 0 0 1 3.5 7ZM8 11.5V14.5"></path></symbol>
+</defs>
+</svg>
+
+<div>
+<h1>Kit: what plugins can now describe</h1>
+<p class="lede">Every piece below is a node in eave-api's ui vocabulary, drawn by the host in kit.rs. Plugins pick nodes and tones; the host owns sizes, colors and motion. Popovers share one width (320), so rows can push content to the right edge, lists can scroll past six rows, and sliders can fill.</p>
+</div>
+
+<div class="states">
+
+<div class="state">
+<div class="cap">Rows and structure</div>
+<div class="pop">
+<div class="code">header("Vodafone").on_back(Back)</div>
+<div class="hdr"><span class="ib" aria-label="Back"><svg class="ic"><use href="#chl"></use></svg></span><h2>Vodafone</h2></div>
+<div class="code">section("NETWORKS").trailing(..)</div>
+<div class="sec"><span>NETWORKS</span><span class="ib" style="flex:none;color:#8C8C99" aria-label="Scan"><svg class="ic"><use href="#refresh"></use></svg></span></div>
+<div class="code">list_item(title)</div>
+<button class="li"><svg class="lead"><use href="#w3"></use></svg><span class="tx"><span class="ti">At rest</span></span></button>
+<button class="li hov"><svg class="lead"><use href="#w3"></use></svg><span class="tx"><span class="ti">Hovered</span></span></button>
+<div class="code">.subtitle(..).selected(true).trailing(..)</div>
+<button class="li two sel"><svg class="lead"><use href="#w3"></use></svg><span class="tx"><span class="ti">Selected</span><span class="st">Connected · 5 GHz</span></span><span class="trail"><span class="ib" aria-label="Info"><svg class="ic"><use href="#info"></use></svg></span></span></button>
+<div class="code">detail("Gateway", label(..))</div>
+<div class="dt"><span class="n">Gateway</span><span>192.168.1.1</span></div>
+<div class="code">separator()</div>
+<div class="sep"></div>
+</div>
+</div>
+
+<div class="state">
+<div class="cap">Controls</div>
+<div class="pop">
+<div class="code">button(label("Disconnect"), ..)</div>
+<div class="row"><button class="btn">Rest</button><button class="btn hov">Hovered</button></div>
+<div class="code">.prominent()    · label(..).tone(Critical)</div>
+<div class="row"><button class="btn pro">Join</button><button class="btn crit">Forget</button><button class="btn ghost">Cancel</button></div>
+<div class="code">button(icon(Icon::Info), ..)</div>
+<div class="row"><span class="ib" aria-label="Info"><svg class="ic"><use href="#info"></use></svg></span><span class="ib hov" aria-label="Refresh"><svg class="ic"><use href="#refresh"></use></svg></span></div>
+<div class="code">toggle(on, Toggle)</div>
+<div class="row"><button class="tog" aria-label="Off"></button><button class="tog on" aria-label="On"></button></div>
+<div class="code">slider(64.0, 0.0..=100.0, Set).on_release(..)</div>
+<div class="row" style="min-height:24px"><span class="sl"><span class="rail"></span><span class="fill" style="width:64%"></span><span class="knob" style="left:64%"></span></span></div>
+<div class="code">meter(0.63).tone(..)</div>
+<div class="row" style="flex-direction:column;align-items:stretch;gap:8px">
+<span class="meter"><i style="width:63%;background:#E6E6EB"></i></span>
+<span class="meter"><i style="width:41%;background:#73D98C"></i></span>
+<span class="meter"><i style="width:18%;background:#FAC25C"></i></span>
+<span class="meter"><i style="width:8%;background:#F76B6B"></i></span>
+</div>
+</div>
+</div>
+
+<div class="state">
+<div class="cap">Text and emphasis</div>
+<div class="pop">
+<div class="code">text_input("Password", value, Input)</div>
+<label class="field"><input type="text" placeholder="Password" aria-label="Empty field" readonly></label>
+<div class="code">focused · .secret().on_submit(Join)</div>
+<label class="field focus"><input type="password" value="correct horse" aria-label="Focused field" readonly><span class="ib" style="color:#8C8C99" aria-label="Show"><svg class="ic"><use href="#eye"></use></svg></span></label>
+<div class="code">.tone(Critical)  (after a failed try)</div>
+<label class="field err"><input type="password" value="hunter22" aria-label="Field with error" readonly></label>
+<div class="code">display(counter(63, 0..=100, "%"))</div>
+<div class="big">63%</div>
+<div class="code">mark(label("12"))    · badge("US")</div>
+<div class="row"><span class="mark">12</span><span class="kbd">US</span><span class="kbd" style="border-color:#87B3FF;color:#87B3FF">IT</span></div>
+</div>
+</div>
+
+<div class="state">
+<div class="cap">New icons</div>
+<div class="pop">
+<div class="code">Icon:: (16-unit grid, 1.5 stroke)</div>
+<div class="icons">
+<span><svg class="ic"><use href="#lock"></use></svg>Lock</span>
+<span><svg class="ic"><use href="#info"></use></svg>Info</span>
+<span><svg class="ic"><use href="#check"></use></svg>Check</span>
+<span><svg class="ic"><use href="#chl"></use></svg>Back</span>
+<span><svg class="ic"><use href="#chr"></use></svg>Forward</span>
+<span><svg class="ic"><use href="#refresh"></use></svg>Refresh</span>
+<span><svg class="ic"><use href="#close"></use></svg>Close</span>
+<span><svg class="ic"><use href="#eye"></use></svg>Reveal</span>
+<span><svg class="ic"><use href="#bolt"></use></svg>Bolt</span>
+<span><svg class="ic"><use href="#plug"></use></svg>Plug</span>
+<span><svg class="ic"><use href="#mic"></use></svg>Mic</span>
+<span><svg class="ic"><use href="#spk"></use></svg>Speaker</span>
+<span><svg class="ic"><use href="#hp"></use></svg>Headphones</span>
+<span><svg class="ic"><use href="#tv"></use></svg>Display</span>
+</div>
+</div>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1496,"height":800}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

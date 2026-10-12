@@ -79,6 +79,61 @@ pub const SPACING: u32 = 8;
 pub const GRID_CELL: f32 = 28.0;
 pub const BUTTON_RADIUS: f32 = 6.0;
 
+/// Every popover is this wide, padding included, so rows can push things to their far end and
+/// moving between a popover's pages only changes its height (D-40).
+pub const PANEL_WIDTH: f32 = 320.0;
+/// A list row with one line, and with a subtitle under it.
+pub const ROW_HEIGHT: f32 = 36.0;
+pub const ROW_HEIGHT_TALL: f32 = 46.0;
+/// Space between list rows.
+pub const ROW_SPACING: u32 = 2;
+/// A list taller than this many one-line rows scrolls.
+pub const LIST_MAX_ROWS: f32 = 6.0;
+/// Behind the list row in use, like the current option of a switcher.
+pub const SELECTED_BG: Color = SWITCHER_MARK;
+/// A subtitle under a selected row's title: dim, tinted toward the accent.
+pub const SELECTED_SUBTITLE: Color = Color::from_rgb(0.66, 0.73, 0.84);
+/// Square buttons holding just an icon, and the height of text buttons.
+pub const ICON_BUTTON: f32 = 28.0;
+pub const BUTTON_HEIGHT: f32 = 30.0;
+/// A text button at rest in a popover, so it reads as a button and not a label.
+pub const BUTTON_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
+/// The text on a prominent button, over the accent.
+pub const ON_ACCENT: Color = Color::BLACK;
+/// The empty part of a slider, toggle or meter.
+pub const TRACK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.14);
+pub const METER_TRACK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);
+pub const SLIDER_RAIL: f32 = 4.0;
+pub const SLIDER_KNOB: f32 = 7.0;
+pub const METER_HEIGHT: f32 = 6.0;
+/// How long a meter takes to ease to a new value.
+pub const METER_EASE: Duration = Duration::from_millis(400);
+/// A toggle's pill, its knob, and how long the knob takes to slide over.
+pub const TOGGLE_WIDTH: f32 = 34.0;
+pub const TOGGLE_HEIGHT: f32 = 20.0;
+pub const TOGGLE_KNOB: f32 = 14.0;
+pub const TOGGLE_SLIDE: Duration = Duration::from_millis(160);
+/// A text field: its height, background, edge, and placeholder text.
+pub const FIELD_HEIGHT: f32 = 34.0;
+pub const FIELD_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
+pub const FIELD_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);
+pub const PLACEHOLDER: Color = Color::from_rgb(0.42, 0.42, 0.47);
+pub const SELECTION: Color = Color::from_rgba(0.53, 0.70, 1.00, 0.35);
+/// The filled circle of a mark (today in a calendar), and the height of a calendar's rows.
+pub const MARK_SIZE: f32 = 28.0;
+pub const GRID_ROW: f32 = 32.0;
+/// A badge's outline.
+pub const BADGE_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
+/// A scrolling list's scrollbar.
+pub const SCROLLER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.20);
+/// Tabs: a pill-shaped track with a mark sliding behind the current tab, inset by `TAB_INSET`.
+pub const TAB_HEIGHT: f32 = 28.0;
+pub const TAB_INSET: f32 = 2.0;
+pub const TAB_TRACK: Color = BUTTON_BG;
+pub const TAB_MARK: Color = SELECTED_BG;
+/// The width at the end of a long title that fades out instead of being cut.
+pub const TEXT_FADE: f32 = 16.0;
+
 /// How long an alternate takes to fade from one option to the next: out, then in.
 pub const ALTERNATE_FADE: Duration = Duration::from_millis(240);
 /// How far an option slides as it fades, when the pointer moving onto or off its item set it off:
@@ -124,6 +179,30 @@ pub const HEADING_FONT: Font = Font {
     weight: font::Weight::Bold,
     ..Font::DEFAULT
 };
+/// Section captions, subtitles and badges.
+pub const SMALL_SIZE: f32 = 12.0;
+/// A selected row's title, section captions, and text buttons.
+pub const STRONG_FONT: Font = Font {
+    weight: font::Weight::Semibold,
+    ..Font::DEFAULT
+};
+/// The large number of a popover ([`eave_api::ui::display`]).
+pub const DISPLAY_SIZE: f32 = 32.0;
+
+/// Sans-serif families, most wanted first. iced's text engine asks for one it names itself (Open
+/// Sans); when that isn't installed, plain text still finds a sans face, but bold and semibold
+/// fall back to whatever has that weight, often a serif. So the host names one that is there.
+pub const SANS_FAMILIES: &[&str] = &[
+    "Open Sans",
+    "Noto Sans",
+    "Inter",
+    "Cantarell",
+    "DejaVu Sans",
+    "Liberation Sans",
+    "Roboto",
+    "Ubuntu",
+    "FreeSans",
+];
 
 pub fn tone(tone: Tone) -> Color {
     match tone {

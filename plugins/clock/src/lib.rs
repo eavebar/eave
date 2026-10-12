@@ -1,9 +1,9 @@
 //! A clock that shows the date while hovered, with a month calendar in its popover.
 
 use chrono::format::{Item as FormatItem, StrftimeItems};
-use chrono::{DateTime, Datelike, Local, Months, NaiveDate};
+use chrono::{DateTime, Datelike, Days, Local, Months, NaiveDate};
 use eave_api::time::{Duration, every};
-use eave_api::ui::{self, Item, Node, Panel, Tone};
+use eave_api::ui::{self, Icon, Item, Node, Panel, Tone};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
 use serde::Deserialize;
 
@@ -18,6 +18,8 @@ pub struct Config {
     format: Format,
     /// `strftime` format shown while the clock is hovered.
     hover_format: Format,
+    /// Shows ISO week numbers down the calendar's left side.
+    week_numbers: bool,
 }
 
 impl Default for Config {
@@ -25,6 +27,7 @@ impl Default for Config {
         Self {
             format: Format("%H:%M".into()),
             hover_format: Format("%b %-d".into()),
+            week_numbers: true,
         }
     }
 }
@@ -48,6 +51,7 @@ impl TryFrom<String> for Format {
 pub struct Clock {
     format: Format,
     hover_format: Format,
+    week_numbers: bool,
     now: DateTime<Local>,
     /// First day of the month the calendar shows.
     month: NaiveDate,
@@ -70,6 +74,7 @@ impl Widget for Clock {
         let clock = Self {
             format: config.format,
             hover_format: config.hover_format,
+            week_numbers: config.week_numbers,
             now,
             month: first_of_month(now.date_naive()),
         };
@@ -97,51 +102,67 @@ impl Widget for Clock {
     }
 
     fn popover(&self) -> Option<Panel<Message>> {
-        let header = ui::row([
-            ui::button(ui::label("‹"), Message::PreviousMonth),
-            ui::button(
-                ui::label(self.month.format("%B %Y").to_string()),
-                Message::ThisMonth,
-            ),
-            ui::button(ui::label("›"), Message::NextMonth),
+        let today = self.now.date_naive();
+        let away = self.month != first_of_month(today);
+        let mut title = ui::header(self.now.format("%A %-d %B").to_string());
+        if away {
+            title = title.trailing(ui::button(ui::label("Today"), Message::ThisMonth));
+        }
+        let week = today.iso_week();
+        let months = ui::row([
+            ui::button(ui::icon(Icon::Back), Message::PreviousMonth),
+            ui::fill(),
+            ui::label(self.month.format("%B %Y").to_string()),
+            ui::fill(),
+            ui::button(ui::icon(Icon::Forward), Message::NextMonth),
         ]);
-
-        Some(Panel::new(ui::column([
-            ui::heading(self.now.format("%A %-d %B").to_string()),
-            ui::separator(),
-            header,
+        let panel = ui::column([
+            ui::column([
+                title,
+                ui::label(format!("Week {} · {}", week.week(), week.year())).tone(Tone::Dim),
+            ]),
+            months,
             self.calendar(),
-        ])))
+        ]);
+        // It always opens on this month.
+        Some(Panel::new(panel).on_open(Message::ThisMonth))
     }
 }
 
 impl Clock {
+    /// Six weeks from the Monday on or before the first of the month, so the calendar never
+    /// changes height, with days of the months around it dimmed.
     fn calendar(&self) -> Node<Message> {
         let today = self.now.date_naive();
         let weekdays =
             ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map(|day| ui::label(day).tone(Tone::Dim));
-        let leading = self.month.weekday().num_days_from_monday() as usize;
-        let days = self
-            .month
-            .iter_days()
-            .take_while(|day| day.month() == self.month.month())
-            .map(|day| {
+        let corner = self.week_numbers.then(ui::empty);
+        let mut cells: Vec<Node<Message>> = corner.into_iter().chain(weekdays).collect();
+        for week in weeks(self.month).chunks(7) {
+            if self.week_numbers {
+                cells.push(ui::label(week[0].iso_week().week().to_string()).tone(Tone::Dim));
+            }
+            cells.extend(week.iter().map(|&day| {
                 let label = ui::label(day.day().to_string());
                 if day == today {
-                    label.tone(Tone::Accent)
+                    ui::mark(label)
+                } else if day.month() != self.month.month() {
+                    label.tone(Tone::Dim)
                 } else {
                     label
                 }
-            });
-
-        ui::grid(
-            7,
-            weekdays
-                .into_iter()
-                .chain((0..leading).map(|_| ui::empty()))
-                .chain(days),
-        )
+            }));
+        }
+        ui::grid(if self.week_numbers { 8 } else { 7 }, cells)
     }
+}
+
+/// The 42 days a calendar of `month` shows: the six weeks from the Monday on or before its
+/// first day.
+fn weeks(month: NaiveDate) -> Vec<NaiveDate> {
+    let back = month.weekday().num_days_from_monday();
+    let start = month - Days::new(back.into());
+    start.iter_days().take(42).collect()
 }
 
 fn first_of_month(date: NaiveDate) -> NaiveDate {
@@ -163,5 +184,20 @@ mod tests {
         let config: Config = toml::Table::new().try_into().unwrap();
         assert_eq!(config.format.0, "%H:%M");
         assert_eq!(config.hover_format.0, "%b %-d");
+        assert!(config.week_numbers);
+    }
+
+    #[test]
+    fn a_calendar_is_six_weeks_from_a_monday() {
+        let october = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        let days = weeks(october);
+        assert_eq!(days.len(), 42);
+        assert_eq!(days[0], NaiveDate::from_ymd_opt(2026, 9, 28).unwrap());
+        assert_eq!(days[0].iso_week().week(), 40);
+        assert_eq!(days[41], NaiveDate::from_ymd_opt(2026, 11, 8).unwrap());
+
+        // A month starting on a Monday starts on its first.
+        let june = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        assert_eq!(weeks(june)[0], june);
     }
 }
