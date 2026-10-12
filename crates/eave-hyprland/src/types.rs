@@ -31,6 +31,9 @@ pub struct Client {
     pub workspace: WorkspaceRef,
     pub class: String,
     pub title: String,
+    /// 0 for the focused window, then counting back through earlier focus.
+    #[serde(rename = "focusHistoryID")]
+    pub focus_history_id: Option<i64>,
 }
 
 /// A window's workspace, as `clients` names it.

@@ -31,6 +31,8 @@ pub struct Workspaces {
     /// Every window, oldest first. Only workspaces with one, and the active one, are shown.
     windows: Vec<Window>,
     active: Option<i64>,
+    /// The focused window's address, without the `0x`.
+    focused: Option<String>,
     /// The workspace whose windows the popover lists.
     listing: Option<i64>,
 }
@@ -85,6 +87,7 @@ impl Widget for Workspaces {
             open: Vec::new(),
             windows: Vec::new(),
             active: None,
+            focused: None,
             listing: None,
         };
         workspaces.refresh();
@@ -100,6 +103,11 @@ impl Widget for Workspaces {
                     .into_iter()
                     .map(|workspace| (workspace.id, workspace.name))
                     .collect();
+                self.focused = snapshot
+                    .clients
+                    .iter()
+                    .find(|client| client.focus_history_id == Some(0))
+                    .map(|client| address(&client.address));
                 self.windows = snapshot
                     .clients
                     .into_iter()
@@ -160,7 +168,7 @@ impl Widget for Workspaces {
     fn popover(&self) -> Option<Panel<Message>> {
         let id = self.listing?;
         let workspace = self.shown.iter().find(|workspace| workspace.id == id)?;
-        let rows = self
+        let rows: Vec<_> = self
             .windows
             .iter()
             .filter(|window| window.workspace == id)
@@ -170,18 +178,23 @@ impl Widget for Workspaces {
                 } else {
                     &window.title
                 };
-                ui::button(
-                    ui::row([ui::app_icon(window.class.clone()), ui::label(title.clone())]),
-                    Message::Focus(window.address.clone()),
-                )
+                ui::list_item(title.clone())
+                    .leading(ui::app_icon(window.class.clone()))
+                    .subtitle(window.class.clone())
+                    .selected(self.focused.as_ref() == Some(&window.address))
+                    .on_press(Message::Focus(window.address.clone()))
             })
-            .collect::<Vec<_>>();
+            .collect();
         if rows.is_empty() {
             return None;
         }
-        Some(Panel::new(ui::column(
-            std::iter::once(ui::heading(workspace.name.clone())).chain(rows),
-        )))
+        let count = match rows.len() {
+            1 => "1 window".to_string(),
+            n => format!("{n} windows"),
+        };
+        let header = ui::header(format!("Workspace {}", workspace.name))
+            .trailing(ui::label(count).tone(Tone::Dim));
+        Some(Panel::new(ui::column([header, ui::list(rows)])))
     }
 }
 
@@ -263,6 +276,9 @@ impl Workspaces {
                 if let Some(window) = self.window(&address) {
                     window.title = title;
                 }
+            }
+            Event::FocusedWindow { address } => {
+                self.focused = Some(address).filter(|address| !address.is_empty());
             }
             _ => {}
         }
@@ -410,6 +426,7 @@ mod tests {
             },
             class: "kitty".into(),
             title: String::new(),
+            focus_history_id: None,
         }
     }
 
