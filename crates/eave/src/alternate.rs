@@ -4,10 +4,17 @@
 //! the way out before the other starts, instead of the two crossing. Only the option on screen
 //! sees events, so a counter coming in starts counting once it shows. It's as big as its biggest
 //! option, so the island around it holds still when it changes.
+//!
+//! An alternate with a hover option shows it while the pointer is over the item. The item's
+//! [`Slot`](crate::slot::Slot) knows that, not the alternate: its whole height and padding count,
+//! so a pointer flung against the screen edge still hovers it. It tells the alternates inside with
+//! [`SetHovered`] when it changes.
+
+use std::any::Any;
 
 use std::time::{Duration, Instant};
 
-use iced::advanced::widget::{Operation, Tree, tree};
+use iced::advanced::widget::{Id, Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, renderer};
 use iced::{Element, Event, Length, Point, Rectangle, Size, window};
 
@@ -17,18 +24,46 @@ use crate::theme;
 pub struct Alternate<'a, M> {
     options: Vec<Element<'a, M>>,
     current: usize,
+    /// Shown instead of `current` while the item is hovered.
+    hovered: Option<usize>,
 }
 
 impl<'a, M> Alternate<'a, M> {
-    pub fn new(options: Vec<Element<'a, M>>, current: usize) -> Self {
-        let current = current.min(options.len().saturating_sub(1));
-        Self { options, current }
+    pub fn new(options: Vec<Element<'a, M>>, current: usize, hovered: Option<usize>) -> Self {
+        let last = options.len().saturating_sub(1);
+        Self {
+            current: current.min(last),
+            hovered: hovered.map(|hovered| hovered.min(last)),
+            options,
+        }
+    }
+
+    /// The option that should be on screen, once any fade is over.
+    fn target(&self, hovered: bool) -> usize {
+        self.hovered.filter(|_| hovered).unwrap_or(self.current)
+    }
+}
+
+/// Tells every alternate it reaches whether the pointer is over its item.
+pub struct SetHovered(pub bool);
+
+impl Operation for SetHovered {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        operate(self);
+    }
+
+    fn custom(&mut self, _id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Any) {
+        if let Some(state) = state.downcast_mut::<State>() {
+            state.hovered = self.0;
+        }
     }
 }
 
 #[derive(Debug, Default)]
 struct State {
     current: Option<usize>,
+    /// Whether the pointer is over the item, as the slot last said.
+    hovered: bool,
     /// The one fading out, while it does.
     previous: Option<usize>,
     /// Changed, and waiting for a frame to start fading on.
@@ -107,11 +142,13 @@ impl State {
 impl<M> Alternate<'_, M> {
     /// The option on screen, with how much it shows. An option that's gone shows the current one.
     fn shown(&self, tree: &Tree) -> (usize, f32) {
-        let (index, shown) = tree.state.downcast_ref::<State>().shown(self.current);
+        let state = tree.state.downcast_ref::<State>();
+        let target = self.target(state.hovered);
+        let (index, shown) = state.shown(target);
         if index < self.options.len() {
             (index, shown)
         } else {
-            (self.current, 1.0)
+            (target, 1.0)
         }
     }
 }
@@ -138,7 +175,8 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Alternate<'_, M> {
 
     fn diff(&self, tree: &mut Tree) {
         tree.diff_children(&self.options);
-        tree.state.downcast_mut::<State>().set(self.current);
+        let state = tree.state.downcast_mut::<State>();
+        state.set(self.target(state.hovered));
     }
 
     /// As big as the biggest option, with every option centered in it. All of them are laid out,
@@ -209,6 +247,9 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Alternate<'_, M> {
         renderer: &iced::Renderer,
         operation: &mut dyn Operation,
     ) {
+        let state = tree.state.downcast_mut::<State>();
+        operation.custom(None, layout.bounds(), state);
+        state.set(self.target(state.hovered));
         let (index, _) = self.shown(tree);
         if let Some(child) = layout.children().nth(index) {
             self.options[index].as_widget_mut().operate(
@@ -321,6 +362,28 @@ mod tests {
         state.set(0);
         assert!(!state.fading());
         assert_eq!(state.shown(0), (0, 1.0));
+    }
+
+    #[test]
+    fn hovering_fades_to_the_hover_option_and_back() {
+        let alternate: Alternate<'_, ()> = Alternate::new(
+            vec![
+                iced::widget::text("a").into(),
+                iced::widget::text("b").into(),
+            ],
+            0,
+            Some(1),
+        );
+        let mut tree = Tree::new(&alternate as &dyn Widget<_, _, _>);
+        let state = tree.state.downcast_mut::<State>();
+        SetHovered(true).custom(None, Rectangle::default(), state);
+        state.set(alternate.target(state.hovered));
+        assert_eq!(state.current, Some(1));
+        assert!(state.fading());
+        SetHovered(false).custom(None, Rectangle::default(), state);
+        state.set(alternate.target(state.hovered));
+        assert_eq!(state.current, Some(0));
+        assert!(!state.fading(), "left before the fade began: it just stays");
     }
 
     #[test]

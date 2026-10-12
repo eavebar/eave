@@ -8,6 +8,8 @@ use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::{Element, Event, Length, Rectangle, Size, Vector};
 
+use crate::alternate::SetHovered;
+
 pub struct Slot<'a, M> {
     content: Element<'a, M>,
     on_press: Option<M>,
@@ -23,6 +25,8 @@ struct State {
     scrolled: Scrolled,
     /// When the primary button went down on this item, until it comes back up.
     pressed: Option<Instant>,
+    /// Whether the pointer is over the item, as its alternates were last told.
+    hovered: bool,
 }
 
 /// Touchpad scrolling that hasn't added up to a whole step yet. Positive is up.
@@ -150,6 +154,20 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slot<'_, M> {
         shell: &mut Shell<'_, M>,
         viewport: &Rectangle,
     ) {
+        // The whole item counts, not just its content: a pointer against the screen edge is above
+        // the text. Only a change reaches the alternates, so resting the pointer costs nothing.
+        let hovered = cursor.is_over(layout.bounds());
+        let state = tree.state.downcast_mut::<State>();
+        if state.hovered != hovered {
+            state.hovered = hovered;
+            self.content.as_widget_mut().operate(
+                &mut tree.children[0],
+                layout,
+                renderer,
+                &mut SetHovered(hovered),
+            );
+            shell.request_redraw();
+        }
         self.content.as_widget_mut().update(
             &mut tree.children[0],
             event,

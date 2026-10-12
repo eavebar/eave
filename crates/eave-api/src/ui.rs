@@ -17,6 +17,8 @@ pub enum Tone {
     Accent,
     Warning,
     Critical,
+    /// Healthy, or gaining: a charging battery.
+    Good,
 }
 
 /// A status symbol. It names what to show and how full it is; the host draws it in the text's
@@ -59,6 +61,8 @@ pub enum Kind<M> {
     Alternate {
         options: Vec<Node<M>>,
         current: usize,
+        /// Shown instead of `current` while the pointer is over the item.
+        hovered: Option<usize>,
     },
     Row(Vec<Node<M>>),
     Column(Vec<Node<M>>),
@@ -118,7 +122,14 @@ pub fn alternate<M>(options: impl IntoIterator<Item = Node<M>>, current: usize) 
     Node(Kind::Alternate {
         options: options.into_iter().collect(),
         current,
+        hovered: None,
     })
+}
+
+/// `normal`, or `hovered` while the pointer is over the item, fading between them like an
+/// [`alternate`]: an icon that shows its percent, a time that shows the date.
+pub fn hover<M>(normal: Node<M>, hovered: Node<M>) -> Node<M> {
+    alternate([normal, hovered], 0).on_hover(1)
 }
 
 /// Children side by side, vertically centered.
@@ -176,6 +187,15 @@ impl<M> Node<M> {
         self
     }
 
+    /// For an [`alternate`]: shows the option at `index` while the pointer is over the item,
+    /// whatever `current` is. Other nodes have nothing to show on hover and ignore it.
+    pub fn on_hover(mut self, index: usize) -> Self {
+        if let Kind::Alternate { hovered, .. } = &mut self.0 {
+            *hovered = Some(index);
+        }
+        self
+    }
+
     fn set_tone(&mut self, new: Tone) {
         match &mut self.0 {
             Kind::Label { tone, .. }
@@ -222,9 +242,14 @@ impl<M> Node<M> {
                 unit,
                 tone,
             },
-            Kind::Alternate { options, current } => Kind::Alternate {
+            Kind::Alternate {
+                options,
+                current,
+                hovered,
+            } => Kind::Alternate {
                 options: map_all(options),
                 current,
+                hovered,
             },
             Kind::Row(children) => Kind::Row(map_all(children)),
             Kind::Column(children) => Kind::Column(map_all(children)),
@@ -379,6 +404,21 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    #[test]
+    fn hover_shows_the_second_option() {
+        let node: Node<()> = hover(label("a"), label("b"));
+        assert!(matches!(
+            node.into_kind(),
+            Kind::Alternate {
+                current: 0,
+                hovered: Some(1),
+                ..
+            }
+        ));
+        let node: Node<()> = label("a").on_hover(1);
+        assert!(matches!(node.into_kind(), Kind::Label { .. }));
     }
 
     #[test]

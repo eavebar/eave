@@ -112,5 +112,6 @@ pub fn tone(tone: Tone) -> Color {
         Tone::Accent => Color::from_rgb(0.53, 0.70, 1.00),
         Tone::Warning => Color::from_rgb(0.98, 0.76, 0.36),
         Tone::Critical => Color::from_rgb(0.97, 0.42, 0.42),
+        Tone::Good => Color::from_rgb(0.45, 0.85, 0.55),
     }
 }

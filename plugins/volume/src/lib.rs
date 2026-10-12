@@ -2,7 +2,7 @@
 //! muted. Scroll to change it, right click to mute. The popover has the level, fine control and the
 //! list of outputs to switch between. Whenever the level goes up or down, from here or anywhere
 //! else, the island gets a nudge that way, and the item shows the percent for a moment instead of
-//! the icon.
+//! the icon. It shows the percent while hovered, too.
 
 use eave_api::time::{Duration, sleep};
 use eave_api::ui::{self, Icon, Item, Panel, Tone};
@@ -116,7 +116,7 @@ impl Widget for Volume {
         });
         let max = self.config.max.max(sink.volume);
         let level = ui::counter(sink.volume.into(), 0..=max.into(), "%");
-        let content = ui::alternate([icon, level], self.showing_level.into());
+        let content = ui::alternate([icon, level], self.showing_level.into()).on_hover(1);
         let content = if sink.muted {
             content.tone(Tone::Dim)
         } else {
@@ -282,6 +282,7 @@ mod tests {
         let ui::Kind::Alternate {
             mut options,
             current: 0,
+            hovered: Some(1),
         } = content.into_kind()
         else {
             panic!("the icon first");

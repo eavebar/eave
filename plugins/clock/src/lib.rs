@@ -1,4 +1,4 @@
-//! A clock, with a month calendar in its popover.
+//! A clock that shows the date while hovered, with a month calendar in its popover.
 
 use chrono::format::{Item as FormatItem, StrftimeItems};
 use chrono::{DateTime, Datelike, Local, Months, NaiveDate};
@@ -16,12 +16,15 @@ pub fn register(registry: &mut Registry) {
 pub struct Config {
     /// `strftime` format for the bar.
     format: Format,
+    /// `strftime` format shown while the clock is hovered.
+    hover_format: Format,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             format: Format("%H:%M".into()),
+            hover_format: Format("%b %-d".into()),
         }
     }
 }
@@ -44,6 +47,7 @@ impl TryFrom<String> for Format {
 
 pub struct Clock {
     format: Format,
+    hover_format: Format,
     now: DateTime<Local>,
     /// First day of the month the calendar shows.
     month: NaiveDate,
@@ -65,6 +69,7 @@ impl Widget for Clock {
         let now = Local::now();
         let clock = Self {
             format: config.format,
+            hover_format: config.hover_format,
             now,
             month: first_of_month(now.date_naive()),
         };
@@ -87,7 +92,8 @@ impl Widget for Clock {
     }
 
     fn item(&self) -> Item<Message> {
-        Item::new(ui::label(self.now.format(&self.format.0).to_string()))
+        let format = |format: &Format| ui::label(self.now.format(&format.0).to_string());
+        Item::new(ui::hover(format(&self.format), format(&self.hover_format)))
     }
 
     fn popover(&self) -> Option<Panel<Message>> {
@@ -156,5 +162,6 @@ mod tests {
     fn config_defaults_when_empty() {
         let config: Config = toml::Table::new().try_into().unwrap();
         assert_eq!(config.format.0, "%H:%M");
+        assert_eq!(config.hover_format.0, "%b %-d");
     }
 }
