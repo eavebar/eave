@@ -1,7 +1,7 @@
 [package]
 name = "eave-workspaces"
 version = "0.1.0"
-description = "Hyprland workspaces, with a mark that slides to the active one, for eave"
+description = "Hyprland workspaces, with the icons of the apps on each, for eave"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

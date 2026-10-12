@@ -1,7 +1,7 @@
 # Plugin manifest. In a plugin's own repository this file sits at the repo root.
 [plugin]
 name = "workspaces"
-description = "Hyprland workspaces, with a mark that slides to the active one"
+description = "Hyprland workspaces, with the icons of the apps on each"
 crate = "eave-workspaces"
 path = "."
 api = "0.1"
