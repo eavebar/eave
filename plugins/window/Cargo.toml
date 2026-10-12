@@ -1,0 +1,15 @@
+[package]
+name = "eave-window"
+version = "0.1.0"
+description = "Title of the focused Hyprland window, for eave"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+eave-hyprland.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

@@ -22,12 +22,28 @@ pub struct Node<M>(Kind<M>);
 
 #[doc(hidden)]
 pub enum Kind<M> {
-    Label { text: String, tone: Option<Tone> },
-    Heading { text: String, tone: Option<Tone> },
+    Label {
+        text: String,
+        tone: Option<Tone>,
+    },
+    Heading {
+        text: String,
+        tone: Option<Tone>,
+    },
     Row(Vec<Node<M>>),
     Column(Vec<Node<M>>),
-    Grid { columns: usize, cells: Vec<Node<M>> },
-    Button { content: Box<Node<M>>, on_press: M },
+    Grid {
+        columns: usize,
+        cells: Vec<Node<M>>,
+    },
+    Button {
+        content: Box<Node<M>>,
+        on_press: M,
+    },
+    Switcher {
+        options: Vec<(Node<M>, M)>,
+        current: Option<usize>,
+    },
     Separator,
     Empty,
 }
@@ -72,6 +88,19 @@ pub fn button<M>(content: Node<M>, on_press: M) -> Node<M> {
     })
 }
 
+/// A row of choices, one of them current: workspaces, output devices. Each option sends its
+/// message when clicked. The host marks the current option and moves the mark smoothly when
+/// `current` changes.
+pub fn switcher<M>(
+    options: impl IntoIterator<Item = (Node<M>, M)>,
+    current: Option<usize>,
+) -> Node<M> {
+    Node(Kind::Switcher {
+        options: options.into_iter().collect(),
+        current,
+    })
+}
+
 /// A thin horizontal line between groups.
 pub fn separator<M>() -> Node<M> {
     Node(Kind::Separator)
@@ -102,6 +131,11 @@ impl<M> Node<M> {
                 children.iter_mut().for_each(|child| child.set_tone(new));
             }
             Kind::Button { content, .. } => content.set_tone(new),
+            Kind::Switcher { options, .. } => {
+                options
+                    .iter_mut()
+                    .for_each(|(child, _)| child.set_tone(new));
+            }
             Kind::Separator | Kind::Empty => {}
         }
     }
@@ -122,6 +156,13 @@ impl<M> Node<M> {
                 content: Box::new(content.map(f)),
                 on_press: f(on_press),
             },
+            Kind::Switcher { options, current } => Kind::Switcher {
+                options: options
+                    .into_iter()
+                    .map(|(node, message)| (node.map(f), f(message)))
+                    .collect(),
+                current,
+            },
             Kind::Separator => Kind::Separator,
             Kind::Empty => Kind::Empty,
         })
@@ -138,6 +179,7 @@ pub struct Item<M> {
     content: Option<Node<M>>,
     on_press: Option<M>,
     on_secondary: Option<M>,
+    on_scroll: Option<(M, M)>,
 }
 
 impl<M> Item<M> {
@@ -146,6 +188,7 @@ impl<M> Item<M> {
             content: Some(content),
             on_press: None,
             on_secondary: None,
+            on_scroll: None,
         }
     }
 
@@ -155,6 +198,7 @@ impl<M> Item<M> {
             content: None,
             on_press: None,
             on_secondary: None,
+            on_scroll: None,
         }
     }
 
@@ -170,18 +214,40 @@ impl<M> Item<M> {
         self
     }
 
+    /// Sent once per scroll step over the item, `up` or `down`. The host turns smooth touchpad
+    /// scrolling into steps.
+    pub fn on_scroll(mut self, up: M, down: M) -> Self {
+        self.on_scroll = Some((up, down));
+        self
+    }
+
     pub fn map<N>(self, f: &impl Fn(M) -> N) -> Item<N> {
         Item {
             content: self.content.map(|content| content.map(f)),
             on_press: self.on_press.map(f),
             on_secondary: self.on_secondary.map(f),
+            on_scroll: self.on_scroll.map(|(up, down)| (f(up), f(down))),
         }
     }
 
     #[doc(hidden)]
-    pub fn into_parts(self) -> (Option<Node<M>>, Option<M>, Option<M>) {
-        (self.content, self.on_press, self.on_secondary)
+    pub fn into_parts(self) -> ItemParts<M> {
+        ItemParts {
+            content: self.content,
+            on_press: self.on_press,
+            on_secondary: self.on_secondary,
+            on_scroll: self.on_scroll,
+        }
     }
+}
+
+#[doc(hidden)]
+pub struct ItemParts<M> {
+    pub content: Option<Node<M>>,
+    pub on_press: Option<M>,
+    pub on_secondary: Option<M>,
+    /// Up, then down.
+    pub on_scroll: Option<(M, M)>,
 }
 
 /// The contents of a popover. The host draws the surface, its background and its edges.
@@ -211,6 +277,7 @@ mod tests {
         let node = row([
             button(label("a"), 1),
             column([button(label("b"), 2), label("c")]),
+            switcher([(label("d"), 3)], Some(0)),
         ]);
 
         let Kind::Row(children) = node.map(&|n: i32| n * 10).into_kind() else {
@@ -218,13 +285,16 @@ mod tests {
         };
         let mut messages = Vec::new();
         collect(children, &mut messages);
-        assert_eq!(messages, [10, 20]);
+        assert_eq!(messages, [10, 20, 30]);
     }
 
     fn collect(nodes: Vec<Node<i32>>, out: &mut Vec<i32>) {
         for node in nodes {
             match node.into_kind() {
                 Kind::Button { on_press, .. } => out.push(on_press),
+                Kind::Switcher { options, .. } => {
+                    out.extend(options.into_iter().map(|(_, message)| message))
+                }
                 Kind::Row(children) | Kind::Column(children) => collect(children, out),
                 _ => {}
             }

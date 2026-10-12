@@ -1,0 +1,15 @@
+[package]
+name = "eave-workspaces"
+version = "0.1.0"
+description = "Hyprland workspaces, with a mark that slides to the active one, for eave"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+eave-hyprland.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

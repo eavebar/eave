@@ -1,6 +1,15 @@
 [workspace]
 resolver = "3"
-members = ["crates/eave", "crates/eave-api", "crates/eave-build", "plugins/clock"]
+members = [
+    "crates/eave",
+    "crates/eave-api",
+    "crates/eave-build",
+    "crates/eave-hyprland",
+    "plugins/clock",
+    "plugins/keyboard",
+    "plugins/window",
+    "plugins/workspaces",
+]
 default-members = ["crates/eave"]
 
 [workspace.package]
@@ -11,7 +20,11 @@ repository = "https://github.com/francescomengarelli/eave"
 [workspace.dependencies]
 eave-api = { path = "crates/eave-api", version = "0.1.0" }
 eave = { path = "crates/eave", version = "0.1.0" }
+eave-hyprland = { path = "crates/eave-hyprland", version = "0.1.0" }
 eave-clock = { path = "plugins/clock", version = "0.1.0" }
+eave-keyboard = { path = "plugins/keyboard", version = "0.1.0" }
+eave-window = { path = "plugins/window", version = "0.1.0" }
+eave-workspaces = { path = "plugins/workspaces", version = "0.1.0" }
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
 toml = { version = "0.9", default-features = false, features = ["std", "parse", "serde"] }
 

@@ -2,5 +2,10 @@
 //! by `eave-build`, which generates a main like this one.
 
 fn main() -> Result<(), eave::Error> {
-    eave::run(&[eave_clock::register])
+    eave::run(&[
+        eave_clock::register,
+        eave_keyboard::register,
+        eave_window::register,
+        eave_workspaces::register,
+    ])
 }

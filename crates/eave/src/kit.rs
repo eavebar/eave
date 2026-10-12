@@ -6,6 +6,7 @@ use eave_api::ui::{Kind, Node, Tone};
 use iced::widget::{button, column, container, row, rule, text};
 use iced::{Background, Border, Element, Length, Theme, alignment};
 
+use crate::switcher::Switcher;
 use crate::theme;
 
 pub fn node<'a>(node: Node<AnyMessage>) -> Element<'a, AnyMessage> {
@@ -62,6 +63,16 @@ fn render<'a>(node: Node<AnyMessage>, inherited: Tone) -> Element<'a, AnyMessage
             .padding([2, 8])
             .style(button_style)
             .into(),
+        Kind::Switcher { options, current } => {
+            let options = options.into_iter().map(|(content, on_press)| {
+                button(render(content, inherited))
+                    .on_press(on_press)
+                    .padding([2, 8])
+                    .style(button_style)
+                    .into()
+            });
+            Switcher::new(row(options).spacing(theme::SPACING / 2), current).into()
+        }
         Kind::Separator => rule::horizontal(1)
             .style(|_| rule::Style {
                 color: theme::SEPARATOR,

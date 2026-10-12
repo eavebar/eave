@@ -1,7 +1,7 @@
-//! The wrapper around every bar item. It turns clicks the content didn't handle into messages,
-//! and reports where the item is, so a popover can open under it.
+//! The wrapper around every bar item. It turns clicks and scrolls the content didn't handle into
+//! messages, and reports where the item is, so a popover can open under it.
 
-use iced::advanced::widget::{Operation, Tree};
+use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::{Element, Event, Length, Rectangle, Size, Vector};
 
@@ -12,6 +12,25 @@ pub struct Slot<'a, M> {
     content: Element<'a, M>,
     on_press: Option<OnPress<'a, M>>,
     on_secondary: Option<M>,
+    /// Up, then down.
+    on_scroll: Option<(M, M)>,
+}
+
+/// Touchpad scrolling that hasn't added up to a whole step yet. Positive is up.
+#[derive(Debug, Default)]
+struct Scrolled(f32);
+
+impl Scrolled {
+    /// Adds `delta` and takes out the whole steps it completes.
+    fn steps(&mut self, delta: mouse::ScrollDelta) -> i32 {
+        self.0 += match delta {
+            mouse::ScrollDelta::Lines { y, .. } => y,
+            mouse::ScrollDelta::Pixels { y, .. } => y / crate::theme::SCROLL_STEP,
+        };
+        let steps = self.0.trunc();
+        self.0 -= steps;
+        steps as i32
+    }
 }
 
 impl<'a, M> Slot<'a, M> {
@@ -20,6 +39,7 @@ impl<'a, M> Slot<'a, M> {
             content: content.into(),
             on_press: None,
             on_secondary: None,
+            on_scroll: None,
         }
     }
 
@@ -32,9 +52,22 @@ impl<'a, M> Slot<'a, M> {
         self.on_secondary = message;
         self
     }
+
+    pub fn on_scroll(mut self, messages: Option<(M, M)>) -> Self {
+        self.on_scroll = messages;
+        self
+    }
 }
 
 impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slot<'_, M> {
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<Scrolled>()
+    }
+
+    fn state(&self) -> tree::State {
+        tree::State::new(Scrolled::default())
+    }
+
     fn size(&self) -> Size<Length> {
         self.content.as_widget().size()
     }
@@ -116,6 +149,19 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slot<'_, M> {
             return;
         }
 
+        if let (Event::Mouse(mouse::Event::WheelScrolled { delta }), Some((up, down))) =
+            (event, &self.on_scroll)
+        {
+            let steps = tree.state.downcast_mut::<Scrolled>().steps(*delta);
+            // A flung wheel can report many lines at once; a handful of steps is plenty.
+            let message = if steps > 0 { up } else { down };
+            for _ in 0..steps.unsigned_abs().min(5) {
+                shell.publish(message.clone());
+            }
+            shell.capture_event();
+            return;
+        }
+
         let message = match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => self
                 .on_press
@@ -176,5 +222,23 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slot<'_, M> {
 impl<'a, M: Clone + 'a> From<Slot<'a, M>> for Element<'a, M> {
     fn from(slot: Slot<'a, M>) -> Self {
         Element::new(slot)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn touchpad_scrolling_adds_up_to_steps() {
+        let mut scrolled = Scrolled::default();
+        let pixels = |y| mouse::ScrollDelta::Pixels { x: 0.0, y };
+        assert_eq!(scrolled.steps(pixels(20.0)), 0);
+        assert_eq!(scrolled.steps(pixels(20.0)), 1);
+        assert_eq!(scrolled.steps(pixels(-50.0)), -1);
+        assert_eq!(
+            scrolled.steps(mouse::ScrollDelta::Lines { x: 0.0, y: 2.0 }),
+            1
+        );
     }
 }

@@ -1,6 +1,8 @@
 //! Every visual constant in one place. Plugins can't reach any of this: they name a [`Tone`], the
 //! host picks the color.
 
+use std::time::Duration;
+
 use eave_api::ui::Tone;
 use iced::{Color, Font, font};
 
@@ -12,6 +14,8 @@ pub const PANEL_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 pub const HOVER_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 pub const PRESSED_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.14);
 pub const SEPARATOR: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);
+/// Behind the current option of a switcher (the active workspace).
+pub const SWITCHER_MARK: Color = Color::from_rgba(0.53, 0.70, 1.00, 0.22);
 
 /// Horizontal padding at the bar's ends.
 pub const BAR_PADDING: u16 = 12;
@@ -26,6 +30,11 @@ pub const PANEL_GAP: i32 = 6;
 pub const SPACING: u32 = 8;
 pub const GRID_CELL: f32 = 28.0;
 pub const BUTTON_RADIUS: f32 = 6.0;
+
+/// How long a switcher's mark takes to reach a newly current option.
+pub const SWITCHER_SLIDE: Duration = Duration::from_millis(180);
+/// Touchpad scrolling distance, in logical pixels, that counts as one scroll step.
+pub const SCROLL_STEP: f32 = 30.0;
 
 pub const TEXT_SIZE: f32 = 14.0;
 pub const HEADING_SIZE: f32 = 17.0;

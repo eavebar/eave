@@ -1,0 +1,7 @@
+# Plugin manifest. In a plugin's own repository this file sits at the repo root.
+[plugin]
+name = "window"
+description = "Title of the focused Hyprland window"
+crate = "eave-window"
+path = "."
+api = "0.1"

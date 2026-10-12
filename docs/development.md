@@ -31,7 +31,7 @@ Stop with Ctrl+C. To check that the surface exists and where it is:
 hyprctl layers | grep eave
 ```
 
-To watch the Hyprland event stream the workspace module will consume:
+To watch the Hyprland event stream that `eave-hyprland` reads:
 
 ```fish
 socat -U - UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock
@@ -57,6 +57,7 @@ Current baseline (Asahi, aarch64, release, tiny-skia, default binary). Measured 
 | empty bar (no config) | 5.8 MiB | ~9.7 MB | 0% |
 | two clocks | 5.8 MiB | ~11.8 MB | 0% |
 | two clocks, popover open | | ~14.5 MB | |
+| workspaces, window, clock, keyboard (after D-16/D-17) | 6.1 MiB | ~12.2 MB | 0.1% |
 
 Before the plugin split (skeleton, clock + date hard-coded): binary 5.6 MiB, RSS ~11.5 MB. The +0.2 MiB of binary and +0.3 MB of RSS are the price of the registry, config parsing (`toml`) and popover surfaces ([D-12](decisions.md), [D-14](decisions.md)).
 

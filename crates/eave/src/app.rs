@@ -291,14 +291,17 @@ fn bar_view(bar: &Bar) -> Element<'_, Message> {
 }
 
 fn item_view(index: usize, instance: &Instance) -> Option<Element<'_, Message>> {
-    let (content, on_press, on_secondary) = instance.widget.item().into_parts();
-    let content: Element<'_, AnyMessage> = container(kit::node(content?))
+    let parts = instance.widget.item().into_parts();
+    let on_press = parts.on_press;
+    let content: Element<'_, AnyMessage> = container(kit::node(parts.content?))
         .padding([0, style::ITEM_PADDING])
         .center_y(Length::Fill)
         .into();
 
-    let mut slot = Slot::new(content.map(move |message| Message::Widget(index, message)))
-        .on_secondary(on_secondary.map(|message| Message::Widget(index, message)));
+    let wrap = move |message| Message::Widget(index, message);
+    let mut slot = Slot::new(content.map(wrap))
+        .on_secondary(parts.on_secondary.map(wrap))
+        .on_scroll(parts.on_scroll.map(|(up, down)| (wrap(up), wrap(down))));
     if on_press.is_some() || instance.has_popover {
         slot = slot.on_press(move |bounds, width| {
             Message::Pressed(index, bounds, width, on_press.clone())

@@ -5,6 +5,7 @@ mod config;
 mod kit;
 mod measure;
 mod slot;
+mod switcher;
 mod theme;
 
 use eave_api::Registry;

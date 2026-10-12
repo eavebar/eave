@@ -25,7 +25,7 @@ We build it ourselves, not on a framework like Quickshell or AGS, because we wan
 - Stack: **Rust + iced 0.14 + iced_layershell 0.19**, with the **tiny-skia** (CPU) renderer by default.
 - **Everything is a plugin.** With no `~/.config/eave/config.toml` the bar is empty. Plugins are crates compiled in by `eave-build`, never loaded at runtime ([docs/plugins.md](docs/plugins.md)).
 - Run it: `cargo run --release`. GPU renderer: `cargo run --release --features gpu`. Tests: `cargo test --workspace`.
-- Code: `crates/eave-api` (plugin SDK: `Widget`, closed `ui` vocabulary), `crates/eave` (host: surfaces, layout, theme, popovers), `crates/eave-build` (builds a binary with third-party plugins), `plugins/clock`.
+- Code: `crates/eave-api` (plugin SDK: `Widget`, closed `ui` vocabulary), `crates/eave` (host: surfaces, layout, theme, popovers), `crates/eave-build` (builds a binary with third-party plugins), `crates/eave-hyprland` (shared Hyprland IPC service), `plugins/{clock,workspaces,window,keyboard}`.
 - Baseline: ~11.8 MB RSS with two clocks and ~0% idle CPU (see [docs/development.md](docs/development.md#measuring)). Don't regress it without a reason written down in `docs/decisions.md`.
 
 ## Rules for agents

@@ -1,0 +1,7 @@
+# Plugin manifest. In a plugin's own repository this file sits at the repo root.
+[plugin]
+name = "keyboard"
+description = "Active keyboard layout; click to switch"
+crate = "eave-keyboard"
+path = "."
+api = "0.1"

@@ -40,6 +40,30 @@ format = "%a %d %b"
 
 The zones are `left`, `center` and `right`, in order. Every key except `widget` goes to the widget's `Config`. Unknown widgets and invalid options are reported on stderr and skipped. They never crash the bar.
 
+## Built-in plugins
+
+They ship in the default binary, and with `eave-build` you list them like the clock above (`dir = "plugins/<name>"`).
+
+| Widget | Shows | Options |
+|---|---|---|
+| `clock` | time, calendar in the popover | `format` (strftime, default `%H:%M`) |
+| `workspaces` | Hyprland workspaces, active one marked; click to go, scroll to move | `persistent` (workspaces 1..N always shown, default 0) |
+| `window` | focused window title, hidden when nothing has focus | `max_chars` (default 60) |
+| `keyboard` | active layout, click for the next one; hidden with a single layout | `aliases` (`{ "English (US)" = "us" }`) |
+
+```toml
+[[left]]
+widget = "workspaces"
+persistent = 5
+
+[[left]]
+widget = "window"
+
+[[right]]
+widget = "keyboard"
+aliases = { "English (US)" = "us", "Italian" = "it" }
+```
+
 ## Writing a plugin
 
 ```toml
@@ -109,12 +133,29 @@ impl Widget for Counter {
 }
 ```
 
+### Services
+
+Widgets that read the same source share it through a service crate, instead of each opening its own connection. For Hyprland, depend on `eave-hyprland` (patched by `eave-build` like `eave-api`):
+
+```rust
+fn subscription(&self) -> Subscription<Message> {
+    // A snapshot first, then every event after it. Re-snapshots by itself if events were missed.
+    Subscription::run(|| eave_hyprland::watch(snapshot)).map(Message::Hyprland)
+}
+
+async fn snapshot() -> std::io::Result<eave_hyprland::types::Window> {
+    eave_hyprland::query("activewindow").await
+}
+```
+
+`eave_hyprland::dispatch("workspace 3")` and `request("…")` send commands. Run them in a `Task`.
+
 ### The rules
 
 - **Views are pure and cheap.** `item()` runs on every redraw, and `popover()` runs after every message to your widget. Precompute in `update`.
 - **`update` never blocks.** I/O goes in a `Task` (`Task::perform`) or a `Subscription`.
 - **Events, not polling.** Use `eave_api::time::every` only when there's no event source (see [development.md](development.md#code-rules)).
-- **You describe, the host draws.** The vocabulary is `label`, `heading`, `row`, `column`, `grid`, `button`, `separator`, `empty`, plus `.tone(Tone::…)`. If you need something it can't express, propose a new primitive in eave rather than working around it ([D-13](decisions.md)).
+- **You describe, the host draws.** The vocabulary is `label`, `heading`, `row`, `column`, `grid`, `button`, `switcher`, `separator`, `empty`, plus `.tone(Tone::…)`. `switcher(options, current)` is a row of choices with one marked current, and the host slides the mark when it changes. If you need something it can't express, propose a new primitive in eave rather than working around it ([D-13](decisions.md)).
 
 ### Clicks and popovers
 
@@ -124,4 +165,4 @@ impl Widget for Counter {
 | no | yes | toggles the popover |
 | yes | either | sends your message (you can still return `Effect::none().open_popover()`) |
 
-A right click sends `on_secondary`, if set. Buttons inside the item take their own clicks first. Return `Item::hidden()` to take no space at all (a battery widget on a desktop).
+A right click sends `on_secondary`, if set. `Item::on_scroll(up, down)` sends one message per scroll step. The host turns touchpad scrolling into steps. Buttons inside the item take their own clicks first. Return `Item::hidden()` to take no space at all (a battery widget on a desktop).
