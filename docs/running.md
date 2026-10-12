@@ -34,7 +34,7 @@ Running it again repairs an install and never updates one. `EAVE_REPO=<git URL o
 eave-build update
 ```
 
-Nothing changes version until you run this ([D-31](decisions.md)). It fetches eave and every plugin, moves each to the newest commit of its `@rev` (or its default branch), prints what moved, and rebuilds as above. When eave itself moved, it also reinstalls `eave-build` from the new checkout. To stay on a version, pin it: `eave = "francescomengarelli/eave@<tag>"`, `widget = "someone/weather@v0.2"`.
+Nothing changes version until you run this ([D-31](decisions.md)). It fetches eave and every plugin, moves each to the newest commit of its `@rev` (or its default branch), prints what moved, and rebuilds as above. When eave itself moved, it also reinstalls `eave-build` from the new checkout and runs its `init`, which rewrites the systemd units (config.toml is kept) and reloads systemd. To stay on a version, pin it: `eave = "francescomengarelli/eave@<tag>"`, `widget = "someone/weather@v0.2"`.
 
 ## Uninstall
 
@@ -122,3 +122,4 @@ systemctl --user enable --now eave-rebuild.path   # eave-build init put the unit
 - Saving while a build runs doesn't start a second build, and that save isn't queued either. If you started using another widget mid-build, save again once the build is done.
 - It works whether the bar runs as the service or from the Hyprland config. In the second case it relaunches the bar through Hyprland's socket. If systemd's environment has no `HYPRLAND_INSTANCE_SIGNATURE`, it uses the one Hyprland that's running, and it gives up (leaving the old bar running) only when there are several.
 - `eave-build init` writes the real path into `PathChanged=` when `XDG_CONFIG_HOME` isn't `~/.config`.
+- `eave-build init` writes its own full path into `ExecStart=`. systemd looks up a bare command name only in `/usr/bin` and `/usr/local/bin`, not in `~/.cargo/bin`.

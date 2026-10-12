@@ -235,6 +235,8 @@ fn build(config_path: &Path, update: bool) -> Result<()> {
 
     // After the bar, so a failure here never leaves it half-updated.
     if eave_moved {
+        // Before the install replaces this binary: Linux then reports its path as "… (deleted)".
+        let exe = std::env::current_exe().map_err(|e| format!("finding eave-build itself: {e}"))?;
         let status = Command::new("cargo")
             .args(["install", "--locked", "--quiet", "--path"])
             .arg(eave_dir.join("crates/eave-build"))
@@ -244,6 +246,20 @@ fn build(config_path: &Path, update: bool) -> Result<()> {
             return Err("updating eave-build itself failed".into());
         }
         eprintln!("eave-build: updated eave-build");
+        // The new eave-build may ship new units. It keeps config.toml and rewrites only the units.
+        let status = Command::new(exe)
+            .arg("init")
+            .arg("--config")
+            .arg(config_path)
+            .status()
+            .map_err(|e| format!("running the new eave-build: {e}"))?;
+        if !status.success() {
+            return Err("writing the new systemd units failed".into());
+        }
+        // Without systemd (units written but unused) there's nothing to reload.
+        let _ = Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
     }
     Ok(())
 }
@@ -488,23 +504,41 @@ fn init(config_path: &Path) -> Result<()> {
     let units = config_dir()?.join("systemd/user");
     std::fs::create_dir_all(&units).map_err(|e| format!("{}: {e}", units.display()))?;
     let watched = std::path::absolute(config_path).map_err(|e| format!("{e}"))?;
+    let watched = (watched != home()?.join(".config/eave/config.toml")).then_some(watched);
+    let exe = std::env::current_exe().map_err(|e| format!("finding eave-build itself: {e}"))?;
     for (name, unit) in UNITS {
-        // The path unit watches ~/.config/eave/config.toml unless told otherwise.
-        let unit = if watched == home()?.join(".config/eave/config.toml") {
-            unit.to_owned()
-        } else {
-            unit.replace(
-                "%h/.config/eave/config.toml",
-                &watched.to_string_lossy().replace('%', "%%"),
-            )
-        };
-        write_if_changed(&units.join(name), &unit)?;
+        write_if_changed(
+            &units.join(name),
+            &customize_unit(unit, watched.as_deref(), &exe),
+        )?;
     }
     eprintln!(
         "eave-build: wrote the systemd user units to {}",
         units.display()
     );
     Ok(())
+}
+
+/// Fills in a unit's paths. The path unit watches ~/.config/eave/config.toml unless `watched`
+/// says otherwise. The rebuild runs `exe`, the eave-build that wrote the units: systemd only
+/// finds a bare command name in /usr/bin and /usr/local/bin, so it needs the full path.
+fn customize_unit(unit: &str, watched: Option<&Path>, exe: &Path) -> String {
+    let mut unit = unit.to_owned();
+    if let Some(watched) = watched {
+        unit = unit.replace(
+            "%h/.config/eave/config.toml",
+            &watched.to_string_lossy().replace('%', "%%"),
+        );
+    }
+    let exe = exe
+        .to_string_lossy()
+        .replace('%', "%%")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    unit.replace(
+        "ExecStart=%h/.cargo/bin/eave-build",
+        &format!("ExecStart=\"{exe}\""),
+    )
 }
 
 /// Reads `eave-plugin.toml` in `root` and checks it against the crate it points at.
@@ -915,6 +949,21 @@ fn cache_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn units_run_eave_build_by_its_full_path() {
+        let rebuild = UNITS[2].1;
+        let exe = Path::new("/home/a b/.cargo/bin/eave-build");
+        let unit = customize_unit(rebuild, None, exe);
+        assert!(unit.contains("\nExecStart=\"/home/a b/.cargo/bin/eave-build\"\n"));
+        assert!(!unit.contains("ExecStart=%h"));
+
+        let odd = customize_unit(rebuild, None, Path::new("/x/50%\"q/eave-build"));
+        assert!(odd.contains("ExecStart=\"/x/50%%\\\"q/eave-build\""));
+
+        let path = customize_unit(UNITS[1].1, Some(Path::new("/c/eave.toml")), exe);
+        assert!(path.contains("PathChanged=/c/eave.toml"));
+    }
 
     #[test]
     fn api_compatibility_follows_caret_rules() {
