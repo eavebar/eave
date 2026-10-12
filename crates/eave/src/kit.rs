@@ -6,6 +6,8 @@ use eave_api::ui::{Kind, Node, Tone};
 use iced::widget::{button, column, container, row, rule, text};
 use iced::{Background, Border, Element, Length, Theme, alignment};
 
+use crate::alternate::Alternate;
+use crate::counter::Counter;
 use crate::icon;
 use crate::switcher::Switcher;
 use crate::theme;
@@ -38,6 +40,15 @@ fn render<'a>(node: Node<AnyMessage>, inherited: Tone) -> Element<'a, AnyMessage
             .color(theme::tone(tone.unwrap_or(inherited)))
             .into(),
         Kind::Icon { icon, tone } => icon::view(icon, theme::tone(tone.unwrap_or(inherited))),
+        Kind::Counter {
+            value,
+            range,
+            unit,
+            tone,
+        } => Counter::new(value, range, unit, theme::tone(tone.unwrap_or(inherited))).into(),
+        Kind::Alternate { options, current } => {
+            Alternate::new(all(options).collect(), current).into()
+        }
         Kind::Row(children) => row(all(children))
             .spacing(theme::SPACING)
             .align_y(alignment::Vertical::Center)

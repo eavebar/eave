@@ -10,5 +10,7 @@ repository.workspace = true
 # Task and Subscription are the only iced types plugins see. No widgets, no renderer: that is what keeps the UI vocabulary closed (D-13).
 iced_runtime = "0.14"
 iced_futures = { version = "0.14", features = ["tokio"] }
+# For `time::sleep`: one-shot delays. Already in the build through iced's tokio backend.
+tokio = { version = "1", default-features = false, features = ["time"] }
 serde.workspace = true
 toml.workspace = true

@@ -1,8 +1,8 @@
 //! Hyprland workspaces that have windows in them, plus the one you are on. Click one to go there, scroll to move between them. The host slides the
-//! active mark from the old workspace to the new one.
+//! active mark from the old workspace to the new one, and the island gets a nudge the way it went.
 
 use eave_api::ui::{self, Item, Tone};
-use eave_api::{Effect, Registry, Subscription, Task, Widget};
+use eave_api::{Effect, Nudge, Registry, Subscription, Task, Widget};
 use std::collections::HashMap;
 
 use eave_hyprland::types::{Client, Workspace};
@@ -70,6 +70,7 @@ impl Widget for Workspaces {
     }
 
     fn update(&mut self, message: Message) -> Effect<Message> {
+        let before = self.active;
         match message {
             Message::Hyprland(Update::Snapshot(snapshot)) => {
                 self.open = snapshot
@@ -91,7 +92,12 @@ impl Widget for Workspaces {
             Message::Next => return focus("\"m+1\"".into()),
         }
         self.refresh();
-        Effect::none()
+        // Ids follow the order workspaces are shown in, so a higher one is further right.
+        match (before, self.active) {
+            (Some(from), Some(to)) if to > from => Effect::none().nudge(Nudge::Right),
+            (Some(from), Some(to)) if to < from => Effect::none().nudge(Nudge::Left),
+            _ => Effect::none(),
+        }
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -226,6 +232,26 @@ mod tests {
 
     fn event(workspaces: &mut Workspaces, event: Event) {
         workspaces.update(Message::Hyprland(Update::Event(event)));
+    }
+
+    #[test]
+    fn switching_nudges_the_way_it_went() {
+        let mut workspaces = bar(0);
+        let mut go = |id: i64| {
+            let event = Event::Workspace {
+                id,
+                name: id.to_string(),
+            };
+            workspaces
+                .update(Message::Hyprland(Update::Event(event)))
+                .into_parts()
+                .2
+        };
+        // The first one is where it starts, not a move.
+        assert_eq!(go(1), None);
+        assert_eq!(go(3), Some(Nudge::Right));
+        assert_eq!(go(3), None);
+        assert_eq!(go(2), Some(Nudge::Left));
     }
 
     fn workspace(id: i64, name: &str) -> Workspace {

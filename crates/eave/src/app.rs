@@ -2,8 +2,8 @@
 //! popover isn't a surface of its own: the island holding its item morphs into it, and the bar
 //! surface grows to make room while it's there.
 
-use eave_api::Registry;
 use eave_api::erased::{AnyMessage, ErasedWidget, PopoverRequest};
+use eave_api::{Nudge, Registry};
 use iced::alignment::Horizontal;
 use iced::widget::{Space, container, row};
 use iced::{
@@ -31,6 +31,9 @@ pub struct Bar {
     /// Whether the pointer is over the bar, so a click that Hyprland reports is ours to handle,
     /// not an outside one. Tracked only while a popover is open.
     pointer_inside: bool,
+    /// How many nudges widgets have asked for, so each island can tell a new one from one it has
+    /// already played.
+    nudges: u64,
 }
 
 struct Instance {
@@ -42,6 +45,8 @@ struct Instance {
     has_popover: bool,
     /// The bar the item was last clicked on, where its popover opens.
     window: Option<window::Id>,
+    /// The last nudge it asked for, numbered by [`Bar::nudges`].
+    nudge: Option<(u64, Nudge)>,
 }
 
 struct Popover {
@@ -87,6 +92,7 @@ impl Bar {
             next_id: 0,
             popovers: Vec::new(),
             pointer_inside: false,
+            nudges: 0,
         };
         let task = bar.apply(config);
         (bar, task)
@@ -125,6 +131,7 @@ impl Bar {
                         has_popover: widget.popover().is_some(),
                         widget,
                         window: None,
+                        nudge: None,
                     });
                 }
                 Err(error) => eprintln!("eave: widget `{}`: {error}, skipping it", entry.widget),
@@ -273,9 +280,16 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             let Some(instance) = bar.find_mut(id) else {
                 return Task::none();
             };
-            let (task, request) = instance.widget.update(message).into_parts();
+            let (task, request, nudge) = instance.widget.update(message).into_parts();
             instance.has_popover = instance.widget.popover().is_some();
             let has_popover = instance.has_popover;
+            if let Some(nudge) = nudge {
+                bar.nudges += 1;
+                let generation = bar.nudges;
+                if let Some(instance) = bar.find_mut(id) {
+                    instance.nudge = Some((generation, nudge));
+                }
+            }
 
             match request {
                 Some(PopoverRequest::Open) => bar.open_popover(id),
@@ -381,8 +395,14 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                 .iter()
                 .filter(move |instance| instance.entry.zone == zone)
         };
-        let items: Vec<_> = instances()
-            .filter_map(|instance| Some((instance.id, item_view(instance, window)?)))
+        let (items, groups): (Vec<_>, Vec<_>) = instances()
+            .filter_map(|instance| {
+                let item = (instance.id, item_view(instance, window)?);
+                Some((item, instance.entry.width_group.as_deref()))
+            })
+            .unzip();
+        let nudges = instances()
+            .filter_map(|instance| Some((instance.id, instance.nudge?)))
             .collect();
         // The open one wins over one still closing in the same island.
         let popover = bar
@@ -398,6 +418,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             Island::new(items)
                 .align(align)
                 .popover(popover.map(|popover| popover_view(bar, popover)))
+                .nudges(nudges)
+                .width_groups(groups)
                 .into()
         };
         container(island).width(Length::Fill).align_x(align)
