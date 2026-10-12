@@ -81,6 +81,10 @@ pub const BUTTON_RADIUS: f32 = 6.0;
 
 /// How long an alternate takes to fade from one option to the next: out, then in.
 pub const ALTERNATE_FADE: Duration = Duration::from_millis(240);
+/// How far an option slides as it fades, when the pointer moving onto or off its item set it off:
+/// sideways, or up and down (less, to stay inside the island).
+pub const ALTERNATE_SLIDE_X: f32 = 6.0;
+pub const ALTERNATE_SLIDE_Y: f32 = 4.0;
 /// How long a counter takes to count to a new number, through every one in between.
 pub const COUNTER_COUNT: Duration = Duration::from_millis(320);
 /// How long a switcher's mark takes to reach a newly current option.

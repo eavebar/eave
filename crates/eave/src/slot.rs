@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
-use iced::{Element, Event, Length, Rectangle, Size, Vector};
+use iced::{Element, Event, Length, Point, Rectangle, Size, Vector};
 
 use crate::alternate::SetHovered;
 
@@ -27,6 +27,8 @@ struct State {
     pressed: Option<Instant>,
     /// Whether the pointer is over the item, as its alternates were last told.
     hovered: bool,
+    /// Where the pointer was at the last event, while it's on the surface.
+    pointer: Option<Point>,
 }
 
 /// Touchpad scrolling that hasn't added up to a whole step yet. Positive is up.
@@ -156,15 +158,18 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slot<'_, M> {
     ) {
         // The whole item counts, not just its content: a pointer against the screen edge is above
         // the text. Only a change reaches the alternates, so resting the pointer costs nothing.
-        let hovered = cursor.is_over(layout.bounds());
+        let bounds = layout.bounds();
+        let hovered = cursor.is_over(bounds);
         let state = tree.state.downcast_mut::<State>();
+        let before = std::mem::replace(&mut state.pointer, cursor.position());
         if state.hovered != hovered {
             state.hovered = hovered;
+            let toward = toward(bounds, before, cursor.position(), hovered);
             self.content.as_widget_mut().operate(
                 &mut tree.children[0],
                 layout,
                 renderer,
-                &mut SetHovered(hovered),
+                &mut SetHovered { hovered, toward },
             );
             shell.request_redraw();
         }
@@ -272,6 +277,41 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slot<'_, M> {
     }
 }
 
+/// Which way the pointer was going as it came onto (`entered`) or left `bounds`: a unit step
+/// along the axis it moved most on. With only one position, as when it comes onto or leaves the
+/// surface, the nearest edge of the item to the position inside says, relative to the item's
+/// size so a wide item doesn't favor its top and bottom.
+fn toward(bounds: Rectangle, before: Option<Point>, now: Option<Point>, entered: bool) -> Vector {
+    if let (Some(before), Some(now)) = (before, now)
+        && before != now
+    {
+        let moved = now - before;
+        return if moved.x.abs() >= moved.y.abs() {
+            Vector::new(moved.x.signum(), 0.0)
+        } else {
+            Vector::new(0.0, moved.y.signum())
+        };
+    }
+    let Some(inside) = (if entered { now } else { before }) else {
+        return Vector::ZERO;
+    };
+    let x = ((inside.x - bounds.x) / bounds.width).clamp(0.0, 1.0);
+    let y = ((inside.y - bounds.y) / bounds.height).clamp(0.0, 1.0);
+    // Each edge, as the way out through it.
+    let edges = [
+        (x, Vector::new(-1.0, 0.0)),
+        (1.0 - x, Vector::new(1.0, 0.0)),
+        (y, Vector::new(0.0, -1.0)),
+        (1.0 - y, Vector::new(0.0, 1.0)),
+    ];
+    let (_, out) = edges
+        .into_iter()
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .expect("four edges");
+    // Coming in through an edge goes the other way.
+    if entered { -out } else { out }
+}
+
 impl<'a, M: Clone + 'a> From<Slot<'a, M>> for Element<'a, M> {
     fn from(slot: Slot<'a, M>) -> Self {
         Element::new(slot)
@@ -281,6 +321,33 @@ impl<'a, M: Clone + 'a> From<Slot<'a, M>> for Element<'a, M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pointer_says_which_way() {
+        let item = Rectangle::new(Point::new(100.0, 0.0), Size::new(60.0, 30.0));
+        let at = |x, y| Some(Point::new(x, y));
+        // Moving: the way it moved most.
+        assert_eq!(
+            toward(item, at(95.0, 14.0), at(104.0, 16.0), true),
+            Vector::new(1.0, 0.0)
+        );
+        assert_eq!(
+            toward(item, at(130.0, 2.0), at(131.0, -3.0), false),
+            Vector::new(0.0, -1.0)
+        );
+        // Only one position: the nearest edge, relative to the size.
+        assert_eq!(
+            toward(item, None, at(120.0, 2.0), true),
+            Vector::new(0.0, 1.0),
+            "came down from the top"
+        );
+        assert_eq!(
+            toward(item, at(158.0, 10.0), None, false),
+            Vector::new(1.0, 0.0),
+            "left through the right"
+        );
+        assert_eq!(toward(item, None, None, false), Vector::ZERO);
+    }
 
     #[test]
     fn touchpad_scrolling_adds_up_to_steps() {
