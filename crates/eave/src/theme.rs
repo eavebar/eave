@@ -94,9 +94,9 @@ pub const SWITCHER_SLIDE: Duration = Duration::from_millis(180);
 pub const BATTERY_GULP: Duration = Duration::from_millis(380);
 pub const BATTERY_GULPS: u32 = 3;
 pub const BATTERY_GULP_EVERY: Duration = Duration::from_secs(8);
-/// How often the charging battery is redrawn: 15 frames a second, cheaper than the compositor's
+/// How often the charging battery is redrawn: 30 frames a second, cheaper than the compositor's
 /// rate and smooth enough for motion this small.
-pub const BATTERY_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 15);
+pub const BATTERY_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
 /// A primary press held at least this long is a long press: it plays with the island, but the
 /// item's action and popover don't fire on release.
 pub const LONG_PRESS: Duration = Duration::from_millis(400);

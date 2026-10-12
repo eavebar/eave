@@ -3,7 +3,7 @@
 //! gauge. Geometry is laid out on a 16-unit grid and scaled to [`theme::ICON_SIZE`].
 //!
 //! A charging battery pours: its charge ripples like a liquid, and every few seconds it gulps a few
-//! times, like a bottle being emptied, the whole icon swelling with each gulp. It moves at 15
+//! times, like a bottle being emptied, the whole icon swelling with each gulp. It moves at 30
 //! frames a second, not the compositor's rate, to keep it cheap
 //! ([D-37](../../../docs/decisions.md)).
 
