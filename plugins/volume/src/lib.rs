@@ -221,16 +221,17 @@ impl Widget for Volume {
 
     fn popover(&self) -> Option<Panel<Message>> {
         let sink = self.audio.default_sink()?;
-        let mut lines = vec![ui::header("Sound")];
-        lines.extend(self.group(Direction::Output, sink));
+        let mut pages = vec![("Output", self.group(Direction::Output, sink))];
         if let Some(source) = self.audio.default_source() {
-            lines.extend(self.group(Direction::Input, source));
+            pages.push(("Input", self.group(Direction::Input, source)));
         }
-        if !self.streams.is_empty() {
-            lines.push(ui::section("Apps"));
-            lines.extend(self.streams.iter().map(|stream| self.app(stream)));
-        }
-        let panel = Panel::new(ui::column(lines))
+        let apps = if self.streams.is_empty() {
+            ui::label("Nothing is playing").tone(Tone::Dim)
+        } else {
+            ui::column(self.streams.iter().map(|stream| self.app(stream)))
+        };
+        pages.push(("Apps", apps));
+        let panel = Panel::new(ui::column([ui::header("Sound"), ui::tabs(pages)]))
             .on_open(Message::Opened)
             .on_close(Message::Closed);
         Some(panel)
@@ -255,29 +256,23 @@ fn form_icon(form: Form) -> Icon {
 }
 
 impl Volume {
-    /// A section for the output or input: its mute button, slider and level, then the devices to
-    /// choose from when there's more than one.
-    fn group(&self, direction: Direction, device: &Device) -> Vec<ui::Node<Message>> {
-        let (title, devices, default, target, toggle) = match direction {
+    /// The output's or input's page: its mute button, slider and level, then the devices to
+    /// choose from when there's more than one, or the only one's name.
+    fn group(&self, direction: Direction, device: &Device) -> ui::Node<Message> {
+        let (devices, default, target, toggle) = match direction {
             Direction::Output => (
-                "Output",
                 &self.audio.sinks,
                 self.audio.default_sink,
                 Target::Output,
                 Message::ToggleMute,
             ),
             Direction::Input => (
-                "Input",
                 &self.audio.sources,
                 self.audio.default_source,
                 Target::Input,
                 Message::ToggleMic,
             ),
         };
-        let mut section = ui::section(title);
-        if devices.len() == 1 {
-            section = section.trailing(ui::label(device.description.clone()).tone(Tone::Dim));
-        }
         let icon = match direction {
             Direction::Output => Icon::Volume {
                 level: device.volume as f32 / 100.0,
@@ -287,11 +282,10 @@ impl Volume {
                 muted: device.muted,
             },
         };
-        let mut lines = vec![
-            section,
-            self.control(icon, toggle, target, device.volume, device.muted),
-        ];
-        if devices.len() > 1 {
+        let mut lines = vec![self.control(icon, toggle, target, device.volume, device.muted)];
+        if devices.len() == 1 {
+            lines.push(ui::label(device.description.clone()).tone(Tone::Dim));
+        } else {
             let rows = devices.iter().enumerate().map(|(index, device)| {
                 let current = Some(index) == default;
                 let mut row = ui::list_item(device.description.clone())
@@ -308,7 +302,7 @@ impl Volume {
             });
             lines.push(ui::list(rows));
         }
-        lines
+        ui::column(lines)
     }
 
     /// A mute button, a slider and the level.
@@ -650,5 +644,25 @@ mod tests {
         volume.update(Message::Closed);
         assert!(!volume.open);
         assert!(volume.streams.is_empty());
+    }
+
+    #[test]
+    fn output_and_apps_are_tabs_under_the_header() {
+        let content = volume_at(50).popover().unwrap().into_node();
+        let ui::Kind::Column(children) = content.into_kind() else {
+            panic!("a column");
+        };
+        let mut children = children.into_iter().map(ui::Node::into_kind);
+        assert!(matches!(children.next(), Some(ui::Kind::Header { .. })));
+        let Some(ui::Kind::Tabs(pages)) = children.next() else {
+            panic!("tabs under the header");
+        };
+        let names: Vec<_> = pages.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["Output", "Apps"], "no input without a source");
+        let (_, apps) = pages.into_iter().nth(1).unwrap();
+        assert!(matches!(
+            apps.into_kind(),
+            ui::Kind::Label { text, .. } if text == "Nothing is playing"
+        ));
     }
 }
