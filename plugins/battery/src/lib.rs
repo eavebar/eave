@@ -1,8 +1,9 @@
-//! Battery level, read from the kernel's `/sys/class/power_supply`, with every system battery
-//! combined into one. Hidden when there's no battery (a desktop). The popover has the time left
-//! and the power draw.
+//! Battery level, as a battery icon filled to the charge and the percentage next to it. Read from
+//! the kernel's `/sys/class/power_supply`, with every system battery combined into one. Hidden
+//! when there's no battery (a desktop). The popover has the state, the time left and the power
+//! draw.
 
-use eave_api::ui::{self, Item, Panel, Tone};
+use eave_api::ui::{self, Icon, Item, Panel, Tone};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
 use serde::Deserialize;
 
@@ -104,11 +105,11 @@ impl Widget for Battery {
             return Item::hidden();
         }
         let percent = self.percent();
-        let text = match self.reading.state {
-            State::Charging => format!("{percent}% ↑"),
-            _ => format!("{percent}%"),
-        };
-        Item::new(ui::label(text).tone(self.tone()))
+        let icon = ui::icon(Icon::Battery {
+            charge: f32::from(percent) / 100.0,
+            charging: self.reading.state == State::Charging,
+        });
+        Item::new(ui::row([icon, ui::label(format!("{percent}%"))]).tone(self.tone()))
     }
 
     fn popover(&self) -> Option<Panel<Message>> {

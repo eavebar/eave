@@ -66,6 +66,13 @@ pub const LONG_PRESS: Duration = Duration::from_millis(400);
 pub const SCROLL_STEP: f32 = 30.0;
 
 pub const TEXT_SIZE: f32 = 14.0;
+/// Height of an icon, and width of the square ones.
+pub const ICON_SIZE: f32 = 16.0;
+/// The battery lies on its side, so it is wider than the others.
+pub const BATTERY_ICON_WIDTH: f32 = 24.0;
+pub const ICON_STROKE: f32 = 1.5;
+/// How visible the parts of an icon that are off stay, against the parts that are on.
+pub const ICON_OFF_ALPHA: f32 = 0.3;
 pub const HEADING_SIZE: f32 = 17.0;
 pub const HEADING_FONT: Font = Font {
     weight: font::Weight::Bold,

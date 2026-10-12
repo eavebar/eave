@@ -54,9 +54,9 @@ They ship in the default binary, and with `eave-build` you list them like the cl
 | `clock` | time, calendar in the popover | `format` (strftime, default `%H:%M`) |
 | `workspaces` | Hyprland workspaces that have windows, plus the active one (marked); click to go, scroll to move | `persistent` (workspaces 1..N always shown, even empty, default 0) |
 | `window` | focused window title, hidden when nothing has focus | `max_chars` (default 60) |
-| `battery` | percent, `↑` while charging, warning/critical tones; time left and power draw in the popover; hidden without a battery | `warning` (default 20), `critical` (default 10) |
-| `network` | Wi-Fi name and signal, `Wired`, `Offline`; address, gateway, band in the popover | `show_name` (default true) |
-| `volume` | default output volume, `Muted`; scroll to change, right click to mute; −/+, mute, output list in the popover | `step` (default 5), `max` (default 100) |
+| `battery` | battery icon filled to the charge (bolt while charging) and the percent, warning/critical tones; time left and power draw in the popover; hidden without a battery | `warning` (default 20), `critical` (default 10) |
+| `network` | Wi-Fi icon with as many bars as the signal, wired icon, struck-through Wi-Fi when offline; name, signal, band, address, gateway in the popover | `show_name` (default false): the Wi-Fi name next to the icon |
+| `volume` | speaker icon with 0–3 waves for the volume, struck through when muted; scroll to change, right click to mute; −/+, mute, output list in the popover | `step` (default 5), `max` (default 100) |
 | `keyboard` | active layout, click for the next one; hidden with a single layout | `aliases` (`{ "English (US)" = "us" }`) |
 
 ```toml
@@ -169,7 +169,7 @@ For audio, depend on `eave-pulse`: `watch()` yields the outputs (sinks, default,
 - **Views are pure and cheap.** `item()` runs on every redraw, and `popover()` runs after every message to your widget. Precompute in `update`.
 - **`update` never blocks.** I/O goes in a `Task` (`Task::perform`) or a `Subscription`.
 - **Events, not polling.** Use `eave_api::time::every` only when there's no event source (see [development.md](development.md#code-rules)).
-- **You describe, the host draws.** The vocabulary is `label`, `heading`, `row`, `column`, `grid`, `button`, `switcher`, `separator`, `empty`, plus `.tone(Tone::…)`. `switcher(options, current)` is a row of choices with one marked current, and the host slides the mark when it changes. If you need something it can't express, propose a new primitive in eave rather than working around it ([D-13](decisions.md)).
+- **You describe, the host draws.** The vocabulary is `label`, `heading`, `icon`, `row`, `column`, `grid`, `button`, `switcher`, `separator`, `empty`, plus `.tone(Tone::…)`. `icon(Icon::…)` is a status symbol (volume, Wi-Fi, wired, battery) that says how full it is, and the host draws it in the text's tone. `switcher(options, current)` is a row of choices with one marked current, and the host slides the mark when it changes. If you need something it can't express, propose a new primitive in eave rather than working around it ([D-13](decisions.md)).
 
 ### Clicks and popovers
 

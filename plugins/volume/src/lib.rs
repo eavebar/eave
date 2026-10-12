@@ -1,7 +1,8 @@
-//! The default output's volume. Scroll to change it, right click to mute. The popover has fine
-//! control and the list of outputs to switch between.
+//! The default output's volume, as a speaker with up to three sound waves, struck through when
+//! muted. Scroll to change it, right click to mute. The popover has the level, fine control and the
+//! list of outputs to switch between.
 
-use eave_api::ui::{self, Item, Panel, Tone};
+use eave_api::ui::{self, Icon, Item, Panel, Tone};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
 use eave_pulse::{Outputs, Sink};
 use serde::Deserialize;
@@ -86,13 +87,14 @@ impl Widget for Volume {
         let Some(sink) = self.outputs.default_sink() else {
             return Item::hidden();
         };
+        let icon = ui::icon(Icon::Volume {
+            level: sink.volume as f32 / 100.0,
+            muted: sink.muted,
+        });
         let content = if sink.muted {
-            ui::label("Muted").tone(Tone::Dim)
+            icon.tone(Tone::Dim)
         } else {
-            ui::row([
-                ui::label("Vol").tone(Tone::Dim),
-                ui::label(format!("{}%", sink.volume)),
-            ])
+            icon
         };
         Item::new(content)
             .on_scroll(Message::Up, Message::Down)
@@ -224,6 +226,18 @@ mod tests {
         let mut volume = volume_at(0);
         volume.update(Message::Down);
         assert_eq!(level(&volume), 0);
+    }
+
+    #[test]
+    fn shows_an_icon() {
+        let content = volume_at(50).item().into_parts().content.unwrap();
+        assert!(matches!(
+            content.into_kind(),
+            ui::Kind::Icon {
+                icon: Icon::Volume { muted: false, .. },
+                ..
+            }
+        ));
     }
 
     #[test]
