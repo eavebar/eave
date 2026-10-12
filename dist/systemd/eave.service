@@ -1,0 +1,21 @@
+# The bar, as a systemd user service (D-16). Install with:
+#   cp dist/systemd/eave.service ~/.config/systemd/user/
+#   systemctl --user enable --now eave.service
+# It needs the session's WAYLAND_DISPLAY and HYPRLAND_INSTANCE_SIGNATURE: see docs/running.md.
+
+[Unit]
+Description=eave status bar
+Documentation=https://github.com/francescomengarelli/eave/blob/main/docs/running.md
+PartOf=graphical-session.target
+After=graphical-session.target
+Requisite=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+ExecStart=%h/.local/bin/eave
+# The release build aborts on panic (D-10): this is what brings it back.
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=graphical-session.target
