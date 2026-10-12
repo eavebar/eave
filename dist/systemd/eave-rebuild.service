@@ -8,7 +8,9 @@ Documentation=https://github.com/francescomengarelli/eave/blob/main/docs/running
 Type=oneshot
 # cargo, git and systemctl.
 Environment=PATH=%h/.cargo/bin:/usr/local/bin:/usr/bin
-ExecStart=eave-build
+# systemd looks up a bare command name only in /usr/bin and /usr/local/bin, never in PATH.
+# eave-build init writes the path it runs from here.
+ExecStart=%h/.cargo/bin/eave-build
 # A rebuild must never make the desktop stutter.
 Nice=19
 CPUSchedulingPolicy=idle
