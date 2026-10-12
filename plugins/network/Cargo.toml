@@ -8,7 +8,7 @@ repository.workspace = true
 
 [dependencies]
 eave-api.workspace = true
-eave-dbus.workspace = true
+eave-net.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

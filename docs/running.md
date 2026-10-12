@@ -77,7 +77,7 @@ end)
 exec-once = ~/.local/bin/eave
 ```
 
-`eave-build --restart` handles this setup too. It finds the bar by its binary (`~/.local/bin/eave`), stops it, and relaunches it with `hyprctl eval 'hl.exec_cmd(…)'`, falling back to `hyprctl dispatch exec` on older Hyprland. That way the new bar gets Hyprland's environment and doesn't belong to your terminal. A dev build running from `target/` is left alone.
+`eave-build --restart` handles this setup too. It finds the bar by its binary (`~/.local/bin/eave`), stops it, and relaunches it through Hyprland's request socket with `eval hl.exec_cmd(…)`, falling back to `dispatch exec` on older Hyprland. It doesn't need `hyprctl` or `kill` installed. That way the new bar gets Hyprland's environment and doesn't belong to your terminal. A dev build running from `target/` is left alone.
 
 ## Rebuild automatically when plugins.toml changes
 

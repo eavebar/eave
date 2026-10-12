@@ -27,11 +27,12 @@ We build it ourselves, not on a framework like Quickshell or AGS, because we wan
 - **Everything is a plugin.** With no `~/.config/eave/config.toml` the bar is empty. Plugins are crates compiled in by `eave-build`, never loaded at runtime ([docs/plugins.md](docs/plugins.md)).
 - `config.toml` reloads live. `plugins.toml` needs `eave-build --restart`. The bar runs best as a systemd user service ([docs/running.md](docs/running.md)).
 - Run it: `cargo run --release`. GPU renderer: `cargo run --release --features gpu`. Tests: `cargo test --workspace`.
-- Code: `crates/eave-api` (plugin SDK: `Widget`, closed `ui` vocabulary), `crates/eave` (host: surfaces, layout, theme, popovers), `crates/eave-build` (builds a binary with third-party plugins), `crates/eave-{hyprland,dbus,pulse}` (shared services), `plugins/{clock,workspaces,window,keyboard,battery,network,volume}`.
+- Code: `crates/eave-api` (plugin SDK: `Widget`, closed `ui` vocabulary), `crates/eave` (host: surfaces, layout, theme, popovers), `crates/eave-build` (builds a binary with third-party plugins), `crates/eave-{hyprland,net,dbus,pulse}` (shared services), `plugins/{clock,workspaces,window,keyboard,battery,network,volume}`.
 - Baseline: ~11.8 MB RSS with two clocks and ~0% idle CPU (see [docs/development.md](docs/development.md#measuring)). Don't regress it without a reason written down in `docs/decisions.md`.
 
 ## Rules for agents
 
+- **No runtime dependencies beyond Hyprland and the kernel** for core plugins. No daemons (UPower, NetworkManager) and no shelling out to binaries. Read the kernel (netlink, sysfs) through crates instead ([D-23](docs/decisions.md)).
 - **No polling** when an event source exists. Use Hyprland socket2, D-Bus signals and audio server subscriptions. `/proc` and `/sys` counters are the only things polled.
 - **Never block the UI thread.** All I/O goes through iced subscriptions or tasks.
 - **Every new dependency needs a reason.** Prefer `default-features = false`. Record non-obvious ones in `docs/decisions.md`.

@@ -160,6 +160,8 @@ async fn snapshot() -> std::io::Result<eave_hyprland::types::Window> {
 
 For D-Bus, depend on `eave-dbus`: `eave_dbus::watch(service, snapshot)` yields a snapshot of the service's state, then a new one after each `PropertiesChanged` on the objects the snapshot depends on. Unchanged snapshots are skipped. `properties(...)` reads every property of an interface in one call.
 
+For the network, depend on `eave-net`: `watch()` yields the primary connection (interface, Wi-Fi SSID and signal, address, gateway) after every change. It reads the kernel directly, so it works whichever network manager is installed.
+
 For audio, depend on `eave-pulse`: `watch()` yields the outputs (sinks, default, volume, mute) after every change, and `set_volume`, `set_mute` and `set_default` send commands. Run them in a `Task`.
 
 ### The rules

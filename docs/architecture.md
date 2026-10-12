@@ -22,13 +22,15 @@ eave keeps these apart. The **host** does the first job and owns everything visu
 └───────────────▲────────────────────────────────────────────────────────────────────┘
                 │ Subscription
 ┌───────────────┴───────────── services ─────────────────────────────────────────────┐
-│ Hyprland IPC · D-Bus (UPower, MPRIS, NM, SNI) · PipeWire · timers                  │
+│ Hyprland IPC · kernel (netlink, sysfs) · D-Bus (MPRIS, SNI) · PipeWire · timers    │
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Host** ([D-11](decisions.md)): owns every surface, the layout, the look and the motion. It is not pluggable.
 - **Widgets** implement `eave_api::Widget`. They can't pick colors or sizes, can't build raw iced elements, and can't move other items or the bar ([D-13](decisions.md)).
-- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-dbus` shares one system bus connection ([D-18](decisions.md)). `crates/eave-pulse` holds the one audio event subscription ([D-19](decisions.md)).
+- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-net` holds one netlink listener for links, addresses, routes and Wi-Fi ([D-23](decisions.md)). `crates/eave-dbus` shares one system bus connection ([D-18](decisions.md)). `crates/eave-pulse` holds the one audio event subscription ([D-19](decisions.md)).
+
+Core plugins depend only on Hyprland and the kernel, plus an audio server for volume. They don't need UPower, NetworkManager or any other daemon or binary to be installed ([D-23](decisions.md)).
 
 ## Data flow
 
@@ -63,10 +65,10 @@ A click on an item that has a popover and no `on_press`:
 |---|---|---|
 | Workspaces, active window, monitors | Hyprland | `.socket2.sock` events + `.socket.sock` queries (our own client) |
 | Clock | system time | 1 s timer (`eave_api::time::every`) |
-| Battery | UPower | D-Bus (`zbus`), `PropertiesChanged` signals |
+| Battery | kernel (`/sys/class/power_supply`) | `power_supply` uevents over netlink, plus a 30 s re-read while a battery exists ([D-23](decisions.md)) |
 | Volume | PipeWire (through pipewire-pulse) | PulseAudio native protocol, pure Rust, subscribed to sink/server events ([D-19](decisions.md)) |
 | Media | MPRIS | D-Bus (`zbus`) |
-| Network | NetworkManager or iwd | D-Bus (`zbus`) |
+| Network | kernel (rtnetlink, nl80211) | link/address/route multicast events, plus a 10 s signal re-read while on Wi-Fi ([D-23](decisions.md)) |
 | Bluetooth | BlueZ | D-Bus (`zbus`) |
 | Tray | StatusNotifierItem | D-Bus. We must act as the watcher/host. The hardest widget. |
 | CPU / RAM / temps | `/proc`, `/sys` | timer (the only legitimate polling) |
@@ -96,14 +98,15 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/measure.rs           popover sizing
 crates/eave-build/         builds a binary with the plugins from plugins.toml, installs, restarts
 crates/eave-dbus/          service: shared system bus, snapshot-on-PropertiesChanged watcher
+crates/eave-net/           service: network state from the kernel over netlink (one event thread)
 crates/eave-pulse/         service: audio over the PulseAudio protocol (one event thread)
 crates/eave-hyprland/      service: shared socket2 events, socket1 queries and dispatches
 plugins/clock/             the clock plugin (crate eave-clock) + eave-plugin.toml
 plugins/workspaces/        Hyprland workspaces (eave-workspaces)
 plugins/window/            focused window title (eave-window)
 plugins/keyboard/          keyboard layout (eave-keyboard)
-plugins/battery/           battery from UPower (eave-battery)
-plugins/network/           network from NetworkManager (eave-network)
+plugins/battery/           battery from sysfs (eave-battery)
+plugins/network/           primary connection, via eave-net (eave-network)
 plugins/volume/            output volume and switching (eave-volume)
 dist/systemd/              user units: the bar, and the optional rebuild-on-plugins.toml pair
 ```

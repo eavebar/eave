@@ -751,8 +751,10 @@ name = "eave-battery"
 version = "0.1.0"
 dependencies = [
  "eave-api",
- "eave-dbus",
+ "futures-util",
+ "rustix 1.1.5",
  "serde",
+ "tokio",
  "toml",
 ]
 
@@ -760,6 +762,7 @@ dependencies = [
 name = "eave-build"
 version = "0.1.0"
 dependencies = [
+ "rustix 1.1.5",
  "serde",
  "toml",
 ]
@@ -804,11 +807,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "eave-net"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "netlink-packet-core",
+ "netlink-packet-generic",
+ "netlink-packet-route",
+ "rustix 1.1.5",
+ "tokio",
+]
+
+[[package]]
 name = "eave-network"
 version = "0.1.0"
 dependencies = [
  "eave-api",
- "eave-dbus",
+ "eave-net",
  "serde",
  "toml",
 ]
@@ -2034,6 +2049,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
+]
+
+[[package]]
+name = "netlink-packet-core"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d6e2daf9a8c2e21302714706860a0e6be02e03d17294ecc66b354ea7d4059dd"
+
+[[package]]
+name = "netlink-packet-generic"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e609a7be61318181c110df304d54ed3f3e129b9569b8ca16e40a9d644f46930c"
+dependencies = [
+ "netlink-packet-core",
+ "zerocopy",
+]
+
+[[package]]
+name = "netlink-packet-route"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59d48ffc8b73a506e1ff0878528c72668f2bfbc3d875b6be890a96be5d0d5576"
+dependencies = [
+ "bitflags 2.13.2",
+ "libc",
+ "log",
+ "netlink-packet-core",
+ "zerocopy",
 ]
 
 [[package]]

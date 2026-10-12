@@ -1,0 +1,17 @@
+[package]
+name = "eave-net"
+version = "0.1.0"
+description = "Networking for eave plugins, from the kernel over netlink (no NetworkManager needed)"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Message types only, pure Rust; the sockets are rustix (D-23).
+netlink-packet-core = "0.9"
+netlink-packet-generic = "0.5"
+netlink-packet-route = "0.33"
+# Already in the tree (D-21). `fs` only because rustix 1.1 fails to build `net` alone.
+rustix = { version = "1", default-features = false, features = ["std", "net", "fs"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio = { version = "1", default-features = false, features = ["sync"] }
