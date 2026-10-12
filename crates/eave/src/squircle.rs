@@ -1,12 +1,15 @@
 //! The squircle: a rectangle with continuous corners, the shape of every island.
 
-use iced::widget::canvas::Path;
+use iced::widget::canvas::{Path, path};
 use iced::{Point, Rectangle, Size, Vector};
 
 /// A rectangle with continuous ("squircle") corners: each corner is a short circular arc that
 /// eases into the straight edges through a cubic on either side, instead of meeting them abruptly.
 /// This is Figma's corner smoothing; `smoothing` 0 gives a plain rounded rectangle.
-pub fn squircle(bounds: Rectangle, radius: f32, smoothing: f32) -> Path {
+///
+/// With a bump, the top or bottom of the shape is bent out around it, corners included, so the
+/// bump looks the same wherever it is.
+pub fn squircle(bounds: Rectangle, radius: f32, smoothing: f32, bump: Option<Bump>) -> Path {
     let corner = Corner::new(bounds.size(), radius, smoothing);
     let (left, top) = (bounds.x, bounds.y);
     let (right, bottom) = (left + bounds.width, top + bounds.height);
@@ -35,7 +38,7 @@ pub fn squircle(bounds: Rectangle, radius: f32, smoothing: f32) -> Path {
         ),
     ];
 
-    Path::new(|builder| {
+    let path = Path::new(|builder| {
         for (index, (at, incoming, outgoing)) in corners.into_iter().enumerate() {
             let place = |(x, y): (f32, f32)| at + incoming * x + outgoing * y;
             let [start, curve_in, arc, curve_out] = corner.points();
@@ -55,6 +58,87 @@ pub fn squircle(bounds: Rectangle, radius: f32, smoothing: f32) -> Path {
             );
         }
         builder.close();
+    });
+    match bump.filter(|bump| bump.amount.abs() >= 0.01 && bump.width >= 1.0) {
+        Some(bump) => warp(&path, bounds, bump),
+        None => path,
+    }
+}
+
+/// A bump in a squircle's top or bottom: the edge rises out of the shape (or dents into it) in
+/// a raised cosine around `x`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bump {
+    pub edge: Edge,
+    /// Where its peak is, along the edge.
+    pub x: f32,
+    pub width: f32,
+    /// How far its peak is pushed out of the shape; negative dents it in.
+    pub amount: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Top,
+    Bottom,
+}
+
+/// How far a flattened curve may stray from the real one, in logical pixels.
+const WARP_TOLERANCE: f32 = 0.05;
+/// The longest straight piece of a warped path: short enough that the bump reads as a curve.
+const WARP_STEP: f32 = 1.0;
+
+/// Bends `path` out around the bump. Every point moves straight up (or down) by the bump's height
+/// at its `x`, fully on the bumped edge and less the further it is from it, down to nothing
+/// halfway across the shape. So a bump near a corner lifts the corner's end along with it, and
+/// the opposite edge never moves. The path is flattened to do it, so it's only worth it while a
+/// bump shows.
+fn warp(path: &Path, bounds: Rectangle, bump: Bump) -> Path {
+    use path::lyon_path::Event;
+    use path::lyon_path::iterator::PathIterator;
+
+    let half = bump.width / 2.0;
+    let reach = bounds.height / 2.0;
+    let lift = |x: f32, y: f32| {
+        let along = ((x - bump.x) / half).clamp(-1.0, 1.0);
+        let bell = 0.5 * (1.0 + (std::f32::consts::PI * along).cos());
+        let (from_edge, out) = match bump.edge {
+            Edge::Top => (y - bounds.y, -bump.amount),
+            Edge::Bottom => (bounds.y + bounds.height - y, bump.amount),
+        };
+        let near = (1.0 - from_edge / reach).clamp(0.0, 1.0);
+        // Eased, so the bend has no crease where it starts.
+        let near = near * near * (3.0 - 2.0 * near);
+        Point::new(x, y + out * bell * near)
+    };
+    // Straight lines are cut into short pieces, so they can bend.
+    let line = |builder: &mut path::Builder, from: Point, to: Point| {
+        let pieces = (from.distance(to) / WARP_STEP).ceil().max(1.0);
+        for piece in 1..=pieces as u32 {
+            let t = piece as f32 / pieces;
+            builder.line_to(lift(
+                from.x + (to.x - from.x) * t,
+                from.y + (to.y - from.y) * t,
+            ));
+        }
+    };
+    let point = |p: path::lyon_path::math::Point| Point::new(p.x, p.y);
+
+    Path::new(|builder| {
+        for event in path.raw().iter().flattened(WARP_TOLERANCE) {
+            match event {
+                Event::Begin { at } => builder.move_to(lift(at.x, at.y)),
+                Event::Line { from, to } => line(builder, point(from), point(to)),
+                Event::End { last, first, close } => {
+                    if close {
+                        line(builder, point(last), point(first));
+                        builder.close();
+                    }
+                }
+                // Flattening leaves only lines.
+                Event::Quadratic { .. } | Event::Cubic { .. } => {}
+            }
+        }
     })
 }
 
@@ -188,5 +272,95 @@ mod tests {
         let [_, _, arc, _] = corner.points();
         // The tangents meet at the corner itself.
         assert!(arc[0].0.abs() < 1e-4 && arc[0].1.abs() < 1e-4);
+    }
+
+    /// Where each segment of the path ends.
+    fn ends(path: &Path) -> Vec<(f32, f32)> {
+        path.raw()
+            .iter()
+            .map(|event| (event.to().x, event.to().y))
+            .collect()
+    }
+
+    #[test]
+    fn a_bump_pushes_out_of_its_edge_only() {
+        let bounds = Rectangle::new(Point::new(0.0, 4.0), Size::new(120.0, 30.0));
+        let up = Bump {
+            edge: Edge::Top,
+            x: 60.0,
+            width: 28.0,
+            amount: 3.0,
+        };
+        let points = ends(&squircle(bounds, 14.0, 0.6, Some(up)));
+        let highest = points
+            .iter()
+            .copied()
+            .fold((0.0, f32::MAX), |a, b| if b.1 < a.1 { b } else { a });
+        assert!(
+            (highest.0 - 60.0).abs() < 0.5 && (highest.1 - 1.0).abs() < 1e-3,
+            "{highest:?}"
+        );
+        assert!(
+            points
+                .iter()
+                .all(|(_, y)| (1.0 - 1e-3..=34.0 + 1e-3).contains(y))
+        );
+        // Away from it, the edge stays put.
+        assert!(
+            points
+                .iter()
+                .any(|&(x, y)| x > 80.0 && x < 100.0 && y == 4.0)
+        );
+
+        let down = Bump {
+            edge: Edge::Bottom,
+            ..up
+        };
+        let points = ends(&squircle(bounds, 14.0, 0.6, Some(down)));
+        assert!(
+            points
+                .iter()
+                .any(|&(x, y)| (x - 60.0).abs() < 0.5 && (y - 37.0).abs() < 1e-3)
+        );
+        assert!(
+            points
+                .iter()
+                .all(|(_, y)| (4.0 - 1e-3..=37.0 + 1e-3).contains(y))
+        );
+    }
+
+    #[test]
+    fn a_bump_by_a_corner_bends_the_corner_too() {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(120.0, 30.0));
+        let flat = ends(&squircle(bounds, 14.0, 0.6, None));
+        let bump = Bump {
+            edge: Edge::Top,
+            x: 20.0,
+            width: 64.0,
+            amount: 3.0,
+        };
+        let points = ends(&squircle(bounds, 14.0, 0.6, Some(bump)));
+        // The peak stays over the item, though the corner reaches 15 in.
+        let highest = points
+            .iter()
+            .copied()
+            .fold((0.0, f32::MAX), |a, b| if b.1 < a.1 { b } else { a });
+        assert!(
+            (highest.0 - 20.0).abs() < 0.5 && (highest.1 + 3.0).abs() < 1e-3,
+            "{highest:?}"
+        );
+        // The corner's end rises along with it; its far end, halfway down the side, doesn't.
+        assert!(points.iter().any(|&(x, y)| x < 15.0 && y < -1.0));
+        let side = |points: &[(f32, f32)]| {
+            points
+                .iter()
+                .copied()
+                .filter(|(x, _)| *x < 1e-3)
+                .map(|(_, y)| y)
+                .fold(f32::MAX, f32::min)
+        };
+        assert!((side(&points) - side(&flat)).abs() < 0.2);
+        // The bottom never moves.
+        assert!(points.iter().all(|(_, y)| *y <= 30.0 + 1e-3));
     }
 }

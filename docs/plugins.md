@@ -41,7 +41,9 @@ widget = "clock"          # the same widget twice, with different options
 format = "%a %d %b"
 ```
 
-The zones are `left`, `center` and `right`, in order. Every key except `widget` goes to the widget's `Config`. Unknown widgets and invalid options are reported on stderr and skipped. They never crash the bar.
+The zones are `left`, `center` and `right`, in order. Every key except `widget` and `width_group` goes to the widget's `Config`.
+
+`width_group = "name"` lines items up: items in the same island with the same group all get a slot as wide as the widest of them, each centered in its slot. For example, put `volume` and `network` in one group, so the Wi-Fi icon gets the same room as the volume item, which needs space for its percent. Unknown widgets and invalid options are reported on stderr and skipped. They never crash the bar.
 
 Changes apply as soon as you save, with no restart. Widgets whose entry didn't change keep their state. A file that doesn't parse leaves the bar as it was ([D-21](decisions.md)).
 
@@ -56,7 +58,7 @@ They ship in the default binary, and with `eave-build` you list them like the cl
 | `window` | focused window title, hidden when nothing has focus | `max_chars` (default 60) |
 | `battery` | battery icon filled to the charge (bolt while charging) and the percent, warning/critical tones; time left and power draw in the popover; hidden without a battery | `warning` (default 20), `critical` (default 10) |
 | `network` | Wi-Fi icon with as many bars as the signal, wired icon, struck-through Wi-Fi when offline; name, signal, band, address, gateway in the popover | `show_name` (default false): the Wi-Fi name next to the icon |
-| `volume` | speaker icon with 0–3 waves for the volume, struck through when muted; scroll to change, right click to mute; −/+, mute, output list in the popover | `step` (default 5), `max` (default 100) |
+| `volume` | speaker icon with 0–3 waves for the volume, struck through when muted; the percent for 1.5 s after a change, with a nudge; scroll to change, right click to mute; −/+, mute, output list in the popover | `step` (default 5), `max` (default 100) |
 | `keyboard` | active layout, click for the next one; hidden with a single layout | `aliases` (`{ "English (US)" = "us" }`) |
 
 ```toml
@@ -168,8 +170,8 @@ For audio, depend on `eave-pulse`: `watch()` yields the outputs (sinks, default,
 
 - **Views are pure and cheap.** `item()` runs on every redraw, and `popover()` runs after every message to your widget. Precompute in `update`.
 - **`update` never blocks.** I/O goes in a `Task` (`Task::perform`) or a `Subscription`.
-- **Events, not polling.** Use `eave_api::time::every` only when there's no event source (see [development.md](development.md#code-rules)).
-- **You describe, the host draws.** The vocabulary is `label`, `heading`, `icon`, `row`, `column`, `grid`, `button`, `switcher`, `separator`, `empty`, plus `.tone(Tone::…)`. `icon(Icon::…)` is a status symbol (volume, Wi-Fi, wired, battery) that says how full it is, and the host draws it in the text's tone. `switcher(options, current)` is a row of choices with one marked current, and the host slides the mark when it changes. If you need something it can't express, propose a new primitive in eave rather than working around it ([D-13](decisions.md)).
+- **Events, not polling.** Use `eave_api::time::every` only when there's no event source (see [development.md](development.md#code-rules)). To show something for a moment, return `Task::future(eave_api::time::sleep(d))` mapped to a message, numbered so that only the latest one counts.
+- **You describe, the host draws.** The vocabulary is `label`, `heading`, `icon`, `counter`, `row`, `column`, `grid`, `button`, `switcher`, `alternate`, `separator`, `empty`, plus `.tone(Tone::…)`. `icon(Icon::…)` is a status symbol (volume, Wi-Fi, wired, battery) that says how full it is, and the host draws it in the text's tone. `switcher(options, current)` is a row of choices with one marked current, and the host slides the mark when it changes. `counter(value, range, unit)` is a number the host counts up or down through every value in between when it changes. It keeps room for the widest number in `range`, so it holds its width. `alternate(options, current)` shows one option at a time, as big as the biggest one, and fades between them, e.g. an icon that turns into a `counter` for a moment. If you need something it can't express, propose a new primitive in eave rather than working around it ([D-13](decisions.md)).
 
 ### Clicks and popovers
 
@@ -180,3 +182,14 @@ For audio, depend on `eave-pulse`: `watch()` yields the outputs (sinks, default,
 | yes | either | sends your message (you can still return `Effect::none().open_popover()`) |
 
 A right click sends `on_secondary`, if set. `Item::on_scroll(up, down)` sends one message per scroll step. The host turns touchpad scrolling into steps. Buttons inside the item take their own clicks first. Return `Item::hidden()` to take no space at all (a battery widget on a desktop).
+
+### Nudges
+
+Return `Effect::none().nudge(Nudge::…)` from `update` when something your item shows just went one way, and the host gives your island a nudge that way. You say what happened, and the host picks the motion ([D-30](decisions.md)):
+
+| Nudge | Use it when | The island |
+|---|---|---|
+| `Up`, `Down` | a level rose or fell (volume, brightness) | its top edge bumps up above your item, or its bottom edge dips below it, then springs flat |
+| `Left`, `Right` | you moved to the previous or next thing (workspace, track) | the whole island is pushed that way and springs back |
+
+Nudge on the change itself, wherever it came from, and once per change. `volume` nudges on the server's readings, so a scroll step and a media key look the same. A nudge is dropped while the island is held or has a popover open.

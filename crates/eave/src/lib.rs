@@ -1,7 +1,9 @@
 //! The eave host. A binary built with plugins calls [`run`] with each plugin's `register` function.
 
+mod alternate;
 mod app;
 mod config;
+mod counter;
 mod icon;
 mod island;
 mod kit;

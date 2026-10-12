@@ -20,16 +20,22 @@ mod widget;
 #[doc(hidden)]
 pub mod erased;
 
-pub use effect::Effect;
+pub use effect::{Effect, Nudge};
 pub use iced_futures::Subscription;
 pub use iced_runtime::Task;
 pub use registry::Registry;
 pub use widget::Widget;
 
-/// Timers, for the few things that have no event source (clocks, `/proc` counters).
+/// Timers, for the few things that have no event source (clocks, `/proc` counters), and one-shot
+/// delays (`Task::future(sleep(..))`, e.g. to show something for a moment).
 pub mod time {
     pub use iced_futures::backend::native::tokio::time::every;
     pub use iced_futures::core::time::{Duration, Instant};
+
+    /// Waits `duration`. Nothing starts until the task runs it, so it's safe to build in `update`.
+    pub async fn sleep(duration: Duration) {
+        tokio::time::sleep(duration).await;
+    }
 }
 
 /// The [`Widget::Config`] of a widget without options. Rejects any option it is given.

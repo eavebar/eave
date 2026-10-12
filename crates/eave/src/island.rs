@@ -12,7 +12,10 @@
 //! as they would without it. Like the switcher, it steps one frame at a time when the compositor
 //! asks, and stops asking once everything is at rest.
 
+use std::cell::Cell;
 use std::time::{Duration, Instant};
+
+use eave_api::Nudge;
 
 use iced::advanced::graphics::geometry::Renderer as _;
 use iced::advanced::widget::{Operation, Tree, tree};
@@ -21,7 +24,7 @@ use iced::alignment::Horizontal;
 use iced::widget::canvas::{Cache, Stroke};
 use iced::{Color, Element, Event, Length, Point, Rectangle, Size, Transformation, Vector, window};
 
-use crate::squircle::squircle;
+use crate::squircle::{Bump, Edge, squircle};
 use crate::theme;
 
 pub struct Island<'a, M> {
@@ -31,6 +34,10 @@ pub struct Island<'a, M> {
     /// Which way the island grows into a popover: from its left edge, its right edge or its center.
     align: Horizontal,
     popover: Option<Popover<'a, M>>,
+    /// The last nudge each item asked for, numbered so the island plays each one once.
+    nudges: Vec<(u64, (u64, Nudge))>,
+    /// Each item's width group: items in the same one are as wide as the widest of them.
+    groups: Vec<Option<&'a str>>,
 }
 
 /// What an island turns into while it's a popover.
@@ -51,6 +58,8 @@ impl<'a, M> Island<'a, M> {
             items,
             align: Horizontal::Center,
             popover: None,
+            nudges: Vec::new(),
+            groups: Vec::new(),
         }
     }
 
@@ -63,12 +72,28 @@ impl<'a, M> Island<'a, M> {
         self.popover = popover;
         self
     }
+
+    /// Each item's latest nudge, by key, with its number. Only ones newer than the island has seen
+    /// play.
+    pub fn nudges(mut self, nudges: Vec<(u64, (u64, Nudge))>) -> Self {
+        self.nudges = nudges;
+        self
+    }
+
+    /// Each item's width group, in the order of the items.
+    pub fn width_groups(mut self, groups: Vec<Option<&'a str>>) -> Self {
+        self.groups = groups;
+        self
+    }
 }
 
 struct State {
     motion: Motion,
-    /// The squircle, rebuilt only when its size changes: at rest it's built once.
+    /// The squircle, rebuilt only when its size changes, or while it has a bump: at rest it's
+    /// built once.
     shape: Cache,
+    /// The bump `shape` was last built with.
+    shape_bump: Cell<Option<Bump>>,
     /// The popover panel's widget state, while there is one.
     panel: Option<Tree>,
 }
@@ -85,6 +110,11 @@ struct Feel {
 const PLAYFUL: Feel = Feel {
     stiffness: theme::SPRING_STIFFNESS,
     damping: theme::SPRING_DAMPING,
+};
+/// Nudges: back into place without swinging past.
+const NUDGE: Feel = Feel {
+    stiffness: theme::NUDGE_STIFFNESS,
+    damping: theme::NUDGE_DAMPING,
 };
 /// Shape and content changes: settle without wobbling.
 const MORPH: Feel = Feel {
@@ -108,6 +138,14 @@ struct Motion {
     edges: Edges,
     items: Vec<ItemMotion>,
     popover: PopoverMotion,
+    /// How far a nudge moved the whole island, on top of any drag.
+    push_x: Spring,
+    push_y: Spring,
+    /// How far a nudge pushed an edge out, at which item and on which edge.
+    bump: Spring,
+    bump_at: Option<(u64, Edge)>,
+    /// The newest nudge already played, once the island has been laid out.
+    seen: Option<u64>,
     /// The previous frame, while something is moving.
     last: Option<Instant>,
 }
@@ -123,6 +161,11 @@ impl Default for Motion {
             edges: Edges::at(Rectangle::default()),
             items: Vec::new(),
             popover: PopoverMotion::default(),
+            push_x: Spring::new(0.0, NUDGE),
+            push_y: Spring::new(0.0, NUDGE),
+            bump: Spring::new(0.0, NUDGE),
+            bump_at: None,
+            seen: None,
             last: None,
         }
     }
@@ -261,6 +304,52 @@ impl Motion {
         self.inset.target = 0.0;
     }
 
+    /// Plays the nudges it hasn't seen yet. A new island only notes them: they happened before it.
+    /// A held island, or one with a popover, lets them pass.
+    fn nudges(&mut self, nudges: impl IntoIterator<Item = (u64, (u64, Nudge))>) {
+        let seen = self.seen;
+        let mut newest = seen.unwrap_or(0);
+        for (key, (number, nudge)) in nudges {
+            newest = newest.max(number);
+            if seen.is_some_and(|seen| number > seen)
+                && self.press.is_none()
+                && !self.popover.present
+            {
+                self.nudge(key, nudge);
+            }
+        }
+        self.seen = Some(newest);
+    }
+
+    /// Sets the island off: sideways as a whole, or up or down half a pixel with a bump in that edge at
+    /// the item. The springs bring it back.
+    fn nudge(&mut self, key: u64, nudge: Nudge) {
+        let (push, lift) = (theme::NUDGE_PUSH_SPEED, theme::NUDGE_LIFT_SPEED);
+        let edge = match nudge {
+            Nudge::Left | Nudge::Right => {
+                self.push_x.velocity = if nudge == Nudge::Left { -push } else { push };
+                return;
+            }
+            Nudge::Up => {
+                self.push_y.velocity = -lift;
+                Edge::Top
+            }
+            Nudge::Down => {
+                self.push_y.velocity = lift;
+                Edge::Bottom
+            }
+        };
+        if !self.items.iter().any(|item| item.key == key) {
+            return;
+        }
+        // A bump elsewhere, or on the other edge, starts over.
+        if self.bump_at != Some((key, edge)) {
+            self.bump = Spring::new(0.0, NUDGE);
+            self.bump_at = Some((key, edge));
+        }
+        self.bump.velocity = self.bump.velocity.max(theme::NUDGE_BUMP_SPEED);
+    }
+
     /// Takes in where layout put the island and each item (by key, with its x), and whether it has
     /// a popover and if that's open. Everything that changed starts moving there.
     fn arrange(
@@ -376,6 +465,9 @@ impl Motion {
             &mut edges.bottom,
             &mut self.popover.items,
             &mut self.popover.panel,
+            &mut self.push_x,
+            &mut self.push_y,
+            &mut self.bump,
         ]
         .into_iter()
         .chain(
@@ -427,8 +519,45 @@ impl Motion {
         false
     }
 
+    /// The bump in the shape right now, if any, at its item, with `x` measured from the shape's
+    /// left edge.
+    fn bump(&self, keys: &[u64], layout: Layout<'_>, shape: Rectangle) -> Option<Bump> {
+        let (key, edge) = self.bump_at?;
+        if self.bump.value.abs() < REST_DISTANCE {
+            return None;
+        }
+        let bounds = keys
+            .iter()
+            .zip(layout.children())
+            .find(|(k, _)| **k == key)?
+            .1
+            .bounds();
+        let (dx, _) = self.item(key, bounds.x);
+        let room = theme::NUDGE_BUMP_ROOM;
+        Some(Bump {
+            edge,
+            x: bounds.center_x() + dx - shape.x,
+            width: theme::NUDGE_BUMP_WIDTH,
+            amount: self.bump.value.clamp(-room, room),
+        })
+    }
+
     fn offset(&self) -> Vector {
-        Vector::new(self.x.value, self.y.value)
+        Vector::new(
+            self.x.value + self.push_x.value,
+            self.y.value + self.push_y.value,
+        )
+    }
+
+    /// How far a nudge lifts the item (negative is up): it rides along with its bump, by less.
+    fn item_lift(&self, key: u64) -> f32 {
+        match self.bump_at {
+            Some((bumped, edge)) if bumped == key => {
+                let lift = self.bump.value * theme::NUDGE_ITEM_FOLLOW;
+                if edge == Edge::Top { -lift } else { lift }
+            }
+            _ => 0.0,
+        }
     }
 
     /// How far an item laid out at `x` is from where it's drawn, and how much it shows.
@@ -440,6 +569,20 @@ impl Motion {
             None => (0.0, 0.0),
         }
     }
+}
+
+/// How wide each item's slot is: its own width, or its width group's widest.
+fn slots(widths: &[f32], groups: &[Option<&str>]) -> Vec<f32> {
+    let group = |index: usize| groups.get(index).copied().flatten();
+    (0..widths.len())
+        .map(|index| match group(index) {
+            Some(name) => (0..widths.len())
+                .filter(|other| group(*other) == Some(name))
+                .map(|other| widths[other])
+                .fold(0.0, f32::max),
+            None => widths[index],
+        })
+        .collect()
 }
 
 /// The longest step a single frame may take.
@@ -560,29 +703,42 @@ fn draw_island<M>(
         * Transformation::scale(scale)
         * Transformation::translate(-center.x, -center.y);
 
+    // The frame clips to its size: it has room above and below for a bump.
+    let room = theme::NUDGE_BUMP_ROOM;
+    let bump = motion.bump(keys, layout, shape);
+    if state.shape_bump.replace(bump) != bump {
+        state.shape.clear();
+    }
+
     renderer.with_translation(motion.offset(), |renderer| {
         renderer.with_transformation(transformation, |renderer| {
-            let geometry = state.shape.draw(renderer, shape.size(), |frame| {
-                let size = frame.size();
+            let frame_size = Size::new(shape.width, shape.height + 2.0 * room);
+            let geometry = state.shape.draw(renderer, frame_size, |frame| {
+                let size = shape.size();
                 let radius = theme::ISLAND_RADIUS;
                 let smoothing = theme::ISLAND_SMOOTHING;
                 frame.fill(
-                    &squircle(Rectangle::with_size(size), radius, smoothing),
+                    &squircle(
+                        Rectangle::new(Point::new(0.0, room), size),
+                        radius,
+                        smoothing,
+                        bump,
+                    ),
                     theme::ISLAND_BG,
                 );
                 // Half a pixel in, so the whole hairline lands inside the fill.
                 let inset = Rectangle::new(
-                    Point::new(0.5, 0.5),
+                    Point::new(0.5, room + 0.5),
                     Size::new(size.width - 1.0, size.height - 1.0),
                 );
                 frame.stroke(
-                    &squircle(inset, radius - 0.5, smoothing),
+                    &squircle(inset, radius - 0.5, smoothing, bump),
                     Stroke::default()
                         .with_color(theme::ISLAND_BORDER)
                         .with_width(1.0),
                 );
             });
-            renderer.with_translation(Vector::new(shape.x, shape.y), |renderer| {
+            renderer.with_translation(Vector::new(shape.x, shape.y - room), |renderer| {
                 renderer.draw_geometry(geometry);
             });
 
@@ -598,11 +754,12 @@ fn draw_island<M>(
                     if shown < REST_DISTANCE {
                         continue;
                     }
-                    renderer.with_translation(Vector::new(dx, 0.0), |renderer| {
+                    let moved = Vector::new(dx, motion.item_lift(*key));
+                    renderer.with_translation(moved, |renderer| {
                         item.as_widget()
                             .draw(tree, renderer, theme, style, child, cursor, viewport);
                         // In the item's moved coordinates, the shape is the other way.
-                        fade(renderer, bounds, shape - Vector::new(dx, 0.0), shown);
+                        fade(renderer, bounds, shape - moved, shown);
                     });
                 }
                 if let Some((panel, tree, layout)) = panel {
@@ -628,7 +785,7 @@ fn draw_island<M>(
 /// Fades what was just drawn in `bounds` toward the island's background. iced has no group
 /// opacity, but the island is opaque, so covering content with its own color is the same thing.
 /// Kept inside `shape`: a nested layer isn't clipped by the one around it.
-fn fade(renderer: &mut iced::Renderer, bounds: Rectangle, shape: Rectangle, shown: f32) {
+pub(crate) fn fade(renderer: &mut iced::Renderer, bounds: Rectangle, shape: Rectangle, shown: f32) {
     use iced::advanced::Renderer as _;
 
     let Some(bounds) = bounds
@@ -661,6 +818,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         tree::State::new(State {
             motion: Motion::default(),
             shape: Cache::new(),
+            shape_bump: Cell::new(None),
             panel: None,
         })
     }
@@ -669,7 +827,8 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         Size::new(Length::Shrink, Length::Fixed(theme::ISLAND_HEIGHT as f32))
     }
 
-    /// A row of items, centered vertically, with padding at the ends.
+    /// A row of items, centered vertically, with padding at the ends. Items in a width group get
+    /// a slot as wide as the widest of them, and sit in its middle.
     fn layout(
         &mut self,
         tree: &mut Tree,
@@ -680,17 +839,26 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         let padding = f32::from(theme::ISLAND_PADDING);
         let spacing = theme::ITEM_SPACING as f32;
         let limits = layout::Limits::new(Size::new(0.0, height), Size::new(f32::INFINITY, height));
-        let mut x = padding;
-        let children: Vec<_> = self
+        let nodes: Vec<_> = self
             .items
             .iter_mut()
             .zip(&mut tree.children)
-            .map(|(item, tree)| {
-                let node = item.as_widget_mut().layout(tree, renderer, &limits);
+            .map(|(item, tree)| item.as_widget_mut().layout(tree, renderer, &limits))
+            .collect();
+        let widths: Vec<_> = nodes.iter().map(|node| node.size().width).collect();
+        let slots = slots(&widths, &self.groups);
+        let mut x = padding;
+        let children: Vec<_> = nodes
+            .into_iter()
+            .zip(slots)
+            .map(|(node, slot)| {
                 let size = node.size();
-                let node = node.move_to(Point::new(x, ((height - size.height) / 2.0).round()));
-                x += size.width + spacing;
-                node
+                let at = Point::new(
+                    (x + (slot - size.width) / 2.0).round(),
+                    ((height - size.height) / 2.0).round(),
+                );
+                x += slot + spacing;
+                node.move_to(at)
             })
             .collect();
         let width = if children.is_empty() {
@@ -798,6 +966,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             positions,
             self.popover.as_ref().map(|popover| popover.open),
         );
+        motion.nudges(self.nudges.iter().copied());
 
         match event {
             // Watched whether or not an item handled it: the island reacts to every press on it.
@@ -1255,5 +1424,69 @@ mod tests {
             assert!(moved > previous && moved < 10.0);
             previous = moved;
         }
+    }
+
+    /// An island at rest that has already noted the nudges so far.
+    fn nudged(nudges: &[(u64, (u64, Nudge))]) -> Motion {
+        let mut motion = settled(rect(0.0, 200.0), &[1, 2]);
+        motion.nudges([(1, (1, Nudge::Up))]);
+        assert!(motion.at_rest(), "a new island doesn't replay old nudges");
+        motion.nudges(nudges.iter().copied());
+        motion
+    }
+
+    #[test]
+    fn a_push_goes_that_way_then_back() {
+        let mut motion = nudged(&[(2, (2, Nudge::Right))]);
+        assert!(!motion.at_rest());
+        let mut furthest: f32 = 0.0;
+        run(&mut motion, Instant::now(), |motion| {
+            let x = motion.offset().x;
+            furthest = furthest.max(x);
+            assert!(x > -0.2, "doesn't swing back past: {x}");
+        });
+        assert!((4.0..6.0).contains(&furthest), "{furthest}");
+        assert_eq!(motion.offset(), Vector::ZERO);
+        // Already played.
+        motion.nudges([(2, (2, Nudge::Right))]);
+        assert!(motion.at_rest());
+    }
+
+    #[test]
+    fn a_bump_stays_in_its_room_then_flattens() {
+        let mut motion = nudged(&[(2, (2, Nudge::Down))]);
+        assert_eq!(motion.bump_at, Some((2, Edge::Bottom)));
+        let (mut furthest, mut lowest): (f32, f32) = (0.0, 0.0);
+        run(&mut motion, Instant::now(), |motion| {
+            furthest = furthest.max(motion.bump.value);
+            lowest = lowest.max(motion.offset().y);
+        });
+        assert!(
+            (0.4..0.65).contains(&lowest),
+            "the island moves half a pixel: {lowest}"
+        );
+        assert_eq!(motion.offset(), Vector::ZERO);
+        assert!((1.7..2.3).contains(&furthest), "{furthest}");
+        assert_eq!(motion.bump.value, 0.0);
+    }
+
+    #[test]
+    fn a_held_island_lets_nudges_pass() {
+        let mut motion = nudged(&[]);
+        motion.press(Point::new(10.0, 10.0));
+        motion.nudges([(1, (2, Nudge::Left)), (2, (3, Nudge::Up))]);
+        assert_eq!(motion.push_x.velocity, 0.0);
+        assert_eq!(motion.bump.velocity, 0.0);
+        assert_eq!(motion.seen, Some(3));
+    }
+
+    #[test]
+    fn width_groups_take_their_widest() {
+        let groups = [Some("status"), None, Some("status"), Some("other")];
+        assert_eq!(
+            slots(&[30.0, 50.0, 20.0, 10.0], &groups),
+            [30.0, 50.0, 30.0, 10.0]
+        );
+        assert_eq!(slots(&[30.0, 20.0], &[]), [30.0, 20.0]);
     }
 }

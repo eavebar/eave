@@ -52,11 +52,15 @@ impl<W: Widget> ErasedWidget for W {
             debug_assert!(false, "message routed to the wrong widget");
             return Effect::none();
         };
-        let (task, popover) = Widget::update(self, message).into_parts();
+        let (task, popover, nudge) = Widget::update(self, message).into_parts();
         let effect = Effect::task(task.map(AnyMessage::new));
-        match popover {
+        let effect = match popover {
             Some(PopoverRequest::Open) => effect.open_popover(),
             Some(PopoverRequest::Close) => effect.close_popover(),
+            None => effect,
+        };
+        match nudge {
+            Some(nudge) => effect.nudge(nudge),
             None => effect,
         }
     }

@@ -11,6 +11,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **5.5 Floating islands.** Left, center and right zones drawn as rounded islands that fit their items and vanish when empty, with a gap from the screen edges ([D-24](decisions.md)).
 - [x] **5.6 Islands you can touch.** Squircle corners. A press squeezes the island, a drag pulls it with a rubber band, and a spring snaps it back, all on the frame clock ([D-26](decisions.md)).
 - [x] **5.7 Islands that morph.** Islands spring to their new shape when items come or go, items slide and fade in, and a popover grows out of its island instead of opening its own surface ([D-27](decisions.md), [D-28](decisions.md)).
+- [x] **5.8 Nudges.** A plugin can nudge its island: volume bumps the edge above or below its icon, and switching workspace pushes the island the way it went ([D-30](decisions.md)).
 - [x] **1. Hyprland IPC client.** `crates/eave-hyprland`: one shared socket2 reader, socket1 queries and dispatches, and `watch(snapshot)` so a widget gets its initial state and then every later event ([D-6](decisions.md), [D-17](decisions.md)).
 - [x] **2. Workspaces widget + animated indicator.** `plugins/workspaces` on the new `ui::switcher`: the host slides the mark between workspaces, one step per frame callback, and stops asking for frames when it arrives ([D-16](decisions.md)). Scroll moves between workspaces. *Still to do:* measure CPU during a switch with the debug overlay.
 - [x] **3. Active window title.** `plugins/window`, from the same event stream.

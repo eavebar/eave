@@ -4,6 +4,8 @@
 //! it looks. The host maps nodes to pixels using its theme, so every plugin gets the same style,
 //! and the same animations, without being able to break them.
 
+use std::ops::RangeInclusive;
+
 /// The role of a piece of text. The theme decides the color.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Tone {
@@ -48,6 +50,16 @@ pub enum Kind<M> {
         icon: Icon,
         tone: Option<Tone>,
     },
+    Counter {
+        value: i64,
+        range: RangeInclusive<i64>,
+        unit: String,
+        tone: Option<Tone>,
+    },
+    Alternate {
+        options: Vec<Node<M>>,
+        current: usize,
+    },
     Row(Vec<Node<M>>),
     Column(Vec<Node<M>>),
     Grid {
@@ -84,6 +96,29 @@ pub fn heading<M>(text: impl Into<String>) -> Node<M> {
 /// A symbol, sized like a label.
 pub fn icon<M>(icon: Icon) -> Node<M> {
     Node(Kind::Icon { icon, tone: None })
+}
+
+/// A number from `range`, with a unit after it (`"%"`, `"°"`, or `""`), shown like a label. It
+/// keeps room for the widest number in `range`, so it doesn't change width as it changes. When
+/// `value` changes, the host counts to it through every number in between.
+pub fn counter<M>(value: i64, range: RangeInclusive<i64>, unit: impl Into<String>) -> Node<M> {
+    Node(Kind::Counter {
+        value,
+        range,
+        unit: unit.into(),
+        tone: None,
+    })
+}
+
+/// One of `options` at a time: the one at `current`, or the last one if it's past the end. It's as
+/// big as the biggest option, so it doesn't change size when `current` does. The host fades from
+/// one to the other. Keep the options the same from one
+/// view to the next, so the host can tell which one is coming in.
+pub fn alternate<M>(options: impl IntoIterator<Item = Node<M>>, current: usize) -> Node<M> {
+    Node(Kind::Alternate {
+        options: options.into_iter().collect(),
+        current,
+    })
 }
 
 /// Children side by side, vertically centered.
@@ -143,10 +178,16 @@ impl<M> Node<M> {
 
     fn set_tone(&mut self, new: Tone) {
         match &mut self.0 {
-            Kind::Label { tone, .. } | Kind::Heading { tone, .. } | Kind::Icon { tone, .. } => {
+            Kind::Label { tone, .. }
+            | Kind::Heading { tone, .. }
+            | Kind::Icon { tone, .. }
+            | Kind::Counter { tone, .. } => {
                 tone.get_or_insert(new);
             }
-            Kind::Row(children)
+            Kind::Alternate {
+                options: children, ..
+            }
+            | Kind::Row(children)
             | Kind::Column(children)
             | Kind::Grid {
                 cells: children, ..
@@ -170,6 +211,21 @@ impl<M> Node<M> {
             Kind::Label { text, tone } => Kind::Label { text, tone },
             Kind::Heading { text, tone } => Kind::Heading { text, tone },
             Kind::Icon { icon, tone } => Kind::Icon { icon, tone },
+            Kind::Counter {
+                value,
+                range,
+                unit,
+                tone,
+            } => Kind::Counter {
+                value,
+                range,
+                unit,
+                tone,
+            },
+            Kind::Alternate { options, current } => Kind::Alternate {
+                options: map_all(options),
+                current,
+            },
             Kind::Row(children) => Kind::Row(map_all(children)),
             Kind::Column(children) => Kind::Column(map_all(children)),
             Kind::Grid { columns, cells } => Kind::Grid {

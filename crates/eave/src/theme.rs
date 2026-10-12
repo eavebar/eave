@@ -48,6 +48,23 @@ pub const SPRING_DAMPING: f32 = 0.5;
 /// popover and back. Damped close to critical, so it settles without wobbling.
 pub const MORPH_STIFFNESS: f32 = 380.0;
 pub const MORPH_DAMPING: f32 = 0.9;
+/// The spring a nudged island and its bump move back on: damped nearly to critical, so they come
+/// back without swinging past.
+pub const NUDGE_STIFFNESS: f32 = 600.0;
+pub const NUDGE_DAMPING: f32 = 0.85;
+/// How fast a nudge sets an island off, in logical pixels per second. A push sideways peaks at
+/// about 5 px. Up or down, the whole island moves about half a pixel, and the bump in its edge
+/// peaks at about 2 px.
+pub const NUDGE_PUSH_SPEED: f32 = 300.0;
+pub const NUDGE_LIFT_SPEED: f32 = 30.0;
+pub const NUDGE_BUMP_SPEED: f32 = 120.0;
+/// How much of its bump the nudged item moves with: it rides along, by less than the edge.
+pub const NUDGE_ITEM_FOLLOW: f32 = 0.5;
+/// How wide a bump in an island's edge is, end to end.
+pub const NUDGE_BUMP_WIDTH: f32 = 64.0;
+/// The furthest a bump reaches out of the island: it stays inside `EDGE_GAP` above and `DRAG_ROOM`
+/// below.
+pub const NUDGE_BUMP_ROOM: f32 = 4.0;
 /// Horizontal padding inside each item, so its click target is wider than its text.
 pub const ITEM_PADDING: u16 = 6;
 pub const ITEM_SPACING: u32 = 4;
@@ -58,6 +75,10 @@ pub const SPACING: u32 = 8;
 pub const GRID_CELL: f32 = 28.0;
 pub const BUTTON_RADIUS: f32 = 6.0;
 
+/// How long an alternate takes to fade from one option to the next: out, then in.
+pub const ALTERNATE_FADE: Duration = Duration::from_millis(240);
+/// How long a counter takes to count to a new number, through every one in between.
+pub const COUNTER_COUNT: Duration = Duration::from_millis(320);
 /// How long a switcher's mark takes to reach a newly current option.
 pub const SWITCHER_SLIDE: Duration = Duration::from_millis(180);
 /// A primary press held at least this long is a long press: it plays with the island, but the

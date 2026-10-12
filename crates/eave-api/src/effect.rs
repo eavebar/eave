@@ -4,6 +4,7 @@ use crate::Task;
 pub struct Effect<M> {
     task: Task<M>,
     popover: Option<PopoverRequest>,
+    nudge: Option<Nudge>,
 }
 
 #[doc(hidden)]
@@ -13,11 +14,26 @@ pub enum PopoverRequest {
     Close,
 }
 
+/// Which way something just went, so the host can give the widget's island a nudge that way.
+///
+/// It says what happened, not how to move: the host picks the motion. A value going up or down
+/// (a volume, a brightness) bumps the island's top or bottom edge out at the widget's item; moving
+/// to the next or previous thing (a workspace, a track) pushes the whole island left or right,
+/// and it springs back into place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nudge {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
 impl<M> Effect<M> {
     pub fn none() -> Self {
         Self {
             task: Task::none(),
             popover: None,
+            nudge: None,
         }
     }
 
@@ -25,6 +41,7 @@ impl<M> Effect<M> {
         Self {
             task,
             popover: None,
+            nudge: None,
         }
     }
 
@@ -39,9 +56,15 @@ impl<M> Effect<M> {
         self
     }
 
+    /// Nudges this widget's island. Ignored while the island is held or has a popover.
+    pub fn nudge(mut self, nudge: Nudge) -> Self {
+        self.nudge = Some(nudge);
+        self
+    }
+
     #[doc(hidden)]
-    pub fn into_parts(self) -> (Task<M>, Option<PopoverRequest>) {
-        (self.task, self.popover)
+    pub fn into_parts(self) -> (Task<M>, Option<PopoverRequest>, Option<Nudge>) {
+        (self.task, self.popover, self.nudge)
     }
 }
 

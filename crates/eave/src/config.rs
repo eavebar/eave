@@ -4,6 +4,8 @@
 //! [[center]]
 //! widget = "clock"
 //! format = "%H:%M"   # every other key goes to the widget
+//! width_group = "status"   # except this: items in an island with the same group are as wide
+//!                          # as the widest of them
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -31,6 +33,8 @@ impl Zone {
 pub struct Entry {
     pub zone: Zone,
     pub widget: String,
+    /// Items in the same island and group get the same width, the widest one's.
+    pub width_group: Option<String>,
     pub options: toml::Table,
 }
 
@@ -92,10 +96,22 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
                     .push(format!("{}[{index}] is not a table", zone.key()));
                 continue;
             };
+            let width_group = match options.remove("width_group") {
+                Some(toml::Value::String(group)) => Some(group),
+                Some(_) => {
+                    config.warnings.push(format!(
+                        "{}[{index}]: `width_group` must be a name, ignoring it",
+                        zone.key()
+                    ));
+                    None
+                }
+                None => None,
+            };
             match options.remove("widget") {
                 Some(toml::Value::String(widget)) => config.entries.push(Entry {
                     zone,
                     widget,
+                    width_group,
                     options,
                 }),
                 _ => config.warnings.push(format!(
@@ -170,6 +186,26 @@ mod tests {
         .unwrap();
         assert!(config.entries.is_empty());
         assert_eq!(config.warnings.len(), 3);
+    }
+
+    #[test]
+    fn width_groups_are_the_hosts() {
+        let config = parse(
+            r#"
+            [[right]]
+            widget = "volume"
+            width_group = "status"
+            step = 2
+            [[right]]
+            widget = "network"
+            width_group = 3
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.entries[0].width_group.as_deref(), Some("status"));
+        assert!(!config.entries[0].options.contains_key("width_group"));
+        assert_eq!(config.entries[1].width_group, None);
+        assert_eq!(config.warnings.len(), 1);
     }
 
     #[test]
