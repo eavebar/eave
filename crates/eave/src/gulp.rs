@@ -40,7 +40,7 @@ impl State {
 /// How swollen it is `t` seconds after the first gulp: rising and falling smoothly, one gulp after
 /// another.
 fn swell(t: f32) -> f32 {
-    (PI * t / theme::BATTERY_GULP.as_secs_f32()).sin().powi(2)
+    (PI * t / theme::GULP.as_secs_f32()).sin().powi(2)
 }
 
 impl<M> Widget<M, iced::Theme, iced::Renderer> for Gulp<'_, M> {
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn gulps_over_and_over() {
-        let gulp = theme::BATTERY_GULP.as_secs_f32();
+        let gulp = theme::GULP.as_secs_f32();
         assert_eq!(swell(0.0), 0.0, "starts still");
         for index in 0..5 {
             let index = index as f32;
@@ -193,7 +193,7 @@ mod tests {
         let start = Instant::now();
         state.step(start);
         assert_eq!(state.swell, 0.0);
-        state.step(start + theme::BATTERY_GULP / 2);
+        state.step(start + theme::GULP / 2);
         assert!(state.swell > 0.99);
     }
 }
