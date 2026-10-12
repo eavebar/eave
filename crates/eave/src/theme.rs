@@ -80,6 +80,12 @@ pub const NUDGE_DAMPING: f32 = 0.85;
 pub const NUDGE_PUSH_SPEED: f32 = 300.0;
 pub const NUDGE_LIFT_SPEED: f32 = 30.0;
 pub const NUDGE_BUMP_SPEED: f32 = 120.0;
+/// How much a nudged island leans into where it's going, per pixel it has moved: the end it's
+/// going toward taller and the one it's leaving flatter (sideways), or the edge it's going toward
+/// wider and the other narrower (up and down). About 3 px taller than the far end at the height of
+/// a push, and 4 px wider than the far edge at the height of a lift.
+pub const NUDGE_TAPER_X: f32 = 0.6;
+pub const NUDGE_TAPER_Y: f32 = 8.0;
 /// How much of its bump the nudged item moves with: it rides along, by less than the edge.
 pub const NUDGE_ITEM_FOLLOW: f32 = 0.5;
 /// How wide a bump in an island's edge is, end to end.

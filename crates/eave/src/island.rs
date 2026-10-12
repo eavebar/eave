@@ -26,7 +26,7 @@ use iced::alignment::Horizontal;
 use iced::widget::canvas::{Cache, Stroke};
 use iced::{Color, Element, Event, Length, Point, Rectangle, Size, Transformation, Vector, window};
 
-use crate::squircle::{Bump, Edge, squircle};
+use crate::squircle::{Bump, Edge, Taper, squircle};
 use crate::squish::{self, Squish};
 use crate::theme;
 
@@ -95,8 +95,8 @@ struct State {
     /// The squircle, rebuilt only when its size changes, or while it has a bump: at rest it's
     /// built once.
     shape: Cache,
-    /// The bump `shape` was last built with.
-    shape_bump: Cell<Option<Bump>>,
+    /// The bump and taper `shape` was last built with.
+    shape_warp: Cell<(Option<Bump>, Taper)>,
     /// The popover panel's widget state, while there is one.
     panel: Option<Tree>,
 }
@@ -590,6 +590,18 @@ impl Motion {
         })
     }
 
+    /// How a nudge leans the shape into where it's going, as far as it has gone. Tied to the push,
+    /// not its speed, so it doesn't lean the other way as it comes back. It stays in the room the
+    /// frame has around the shape, with the bump's share of it taken out.
+    fn taper(&self, bump: Option<Bump>) -> Taper {
+        let room = theme::NUDGE_BUMP_ROOM;
+        let above = room - bump.map_or(0.0, |bump| bump.amount.abs());
+        Taper {
+            x: (self.push_x.value * theme::NUDGE_TAPER_X).clamp(-2.0 * above, 2.0 * above),
+            y: (-self.push_y.value * theme::NUDGE_TAPER_Y).clamp(-2.0 * room, 2.0 * room),
+        }
+    }
+
     /// The shape as it's drawn: its edges, splatting. Stretching along one axis pulls the other
     /// in. It stretches about its center across, and down from its top, which it hit.
     fn shape(&self) -> Rectangle {
@@ -631,6 +643,16 @@ impl Motion {
             shape.y + (at.y - edges.y) * squish.y,
         );
         to - at
+    }
+
+    /// How squished something centered at `at` is: by the shape's stretch, and by the taper there.
+    fn squish_at(&self, taper: Taper, shape: Rectangle, at: Point) -> Squish {
+        let squish = self.squish();
+        let (taller, wider) = taper.at(shape, at);
+        Squish {
+            x: squish.x * wider,
+            y: squish.y * taller,
+        }
     }
 
     fn offset(&self) -> Vector {
@@ -799,42 +821,49 @@ fn draw_island<M>(
         * Transformation::scale(scale)
         * Transformation::translate(-center.x, -center.y);
 
-    // The frame clips to its size: it has room above and below for a bump.
+    // The frame clips to its size: it has room all round for a bump and a taper.
     let room = theme::NUDGE_BUMP_ROOM;
     let bump = motion.bump(keys, layout, shape);
-    if state.shape_bump.replace(bump) != bump {
+    let taper = motion.taper(bump);
+    if state.shape_warp.replace((bump, taper)) != (bump, taper) {
         state.shape.clear();
     }
 
     renderer.with_translation(motion.offset(), |renderer| {
         renderer.with_transformation(transformation, |renderer| {
-            let frame_size = Size::new(shape.width, shape.height + 2.0 * room);
+            let frame_size = Size::new(shape.width + 2.0 * room, shape.height + 2.0 * room);
+            // The bump is measured from the shape's left, and the frame starts `room` before it.
+            let bump = bump.map(|bump| Bump {
+                x: bump.x + room,
+                ..bump
+            });
             let geometry = state.shape.draw(renderer, frame_size, |frame| {
                 let size = shape.size();
                 let radius = theme::ISLAND_RADIUS;
                 let smoothing = theme::ISLAND_SMOOTHING;
                 frame.fill(
                     &squircle(
-                        Rectangle::new(Point::new(0.0, room), size),
+                        Rectangle::new(Point::new(room, room), size),
                         radius,
                         smoothing,
                         bump,
+                        taper,
                     ),
                     theme::ISLAND_BG,
                 );
                 // Half a pixel in, so the whole hairline lands inside the fill.
                 let inset = Rectangle::new(
-                    Point::new(0.5, room + 0.5),
+                    Point::new(room + 0.5, room + 0.5),
                     Size::new(size.width - 1.0, size.height - 1.0),
                 );
                 frame.stroke(
-                    &squircle(inset, radius - 0.5, smoothing, bump),
+                    &squircle(inset, radius - 0.5, smoothing, bump, taper),
                     Stroke::default()
                         .with_color(theme::ISLAND_BORDER)
                         .with_width(1.0),
                 );
             });
-            renderer.with_translation(Vector::new(shape.x, shape.y - room), |renderer| {
+            renderer.with_translation(Vector::new(shape.x - room, shape.y - room), |renderer| {
                 renderer.draw_geometry(geometry);
             });
 
@@ -852,10 +881,11 @@ fn draw_island<M>(
                     }
                     let moved = Vector::new(dx, motion.item_lift(*key));
                     // It rides along with the overshoot, to where the stretch takes its center,
-                    // and squishes with the shape.
+                    // and squishes with the shape, and with the taper where it is.
                     let moved = moved + motion.follow(bounds.center() + moved);
+                    let squished = motion.squish_at(taper, shape, bounds.center() + moved);
                     renderer.with_translation(moved, |renderer| {
-                        squish::with(motion.squish(), || {
+                        squish::with(squished, || {
                             item.as_widget()
                                 .draw(tree, renderer, theme, style, child, cursor, viewport);
                         });
@@ -919,7 +949,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         tree::State::new(State {
             motion: Motion::default(),
             shape: Cache::new(),
-            shape_bump: Cell::new(None),
+            shape_warp: Cell::new((None, Taper::NONE)),
             panel: None,
         })
     }
@@ -1635,6 +1665,42 @@ mod tests {
         assert_eq!(motion.offset(), Vector::ZERO);
         assert!((1.7..2.3).contains(&furthest), "{furthest}");
         assert_eq!(motion.bump.value, 0.0);
+    }
+
+    #[test]
+    fn a_nudge_leans_into_where_its_going() {
+        let mut motion = nudged(&[(2, (2, Nudge::Right))]);
+        let shape = motion.shape();
+        let (left, right) = (
+            Point::new(shape.x + 10.0, shape.center_y()),
+            Point::new(shape.x + shape.width - 10.0, shape.center_y()),
+        );
+        let (mut tallest, mut squished): (f32, f32) = (0.0, 1.0);
+        run(&mut motion, Instant::now(), |motion| {
+            let taper = motion.taper(None);
+            assert!(taper.x > -0.1 && taper.y == 0.0, "{taper:?}");
+            tallest = tallest.max(taper.x);
+            let squish = motion.squish_at(taper, shape, right);
+            assert!(squish.y >= 1.0 - 1e-3 && squish.x == 1.0);
+            squished = squished.min(motion.squish_at(taper, shape, left).y);
+        });
+        assert!((2.5..3.5).contains(&tallest), "{tallest}");
+        assert!(squished < 0.95, "the far end flattens: {squished}");
+        assert_eq!(motion.taper(None), Taper::NONE);
+
+        let mut motion = nudged(&[(2, (2, Nudge::Left))]);
+        let mut leaned: f32 = 0.0;
+        run(&mut motion, Instant::now(), |motion| {
+            leaned = leaned.min(motion.taper(None).x);
+        });
+        assert!(leaned < -2.5, "the left end grows: {leaned}");
+
+        let mut motion = nudged(&[(2, (2, Nudge::Up))]);
+        let mut widest: f32 = 0.0;
+        run(&mut motion, Instant::now(), |motion| {
+            widest = widest.max(motion.taper(None).y);
+        });
+        assert!((3.0..5.0).contains(&widest), "the top widens: {widest}");
     }
 
     #[test]
