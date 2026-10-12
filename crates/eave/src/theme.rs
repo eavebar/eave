@@ -81,6 +81,10 @@ pub const BUTTON_RADIUS: f32 = 6.0;
 
 /// How long an alternate takes to fade from one option to the next: out, then in.
 pub const ALTERNATE_FADE: Duration = Duration::from_millis(240);
+/// How far an option slides as it fades, when the pointer moving onto or off its item set it off:
+/// sideways, or up and down (less, to stay inside the island).
+pub const ALTERNATE_SLIDE_X: f32 = 6.0;
+pub const ALTERNATE_SLIDE_Y: f32 = 4.0;
 /// How long a counter takes to count to a new number, through every one in between.
 pub const COUNTER_COUNT: Duration = Duration::from_millis(320);
 /// How long a switcher's mark takes to reach a newly current option.
@@ -112,5 +116,6 @@ pub fn tone(tone: Tone) -> Color {
         Tone::Accent => Color::from_rgb(0.53, 0.70, 1.00),
         Tone::Warning => Color::from_rgb(0.98, 0.76, 0.36),
         Tone::Critical => Color::from_rgb(0.97, 0.42, 0.42),
+        Tone::Good => Color::from_rgb(0.45, 0.85, 0.55),
     }
 }

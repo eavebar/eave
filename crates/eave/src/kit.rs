@@ -46,9 +46,11 @@ fn render<'a>(node: Node<AnyMessage>, inherited: Tone) -> Element<'a, AnyMessage
             unit,
             tone,
         } => Counter::new(value, range, unit, theme::tone(tone.unwrap_or(inherited))).into(),
-        Kind::Alternate { options, current } => {
-            Alternate::new(all(options).collect(), current).into()
-        }
+        Kind::Alternate {
+            options,
+            current,
+            hovered,
+        } => Alternate::new(all(options).collect(), current, hovered).into(),
         Kind::Row(children) => row(all(children))
             .spacing(theme::SPACING)
             .align_y(alignment::Vertical::Center)

@@ -1,7 +1,7 @@
-//! Battery level, as a battery icon filled to the charge and the percentage next to it. Read from
-//! the kernel's `/sys/class/power_supply`, with every system battery combined into one. Hidden
-//! when there's no battery (a desktop). The popover has the state, the time left and the power
-//! draw.
+//! Battery level, as a battery icon filled to the charge: green while charging, red when nearly
+//! empty. Hovering it shows the percentage instead. Read from the kernel's
+//! `/sys/class/power_supply`, with every system battery combined into one. Hidden when there's no
+//! battery (a desktop). The popover has the state, the time left and the power draw.
 
 use eave_api::ui::{self, Icon, Item, Panel, Tone};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
@@ -109,7 +109,7 @@ impl Widget for Battery {
             charge: f32::from(percent) / 100.0,
             charging: self.reading.state == State::Charging,
         });
-        Item::new(ui::row([icon, ui::label(format!("{percent}%"))]).tone(self.tone()))
+        Item::new(ui::hover(icon, ui::label(format!("{percent}%"))).tone(self.tone()))
     }
 
     fn popover(&self) -> Option<Panel<Message>> {
@@ -156,7 +156,8 @@ impl Battery {
     fn tone(&self) -> Tone {
         let percent = self.percent();
         match self.reading.state {
-            State::Charging | State::Full | State::NotCharging => Tone::Normal,
+            State::Charging => Tone::Good,
+            State::Full | State::NotCharging => Tone::Normal,
             _ if percent <= self.config.critical => Tone::Critical,
             _ if percent <= self.config.warning => Tone::Warning,
             _ => Tone::Normal,
@@ -194,7 +195,28 @@ mod tests {
         assert_eq!(battery(20.6, State::Discharging).tone(), Tone::Normal);
         assert_eq!(battery(19.6, State::Discharging).tone(), Tone::Warning);
         assert_eq!(battery(8.0, State::Discharging).tone(), Tone::Critical);
-        assert_eq!(battery(8.0, State::Charging).tone(), Tone::Normal);
+        assert_eq!(battery(8.0, State::Charging).tone(), Tone::Good);
+        assert_eq!(battery(8.0, State::NotCharging).tone(), Tone::Normal);
+    }
+
+    #[test]
+    fn shows_the_percentage_on_hover() {
+        let content = battery(42.0, State::Discharging)
+            .item()
+            .into_parts()
+            .content;
+        let ui::Kind::Alternate {
+            mut options,
+            current: 0,
+            hovered: Some(1),
+        } = content.unwrap().into_kind()
+        else {
+            panic!("the icon, with the percentage on hover");
+        };
+        assert!(matches!(
+            options.pop().unwrap().into_kind(),
+            ui::Kind::Label { text, .. } if text == "42%"
+        ));
     }
 
     #[test]
