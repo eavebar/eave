@@ -52,25 +52,23 @@ pub const MORPH_DAMPING: f32 = 0.9;
 /// fades in on (and back). Critically damped, so a fade never overshoots.
 pub const FADE_STIFFNESS: f32 = 1500.0;
 pub const FADE_DAMPING: f32 = 1.0;
-/// The spring a popover's overshoot rides on, on top of its morph. Well under critical, so one
-/// kick stretches the shape past its size, swings it back a little short, and settles.
+/// The spring a popover's splat rides on, on top of its morph. Well under critical, so one kick
+/// squashes the shape, swings it back a little the other way, and settles.
 pub const SQUISH_STIFFNESS: f32 = 400.0;
 pub const SQUISH_DAMPING: f32 = 0.35;
-/// How fast an opening popover overshoots its height as it arrives, in logical pixels per second:
-/// about 4 px too tall at the peak. It has to stay inside the `EDGE_GAP` the surface has below.
-pub const SQUISH_OPEN_SPEED: f32 = 125.0;
-/// How fast a closing popover's island overshoots its width as it lands: about 6 px too wide at
-/// the peak, half on each side, inside the `EDGE_GAP` from the screen's sides.
-pub const SQUISH_CLOSE_SPEED: f32 = 190.0;
+/// How hard an opening popover splats against where its bottom lands, in logical pixels per
+/// second: flattened and widened by about 3 px each at the peak, before the bulge below.
+pub const SQUISH_OPEN_FLATTEN: f32 = 100.0;
+pub const SQUISH_OPEN_WIDEN: f32 = 100.0;
+/// How hard a closing popover's island splats against the top: about 2 px flatter and 5 px wider
+/// at the peak, before the bulge. Wider stays inside the `EDGE_GAP` from the screen's sides.
+pub const SQUISH_CLOSE_FLATTEN: f32 = 60.0;
+pub const SQUISH_CLOSE_WIDEN: f32 = 160.0;
 /// How close, in logical pixels, a popover's bottom edge comes to where it's going before it
-/// overshoots. The overshoot peaks about four frames after, as the shape arrives.
+/// splats. The splat peaks about four frames after, as the shape arrives.
 pub const SQUISH_LAND: f32 = 5.0;
 /// How much stretching along one axis pulls the other in, per pixel stretched.
 pub const SQUISH_BULGE: f32 = 0.5;
-/// How much of an overshoot's change in height the top edge takes (the bottom takes the rest), so
-/// the top moves too: up a little as an opening popover goes too tall, down as a closing one lands.
-/// It moves into the `EDGE_GAP` above the islands.
-pub const SQUISH_TOP: f32 = 0.4;
 /// The spring a nudged island and its bump move back on: damped nearly to critical, so they come
 /// back without swinging past.
 pub const NUDGE_STIFFNESS: f32 = 600.0;
