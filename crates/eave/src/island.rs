@@ -4,7 +4,8 @@
 //! little, dragging pulls it along with growing resistance, and letting go springs it back.
 //!
 //! An island can also become a popover. Given one, it morphs into the panel's shape, growing from
-//! where it sits, while its items fade out and the panel's content fades in. Closing runs that
+//! where it sits, while its items fade out and the panel's content fades in. It squishes as it
+//! sets off, squeezed in from the sides, and eases back as it grows. Closing runs the morph
 //! backwards, lands like it hit the top (it splats into it, flatter and wider, then eases back),
 //! and reports when it's done. The panel lives in an overlay, so it's laid out against the whole
 //! surface, drawn over the other islands, and sees events first.
@@ -273,7 +274,7 @@ struct PopoverMotion {
     reported: Option<Rectangle>,
     /// Whether the host has been told the island is back to itself.
     closed: bool,
-    /// Whether this close has had its splat.
+    /// Whether this way of the morph has had its squish (opening) or splat (closing).
     squished: bool,
     /// How much the island's items show: they make way for the panel.
     items: Spring,
@@ -419,7 +420,7 @@ impl Motion {
                 if open && !popover_state.open {
                     popover_state.closed = false;
                 }
-                // Turning around squashes again.
+                // Turning around squishes again.
                 if open != popover_state.open {
                     popover_state.squished = false;
                 }
@@ -457,6 +458,12 @@ impl Motion {
         match (popover.opening(), popover.rect) {
             (Some(panel), _) => {
                 self.edges.aim(panel);
+                // Squeezed in from the sides as it sets off, then eases back: a squish on the
+                // way, nothing to hit when it gets there.
+                if !popover.squished {
+                    popover.squished = true;
+                    self.stretch_x.velocity = -theme::SQUISH_OPEN_SQUEEZE * panel.width;
+                }
                 popover.items.target = 0.0;
                 popover.panel.target = if popover.items.value < REST_DISTANCE
                     && self.edges.progress(island, panel) > 0.5
@@ -1456,17 +1463,25 @@ mod tests {
     }
 
     #[test]
-    fn a_closing_popover_splats_against_the_top() {
+    fn opening_squishes_and_closing_splats_against_the_top() {
         let island = rect(100.0, 120.0);
         let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 200.0));
         let mut motion = settled(island, &[1]);
         let gap = f32::from(theme::EDGE_GAP);
 
-        // Opening: no splat, the shape is its edges all the way.
+        // Opening: squeezed in from the sides on the way, from its top, and no bump at the end.
         popover(&mut motion, true, panel, true);
+        let mut squeezed = false;
         run(&mut motion, Instant::now(), |motion| {
-            assert_eq!(motion.shape(), motion.edges.rect());
+            let (shape, edges) = (motion.shape(), motion.edges.rect());
+            squeezed |= shape.width < edges.width - 4.0 && shape.height > edges.height;
+            assert_eq!(shape.y, edges.y, "the top stays on the bar");
+            assert!(
+                shape.width < edges.width + 1.0,
+                "never swings visibly wider"
+            );
         });
+        assert!(squeezed, "squished on the way");
         assert_eq!(motion.shape(), panel);
 
         // Closing: the top stays on the bar; the bottom gives.

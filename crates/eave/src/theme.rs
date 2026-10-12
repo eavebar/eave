@@ -52,10 +52,14 @@ pub const MORPH_DAMPING: f32 = 0.9;
 /// fades in on (and back). Critically damped, so a fade never overshoots.
 pub const FADE_STIFFNESS: f32 = 1500.0;
 pub const FADE_DAMPING: f32 = 1.0;
-/// The spring a closing popover's splat rides on, on top of its morph. Just under critical, so one kick
+/// The spring a popover's squish and splat ride on, on top of its morph. Just under critical, so one kick
 /// squashes the shape and it eases back, without a visible bounce.
 pub const SQUISH_STIFFNESS: f32 = 250.0;
 pub const SQUISH_DAMPING: f32 = 0.75;
+/// How hard an opening popover is squeezed in from the sides as it sets off, per second, as a
+/// share of the panel's width: about 5 % narrower at the peak (and taller, by the bulge), easing
+/// back as it grows.
+pub const SQUISH_OPEN_SQUEEZE: f32 = 2.0;
 /// How hard a closing popover's island splats against the top, in logical pixels per second:
 /// about 1.5 px flatter and 3.5 px wider at the peak, before the bulge. Wider stays inside the
 /// `EDGE_GAP` from the screen's sides.
