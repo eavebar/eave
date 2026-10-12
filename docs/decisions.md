@@ -698,3 +698,23 @@ There's still one hover path for everything. `Slot` follows the pointer, and not
 > `ui::expand(collapsed, expanded)` shows `collapsed`, or `expanded` once the pointer has rested over it for `EXPAND_DELAY` (200 ms). It collapses as soon as the pointer leaves. It's only as big as what it shows, so the item grows and the island springs to its new width (D-27). It counts as hovered across its whole width, from the top of the bar to its bottom edge, so a pointer pushed against the screen edge still hovers it. `crates/eave/src/expand.rs` lays out only the child it shows. When hover changes what it shows, it invalidates the layout, and it waits for the delay with `request_redraw_at`, never polling.
 >
 > **Why not `alternate`/`hover` (D-33, D-35):** an alternate keeps room for its biggest option, so the item doesn't change size, and it reacts to the whole item. Here the extra room is the point, and each workspace in the row needs its own hover.
+
+---
+
+## D-40: Popovers squash and stretch
+
+**Status:** accepted (2026-10-12)
+
+**What:** a popover's morph (D-28) gets a squash and stretch on top, so it feels soft instead of a rectangle being resized. Opening, the shape is squeezed in from the sides as it sets off, swings a little wider as it arrives, and settles. Closing, the island lands on the bar a little flattened and springs back. The edges, the fades and their timing, `progress` and `PopoverClosed` are untouched: the squash only changes the drawn shape (`Motion::shape`).
+- Two springs, `squish_x` and `squish_y`, in pixels taken off the width and height. They rest at 0 and get one velocity kick each way of the morph, like a nudge (D-32). Their feel (`SQUISH_STIFFNESS` 400, `SQUISH_DAMPING` 0.35) is well under critical, so one kick squeezes, swings past the other way and settles. The swing lands at about the time the morph does. The morph's spring is linear, so it takes the same time for any panel size and the timing holds for every popover.
+- Opening kicks `squish_x` once the surface has room, by `SQUISH_OPEN_SPEED` of the panel's width per second (about 5 % narrower at the peak).
+- Closing kicks `squish_y` once the shape's bottom is within `SQUISH_LAND` (5 px) of the island's, by `SQUISH_CLOSE_SPEED` of the island's height per second (about 3 px flatter). Kicking earlier, by progress, peaked while the shape was still far taller than the island, where it didn't show.
+- A squeeze along one axis bulges the other by `SQUISH_BULGE` (0.5) per pixel. The shape squeezes about its center across, and from its top down, since the top stays on the bar.
+- Turning around mid-morph squashes again. A popover taken away without closing doesn't.
+- Hit testing still uses the edges: the difference is a few pixels for a fraction of a second.
+
+**Alternatives:**
+- underdamped feels on the edges themselves: the overshoot scales with the distance travelled, so a tall panel would land 10+ px into a 32 px island, and a wide one would swing off the screen edge.
+- stretch driven by the edges' velocity: stretches on the way, but has nothing to squash against on landing.
+
+**Cost:** no dependencies. At rest the squash springs are 0 and nothing changes. Each open and close animates a little longer, while the squash's last swing settles (the morph test's bound went from 60 to 75 frames).

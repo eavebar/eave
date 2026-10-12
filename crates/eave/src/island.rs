@@ -4,8 +4,9 @@
 //! little, dragging pulls it along with growing resistance, and letting go springs it back.
 //!
 //! An island can also become a popover. Given one, it morphs into the panel's shape, growing from
-//! where it sits, while its items fade out and the panel's content fades in. Closing runs that
-//! backwards, and reports when it's done. The panel lives in an overlay, so it's laid out against
+//! where it sits, while its items fade out and the panel's content fades in. It squashes and
+//! stretches on the way: squeezed in from the sides as it grows, then a little wider as it arrives.
+//! Closing runs that backwards, lands on the bar a little flattened, and reports when it's done. The panel lives in an overlay, so it's laid out against
 //! the whole surface, drawn over the other islands, and sees events first.
 //!
 //! It only watches pointer events on the items and never captures them, so the items work exactly
@@ -127,6 +128,11 @@ const FADE: Feel = Feel {
     stiffness: theme::FADE_STIFFNESS,
     damping: theme::FADE_DAMPING,
 };
+/// A popover's squash and stretch: kicked once, it swings past rest and back.
+const SQUISH: Feel = Feel {
+    stiffness: theme::SQUISH_STIFFNESS,
+    damping: theme::SQUISH_DAMPING,
+};
 
 /// Where everything is going and how it's moving there. Positions are in logical pixels, in
 /// surface coordinates; fades go from 0 (hidden) to 1 (shown).
@@ -150,6 +156,10 @@ struct Motion {
     /// How far a nudge pushed an edge out, at which item and on which edge.
     bump: Spring,
     bump_at: Option<(u64, Edge)>,
+    /// How many pixels a popover's squash takes off the shape's width and height (negative is
+    /// wider or taller), on top of its edges.
+    squish_x: Spring,
+    squish_y: Spring,
     /// The newest nudge already played, once the island has been laid out.
     seen: Option<u64>,
     /// The previous frame, while something is moving.
@@ -171,6 +181,8 @@ impl Default for Motion {
             push_y: Spring::new(0.0, NUDGE),
             bump: Spring::new(0.0, NUDGE),
             bump_at: None,
+            squish_x: Spring::new(0.0, SQUISH),
+            squish_y: Spring::new(0.0, SQUISH),
             seen: None,
             last: None,
         }
@@ -260,6 +272,8 @@ struct PopoverMotion {
     reported: Option<Rectangle>,
     /// Whether the host has been told the island is back to itself.
     closed: bool,
+    /// Whether this way of the morph, opening or closing, has had its squash.
+    squished: bool,
     /// How much the island's items show: they make way for the panel.
     items: Spring,
     /// How much the panel's content shows.
@@ -275,6 +289,7 @@ impl Default for PopoverMotion {
             fits: false,
             reported: None,
             closed: false,
+            squished: false,
             items: Spring::new(1.0, FADE),
             panel: Spring::new(0.0, FADE),
         }
@@ -403,6 +418,10 @@ impl Motion {
                 if open && !popover_state.open {
                     popover_state.closed = false;
                 }
+                // Turning around squashes again.
+                if open != popover_state.open {
+                    popover_state.squished = false;
+                }
                 popover_state.open = open;
             }
             None if popover_state.present => {
@@ -437,6 +456,11 @@ impl Motion {
         match (popover.opening(), popover.rect) {
             (Some(panel), _) => {
                 self.edges.aim(panel);
+                // Squeezed in from the sides as it sets off; the swing back makes it wider.
+                if !popover.squished {
+                    popover.squished = true;
+                    self.squish_x.velocity = theme::SQUISH_OPEN_SPEED * panel.width;
+                }
                 popover.items.target = 0.0;
                 popover.panel.target = if popover.items.value < REST_DISTANCE
                     && self.edges.progress(island, panel) > 0.5
@@ -448,6 +472,12 @@ impl Motion {
             }
             (None, Some(panel)) if popover.present => {
                 self.edges.aim(island);
+                // Lands on the bar a little flattened. Not while it's open and waiting for room.
+                let landing = self.edges.bottom.value - (island.y + island.height);
+                if !popover.open && !popover.squished && landing < theme::SQUISH_LAND {
+                    popover.squished = true;
+                    self.squish_y.velocity = theme::SQUISH_CLOSE_SPEED * island.height;
+                }
                 popover.panel.target = 0.0;
                 popover.items.target = if popover.panel.value < REST_DISTANCE
                     && self.edges.progress(panel, island) > 0.5
@@ -480,6 +510,8 @@ impl Motion {
             &mut self.push_x,
             &mut self.push_y,
             &mut self.bump,
+            &mut self.squish_x,
+            &mut self.squish_y,
         ]
         .into_iter()
         .chain(
@@ -552,6 +584,19 @@ impl Motion {
             width: theme::NUDGE_BUMP_WIDTH,
             amount: self.bump.value.clamp(-room, room),
         })
+    }
+
+    /// The shape as it's drawn: its edges, squashed. A squeeze along one axis bulges the other.
+    /// It squeezes about its center across, and down from its top, which stays on the bar.
+    fn shape(&self) -> Rectangle {
+        let edges = self.edges.rect();
+        let (squish_x, squish_y) = (self.squish_x.value, self.squish_y.value);
+        let width = (edges.width - squish_x + theme::SQUISH_BULGE * squish_y).max(0.0);
+        let height = (edges.height - squish_y + theme::SQUISH_BULGE * squish_x).max(0.0);
+        Rectangle::new(
+            Point::new(edges.center_x() - width / 2.0, edges.y),
+            Size::new(width, height),
+        )
     }
 
     fn offset(&self) -> Vector {
@@ -706,7 +751,7 @@ fn draw_island<M>(
 
     let motion = &state.motion;
     let shape = if motion.island.is_some() {
-        motion.edges.rect()
+        motion.shape()
     } else {
         layout.bounds()
     };
@@ -1332,7 +1377,8 @@ mod tests {
         });
         assert!(!panel_before_halfway, "the panel waits for the shape");
         assert!(!panel_while_items, "the panel waits for the items to go");
-        assert!(frames < 60, "settles in {frames} frames");
+        // The squash swings on a little after the shape arrives.
+        assert!(frames < 75, "settles in {frames} frames");
         assert_eq!(motion.edges.rect(), panel);
         assert_eq!(motion.item(1, 10.0), (0.0, 0.0), "the items made way");
         assert_eq!(motion.popover.panel.value, 1.0);
@@ -1373,7 +1419,38 @@ mod tests {
         popover(&mut motion, true, panel, true);
         run(&mut motion, start + FRAME * 5, |_| {});
         assert_eq!(motion.edges.rect(), panel);
+        assert_eq!(motion.shape(), panel);
         assert!(!motion.closing_done());
+    }
+
+    #[test]
+    fn a_popover_squashes_open_and_lands_flattened() {
+        let island = rect(100.0, 120.0);
+        let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 200.0));
+        let mut motion = settled(island, &[1]);
+
+        popover(&mut motion, true, panel, true);
+        let (mut narrower, mut wider) = (false, false);
+        run(&mut motion, Instant::now(), |motion| {
+            let (shape, edges) = (motion.shape(), motion.edges.rect());
+            narrower |= shape.width < edges.width - 1.0;
+            wider |= narrower && shape.width > edges.width + 1.0;
+            assert_eq!(shape.y, edges.y, "the top stays put");
+        });
+        assert!(narrower, "squeezed in from the sides");
+        assert!(wider, "then a little wider");
+        assert_eq!(motion.shape(), panel);
+
+        popover(&mut motion, false, panel, true);
+        let mut flatter = false;
+        run(&mut motion, Instant::now(), |motion| {
+            let shape = motion.shape();
+            flatter |= shape.height < island.height - 1.0;
+            assert_eq!(shape.y, island.y, "lands against the top");
+        });
+        assert!(flatter, "lands flattened");
+        assert_eq!(motion.shape(), island);
+        assert!(motion.closing_done());
     }
 
     #[test]
