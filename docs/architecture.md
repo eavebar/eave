@@ -55,7 +55,7 @@ A click on an item that has a popover and no `on_press`:
 1. The host records the item's bounds and the bar width, then asks for a new layer surface: `overlay` layer, anchored top-left, zero exclusive zone (so it sits under the bar), 1×1, namespace `eave-popover`.
 2. `Measure` lays the panel out at its natural size, draws nothing yet, and reports the size.
 3. The host resizes the surface and sets its margin so it's centered under the item, clamped to the screen. Then the panel becomes visible.
-4. It closes on a second click on the item, when the widget returns `close_popover()` or stops offering a popover, or 400 ms after the pointer leaves it. Closing on an outside click is an open issue ([D-14](decisions.md)).
+4. It closes on a second click on the item, when the widget returns `close_popover()` or stops offering a popover. It also closes on a click anywhere else. While a popover is open, a non-consuming Hyprland bind reports every left click on socket2, and the host ignores the ones that land on its own surfaces. Clicks on the bar are handled by the bar itself ([D-14](decisions.md)).
 
 ## Data sources by widget
 

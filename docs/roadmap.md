@@ -26,7 +26,7 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 
 ## Plugin system follow-ups
 
-- [ ] Close popovers on an outside click ([D-14](decisions.md) open issue): test `OnDemand` focus loss, then measure a catcher surface.
+- [x] Close popovers on an outside click, via a Hyprland click bind ([D-14](decisions.md)).
 - [ ] Popover open/close animation, owned by the host.
 - [x] Shared services crate (with step 1), so widgets on the same source share one connection. Hyprland is done ([D-17](decisions.md)); D-Bus is done too (`eave-dbus`, [D-18](decisions.md)).
 - [ ] Publish `eave-api` on crates.io, so plugins build standalone without a `[patch]`.

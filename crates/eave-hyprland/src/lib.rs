@@ -23,14 +23,14 @@ pub mod types;
 use std::io;
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 
 use futures_util::stream;
 use serde::de::DeserializeOwned;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast};
 
 pub use event::Event;
 pub use futures_util::Stream;
@@ -102,20 +102,20 @@ pub async fn query<T: DeserializeOwned>(what: &str) -> io::Result<T> {
     serde_json::from_str(&reply).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
-/// Runs a dispatcher, given in both syntaxes: Lua for Hyprland 0.56 and later, like
-/// `hl.dsp.focus({ workspace = 3 })`, and the older one, like `workspace 3`. The first call finds
-/// out which one this Hyprland speaks, and later calls use only that one.
-pub async fn dispatch(lua: &str, legacy: &str) -> io::Result<()> {
-    const UNKNOWN: u8 = 0;
-    const LUA: u8 = 1;
-    const LEGACY: u8 = 2;
-    static SYNTAX: AtomicU8 = AtomicU8::new(UNKNOWN);
+/// Which config syntax this Hyprland speaks, found out on first use.
+static SYNTAX: AtomicU8 = AtomicU8::new(UNKNOWN);
+const UNKNOWN: u8 = 0;
+const LUA: u8 = 1;
+const LEGACY: u8 = 2;
 
+/// Sends `lua` to a Hyprland with a Lua config (0.56 and later) or `legacy` to an older one,
+/// both as whole socket1 requests, and expects `ok` back.
+async fn request_either(lua: &str, legacy: &str) -> io::Result<()> {
     let run = async |command: &str| {
-        let reply = request(&format!("dispatch {command}")).await?;
+        let reply = request(command).await?;
         match reply.trim() {
             "ok" => Ok(()),
-            error => Err(io::Error::other(format!("dispatch {command}: {error}"))),
+            error => Err(io::Error::other(format!("{command}: {error}"))),
         }
     };
     match SYNTAX.load(Ordering::Relaxed) {
@@ -133,6 +133,44 @@ pub async fn dispatch(lua: &str, legacy: &str) -> io::Result<()> {
             }
         },
     }
+}
+
+/// Runs a dispatcher, given in both syntaxes: Lua for Hyprland 0.56 and later, like
+/// `hl.dsp.focus({ workspace = 3 })`, and the older one, like `workspace 3`. The first call finds
+/// out which one this Hyprland speaks, and later calls use only that one.
+pub async fn dispatch(lua: &str, legacy: &str) -> io::Result<()> {
+    request_either(&format!("dispatch {lua}"), &format!("dispatch {legacy}")).await
+}
+
+/// The [`Event::Custom`] data sent on every primary click while [`report_clicks`] is on.
+pub const CLICK: &str = "eave-click";
+
+/// Turns on or off a non-consuming bind on the left mouse button that sends
+/// `Event::Custom(CLICK)` on every click anywhere, which still reaches whatever was clicked.
+/// Calls may overlap: whichever was made last wins.
+pub async fn report_clicks(on: bool) -> io::Result<()> {
+    // Replaces any bind left by an earlier eave that didn't get to remove it.
+    const ON: &str = "eval if eave_click then pcall(function() eave_click:remove() end) end \
+        eave_click = hl.bind(\"mouse:272\", hl.dsp.event(\"eave-click\"), { non_consuming = true })";
+    const OFF: &str =
+        "eval if eave_click then pcall(function() eave_click:remove() end) eave_click = nil end";
+    static WANTED: AtomicBool = AtomicBool::new(false);
+    /// What Hyprland has, if we set it. Held across the request, so requests don't interleave.
+    static APPLIED: Mutex<Option<bool>> = Mutex::const_new(None);
+
+    WANTED.store(on, Ordering::Relaxed);
+    let mut applied = APPLIED.lock().await;
+    let wanted = WANTED.load(Ordering::Relaxed);
+    if *applied == Some(wanted) {
+        return Ok(());
+    }
+    let result = if wanted {
+        request_either(ON, "keyword bindn ,mouse:272,event,eave-click").await
+    } else {
+        request_either(OFF, "keyword unbind ,mouse:272").await
+    };
+    *applied = result.is_ok().then_some(wanted);
+    result
 }
 
 #[derive(Debug, Clone)]

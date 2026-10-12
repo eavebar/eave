@@ -1,8 +1,6 @@
 //! The host: holds the widget instances, routes their messages, and owns every surface (the bar
 //! and the popover).
 
-use std::time::Duration;
-
 use eave_api::Registry;
 use eave_api::erased::{AnyMessage, ErasedWidget, PopoverRequest};
 use iced::alignment::Horizontal;
@@ -20,9 +18,6 @@ use crate::measure::Measure;
 use crate::slot::Slot;
 use crate::{kit, theme as style, watch};
 
-/// How long the pointer may be outside an open popover before it closes.
-const LEAVE_GRACE: Duration = Duration::from_millis(400);
-
 pub struct Bar {
     registry: Registry,
     /// The config the instances were built from, to skip reloads that change nothing.
@@ -32,8 +27,9 @@ pub struct Bar {
     /// whichever widget now sits at the old index.
     next_id: u64,
     popover: Option<Popover>,
-    /// Pointer-leave timers carry this, so re-entering cancels a pending close.
-    leave_generation: u64,
+    /// Whether the pointer is over one of our surfaces (the bar or the popover), so a click that
+    /// Hyprland reports is ours to handle, not an outside one. Tracked only while a popover is open.
+    pointer_inside: bool,
 }
 
 struct Instance {
@@ -67,10 +63,15 @@ pub enum Message {
     Widget(u64, AnyMessage),
     /// A primary click on an item: its bounds, the bar width, and the item's own `on_press`.
     Pressed(u64, Rectangle, f32, Option<AnyMessage>),
+    /// A primary click on an item that something inside it handled, e.g. a workspace button.
+    InnerPressed(u64),
+    /// A primary click on the bar that nothing handled: empty space, or a plain item.
+    BarPressed(window::Id),
+    /// Hyprland saw a primary click somewhere ([`eave_hyprland::report_clicks`]).
+    Clicked,
+    PointerEntered,
+    PointerLeft,
     PopoverMeasured(Size),
-    PointerEntered(window::Id),
-    PointerLeft(window::Id),
-    LeaveTimeout(u64),
     WindowClosed(window::Id),
     /// `config.toml` changed on disk: the new contents, or why they couldn't be loaded.
     ConfigChanged(Result<Config, String>),
@@ -84,7 +85,7 @@ impl Bar {
             instances: Vec::new(),
             next_id: 0,
             popover: None,
-            leave_generation: 0,
+            pointer_inside: false,
         };
         let task = bar.apply(config);
         (bar, task)
@@ -160,6 +161,8 @@ impl Bar {
         };
 
         let close = self.close_popover();
+        // Popovers open from a click on the bar, so that's where the pointer is.
+        self.pointer_inside = true;
         let window = window::Id::unique();
         self.popover = Some(Popover {
             instance: id,
@@ -192,6 +195,12 @@ impl Bar {
         }
     }
 
+    fn is_popover(&self, window: window::Id) -> bool {
+        self.popover
+            .as_ref()
+            .is_some_and(|popover| popover.window == window)
+    }
+
     fn popover_of(&self, id: u64) -> Option<&Popover> {
         self.popover
             .as_ref()
@@ -200,6 +209,22 @@ impl Bar {
 }
 
 pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
+    let was_open = bar.popover.is_some();
+    let task = handle(bar, message);
+    let open = bar.popover.is_some();
+    if open == was_open {
+        return task;
+    }
+    // Hyprland reports clicks anywhere only while a popover is open.
+    let report = Task::future(async move {
+        if let Err(error) = eave_hyprland::report_clicks(open).await {
+            eprintln!("eave: can't watch for clicks outside the popover: {error}");
+        }
+    });
+    Task::batch([task, report.discard()])
+}
+
+fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
     match message {
         Message::Widget(id, message) => {
             // Gone after a reload: its leftover messages have nowhere to go.
@@ -226,10 +251,27 @@ pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
             };
             instance.anchor = Some(Anchor { bounds, bar_width });
             match on_press {
-                Some(message) => update(bar, Message::Widget(id, message)),
+                // Any other item's popover closes, as on a click anywhere else.
+                Some(message) if bar.popover_of(id).is_none() => {
+                    let close = bar.close_popover();
+                    Task::batch([close, handle(bar, Message::Widget(id, message))])
+                }
+                Some(message) => handle(bar, Message::Widget(id, message)),
                 None if bar.popover_of(id).is_some() => bar.close_popover(),
                 None => bar.open_popover(id),
             }
+        }
+        Message::InnerPressed(id) if bar.popover_of(id).is_none() => bar.close_popover(),
+        Message::BarPressed(window) if !bar.is_popover(window) => bar.close_popover(),
+        // Clicks on our own surfaces are handled where they land.
+        Message::Clicked if !bar.pointer_inside => bar.close_popover(),
+        Message::PointerEntered => {
+            bar.pointer_inside = true;
+            Task::none()
+        }
+        Message::PointerLeft => {
+            bar.pointer_inside = false;
+            Task::none()
         }
         Message::PopoverMeasured(size) => {
             let Some(anchor) = bar
@@ -254,39 +296,8 @@ pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
                 }),
             ])
         }
-        Message::PointerEntered(window) => {
-            if bar
-                .popover
-                .as_ref()
-                .is_some_and(|popover| popover.window == window)
-            {
-                bar.leave_generation += 1;
-            }
-            Task::none()
-        }
-        Message::PointerLeft(window) => {
-            if !bar
-                .popover
-                .as_ref()
-                .is_some_and(|popover| popover.window == window)
-            {
-                return Task::none();
-            }
-            bar.leave_generation += 1;
-            let generation = bar.leave_generation;
-            Task::perform(tokio::time::sleep(LEAVE_GRACE), move |_| {
-                Message::LeaveTimeout(generation)
-            })
-        }
-        Message::LeaveTimeout(generation) if generation == bar.leave_generation => {
-            bar.close_popover()
-        }
         Message::WindowClosed(window) => {
-            if bar
-                .popover
-                .as_ref()
-                .is_some_and(|popover| popover.window == window)
-            {
+            if bar.is_popover(window) {
                 bar.popover = None;
             }
             Task::none()
@@ -300,7 +311,7 @@ pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
                 Task::none()
             }
         },
-        // Stale timers, and the layer-shell variants added by `to_layer_message`.
+        // Clicks that aren't outside, and the layer-shell variants added by `to_layer_message`.
         _ => Task::none(),
     }
 }
@@ -357,6 +368,7 @@ fn item_view(instance: &Instance) -> Option<Element<'_, Message>> {
 
     let wrap = move |message| Message::Widget(id, message);
     let mut slot = Slot::new(content.map(wrap))
+        .on_inner_press(Message::InnerPressed(id))
         .on_secondary(parts.on_secondary.map(wrap))
         .on_scroll(parts.on_scroll.map(|(up, down)| (wrap(up), wrap(down))));
     if on_press.is_some() || instance.has_popover {
@@ -396,17 +408,41 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
     let mut subscriptions: Vec<_> = widgets.collect();
     subscriptions.push(window::close_events().map(Message::WindowClosed));
     subscriptions.push(watch::config_changes().map(Message::ConfigChanged));
-    // Pointer tracking only while a popover is open: otherwise every hover over the bar would wake us.
+    // Pointer and click tracking only while a popover is open: otherwise every hover over the bar
+    // would wake us.
     if bar.popover.is_some() {
-        subscriptions.push(iced::event::listen_with(pointer_event));
+        subscriptions.push(iced::event::listen_with(popover_event));
+        subscriptions.push(Subscription::run(hyprland_events).filter_map(clicked));
     }
     Subscription::batch(subscriptions)
 }
 
-fn pointer_event(event: Event, _: iced::event::Status, window: window::Id) -> Option<Message> {
+fn popover_event(event: Event, status: iced::event::Status, window: window::Id) -> Option<Message> {
     match event {
-        Event::Mouse(mouse::Event::CursorEntered) => Some(Message::PointerEntered(window)),
-        Event::Mouse(mouse::Event::CursorLeft) => Some(Message::PointerLeft(window)),
+        // The bar never takes keyboard focus, so clicks on it are caught here instead. Handled
+        // clicks on items arrive as `Pressed` or `InnerPressed`.
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+            if status == iced::event::Status::Ignored =>
+        {
+            Some(Message::BarPressed(window))
+        }
+        Event::Mouse(mouse::Event::CursorEntered) => Some(Message::PointerEntered),
+        Event::Mouse(mouse::Event::CursorLeft) => Some(Message::PointerLeft),
+        _ => None,
+    }
+}
+
+fn hyprland_events() -> impl eave_hyprland::Stream<Item = eave_hyprland::Update<()>> {
+    eave_hyprland::watch(|| async { Ok(()) })
+}
+
+fn clicked(update: eave_hyprland::Update<()>) -> Option<Message> {
+    match update {
+        eave_hyprland::Update::Event(eave_hyprland::Event::Custom(data))
+            if data == eave_hyprland::CLICK =>
+        {
+            Some(Message::Clicked)
+        }
         _ => None,
     }
 }
@@ -490,6 +526,77 @@ mod tests {
         let (mut bar, _) = Bar::new(registry, config("[[left]]\nwidget = \"a\""));
         let _ = update(&mut bar, Message::ConfigChanged(Err("broken".into())));
         assert_eq!(ids(&bar), [("a", 0)]);
+    }
+
+    struct WithPopover;
+
+    impl Widget for WithPopover {
+        type Config = toml::Table;
+        type Message = ();
+
+        fn new(_: Self::Config) -> (Self, eave_api::Task<()>) {
+            (Self, eave_api::Task::none())
+        }
+
+        fn update(&mut self, _: ()) -> Effect<()> {
+            Effect::none()
+        }
+
+        fn item(&self) -> eave_api::ui::Item<()> {
+            eave_api::ui::Item::new(label("item"))
+        }
+
+        fn popover(&self) -> Option<eave_api::ui::Panel<()>> {
+            Some(eave_api::ui::Panel::new(label("panel")))
+        }
+    }
+
+    /// A bar with one `WithPopover` (id 0) and one `Dummy` (id 1), and 0's popover open and measured.
+    fn open_bar() -> Bar {
+        let mut registry = Registry::new();
+        registry.widget::<WithPopover>("p");
+        registry.widget::<Dummy>("d");
+        let (mut bar, _) = Bar::new(
+            registry,
+            config("[[left]]\nwidget = \"p\"\n[[left]]\nwidget = \"d\""),
+        );
+        let _ = update(
+            &mut bar,
+            Message::Pressed(0, anchor(0.0, 40.0).bounds, 1000.0, None),
+        );
+        let _ = update(&mut bar, Message::PopoverMeasured(Size::new(200.0, 100.0)));
+        assert!(bar.popover_of(0).is_some());
+        bar
+    }
+
+    #[test]
+    fn a_click_outside_our_surfaces_closes_the_popover() {
+        let mut bar = open_bar();
+        // Still on the bar, where the click that opened it happened: ours, not outside.
+        let _ = update(&mut bar, Message::Clicked);
+        assert!(bar.popover.is_some());
+        let _ = update(&mut bar, Message::PointerLeft);
+        let _ = update(&mut bar, Message::Clicked);
+        assert!(bar.popover.is_none());
+    }
+
+    #[test]
+    fn clicks_elsewhere_on_the_bar_close_the_popover() {
+        let mut bar = open_bar();
+        let popover = bar.popover.as_ref().unwrap().window;
+        // Inside the popover: stays.
+        let _ = update(&mut bar, Message::BarPressed(popover));
+        assert!(bar.popover.is_some());
+        // Its own item handling a click inside it: stays.
+        let _ = update(&mut bar, Message::InnerPressed(0));
+        assert!(bar.popover.is_some());
+        // Another item: closes.
+        let _ = update(&mut bar, Message::InnerPressed(1));
+        assert!(bar.popover.is_none());
+
+        let mut bar = open_bar();
+        let _ = update(&mut bar, Message::BarPressed(window::Id::unique()));
+        assert!(bar.popover.is_none());
     }
 
     fn anchor(x: f32, width: f32) -> Anchor {
