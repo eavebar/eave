@@ -16,6 +16,7 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 mod agent;
 
 pub use agent::connect_with;
+pub use zbus;
 
 const SERVICE: &str = "net.connman.iwd";
 const DEVICE: &str = "net.connman.iwd.Device";

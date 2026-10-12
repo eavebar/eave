@@ -869,6 +869,7 @@ name = "eave-network"
 version = "0.1.0"
 dependencies = [
  "eave-api",
+ "eave-iwd",
  "eave-net",
  "serde",
  "toml",
