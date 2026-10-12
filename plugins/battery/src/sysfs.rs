@@ -118,6 +118,14 @@ struct Supply {
     power: Option<f64>,
     time_to_empty: Option<i64>,
     time_to_full: Option<i64>,
+    energy_full_design: Option<f64>,
+    cycles: Option<u32>,
+    /// °C.
+    temperature: Option<f64>,
+    /// The kernel's `health`, like `Good`.
+    health: Option<String>,
+    /// The charge it stops at, in percent, when that's under 100.
+    charge_limit: Option<u8>,
 }
 
 /// Every system battery under `root`, combined into one reading the way UPower's display device
@@ -126,16 +134,40 @@ pub(crate) fn read(root: &Path) -> Reading {
     let Ok(entries) = fs::read_dir(root) else {
         return Reading::default();
     };
-    let mut supplies: Vec<Supply> = entries
-        .filter_map(|entry| supply(&entry.ok()?.path()))
+    let dirs: Vec<_> = entries
+        .filter_map(|entry| Some(entry.ok()?.path()))
         .collect();
+    let mut supplies: Vec<Supply> = dirs.iter().filter_map(|dir| supply(dir)).collect();
     // read_dir order isn't stable; the combination shouldn't depend on it.
     supplies.sort_by(|a, b| {
         a.energy_full
             .partial_cmp(&b.energy_full)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    combine(&supplies)
+    let mut reading = combine(&supplies);
+    if reading.present {
+        reading.ac_online = ac_online(&dirs);
+    }
+    reading
+}
+
+/// Whether a charger is plugged in: a mains or USB supply that's online. `None` when the machine
+/// reports no such supply at all.
+fn ac_online(dirs: &[std::path::PathBuf]) -> Option<bool> {
+    let mut seen = None;
+    for dir in dirs {
+        let text = |name: &str| fs::read_to_string(dir.join(name)).ok();
+        let kind = text("type").unwrap_or_default();
+        if !matches!(kind.trim(), "Mains" | "USB") {
+            continue;
+        }
+        let Some(online) = text("online") else {
+            continue;
+        };
+        let online = online.trim() == "1";
+        seen = Some(seen.unwrap_or(false) || online);
+    }
+    seen
 }
 
 fn supply(dir: &Path) -> Option<Supply> {
@@ -176,6 +208,16 @@ fn supply(dir: &Path) -> Option<Supply> {
         power,
         time_to_empty: seconds("time_to_empty_now"),
         time_to_full: seconds("time_to_full_now"),
+        energy_full_design: energy("energy_full_design", "charge_full_design"),
+        cycles: number("cycle_count")
+            .filter(|cycles| *cycles > 0.0)
+            .map(|cycles| cycles as u32),
+        // Tenths of a degree.
+        temperature: number("temp").map(|tenths| tenths / 10.0),
+        health: text("health").filter(|health| !health.is_empty() && health != "Unknown"),
+        charge_limit: number("charge_control_end_threshold")
+            .filter(|limit| *limit > 0.0 && *limit < 100.0)
+            .map(|limit| limit as u8),
     })
 }
 
@@ -237,6 +279,11 @@ fn combine(supplies: &[Supply]) -> Reading {
         _ => (0, 0),
     };
 
+    // Health is about the battery, so with more than one only a total makes sense: full energy
+    // over design energy, once every battery reports both.
+    let design = sum(|s| s.energy_full_design).filter(|design| *design > 0.0);
+    let one =
+        |field: fn(&Supply) -> Option<String>| rest.is_empty().then(|| field(first)).flatten();
     Reading {
         present: true,
         percentage: percentage.clamp(0.0, 100.0),
@@ -244,6 +291,17 @@ fn combine(supplies: &[Supply]) -> Reading {
         time_to_empty,
         time_to_full,
         energy_rate: power,
+        energy,
+        energy_full,
+        health: energy_full.zip(design).map(|(full, design)| full / design),
+        cycles: supplies.iter().filter_map(|s| s.cycles).max(),
+        temperature: supplies
+            .iter()
+            .filter_map(|s| s.temperature)
+            .reduce(f64::max),
+        condition: one(|s| s.health.clone()),
+        charge_limit: supplies.iter().filter_map(|s| s.charge_limit).min(),
+        ac_online: None,
     }
 }
 
@@ -302,6 +360,62 @@ mod tests {
         assert!((reading.energy_rate - 8.405).abs() < 1e-6);
         // 4.922 Ah × 9 V = 44.3 Wh at 8.4 W.
         assert_eq!(reading.time_to_empty, (44.298 / 8.405 * 3600.0) as i64);
+    }
+
+    #[test]
+    fn reads_health_and_the_charger() {
+        // This machine's macsmc-battery and macsmc-ac, plus a USB-C port with a charger in it.
+        let root = root("health");
+        supply(
+            &root,
+            "macsmc-battery",
+            &[
+                ("type", "Battery"),
+                ("scope", "System"),
+                ("status", "Not charging"),
+                ("health", "Good"),
+                ("cycle_count", "449"),
+                ("energy_full_design", "69255000"),
+                ("energy_full", "57809400"),
+                ("energy_now", "36525600"),
+                ("power_now", "-14013000"),
+                ("temp", "329"),
+                ("charge_control_end_threshold", "80"),
+            ],
+        );
+        supply(&root, "macsmc-ac", &[("type", "Mains"), ("online", "0")]);
+        supply(
+            &root,
+            "tps6598x-source-psy-0-0038",
+            &[("type", "USB"), ("online", "1")],
+        );
+        let reading = read(&root);
+        assert_eq!(reading.cycles, Some(449));
+        assert_eq!(reading.temperature, Some(32.9));
+        assert_eq!(reading.condition.as_deref(), Some("Good"));
+        assert_eq!(reading.charge_limit, Some(80));
+        assert_eq!(reading.ac_online, Some(true));
+        let health = reading.health.unwrap();
+        assert!((health - 57.8094 / 69.255).abs() < 1e-9, "{health}");
+        assert!((reading.energy.unwrap() - 36.5256).abs() < 1e-9);
+    }
+
+    #[test]
+    fn no_charger_supply_means_unknown() {
+        let root = root("no-charger");
+        supply(
+            &root,
+            "BAT0",
+            &[
+                ("type", "Battery"),
+                ("capacity", "50"),
+                ("charge_control_end_threshold", "100"),
+            ],
+        );
+        let reading = read(&root);
+        assert_eq!(reading.ac_online, None);
+        assert_eq!(reading.charge_limit, None, "100% is no limit");
+        assert_eq!(reading.health, None);
     }
 
     #[test]
