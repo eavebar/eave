@@ -4,9 +4,9 @@
 //! little, dragging pulls it along with growing resistance, and letting go springs it back.
 //!
 //! An island can also become a popover. Given one, it morphs into the panel's shape, growing from
-//! where it sits, while its items fade out and the panel's content fades in. It lands like it hit
-//! something: its bottom stays put and it splats into it, flatter and wider, then settles. Closing
-//! runs that backwards, splats against the top, and reports when it's done. The panel lives in an overlay, so it's laid out against the whole
+//! where it sits, while its items fade out and the panel's content fades in. Closing runs that
+//! backwards, lands like it hit the top (it splats into it, flatter and wider, then eases back),
+//! and reports when it's done. The panel lives in an overlay, so it's laid out against the whole
 //! surface, drawn over the other islands, and sees events first.
 //!
 //! It only watches pointer events on the items and never captures them, so the items work exactly
@@ -161,8 +161,6 @@ struct Motion {
     /// narrower or shorter), on top of its edges.
     stretch_x: Spring,
     stretch_y: Spring,
-    /// The edge a popover's splat is against: it stays put, and the other one gives.
-    hit: Edge,
     /// The newest nudge already played, once the island has been laid out.
     seen: Option<u64>,
     /// The previous frame, while something is moving.
@@ -186,7 +184,6 @@ impl Default for Motion {
             bump_at: None,
             stretch_x: Spring::new(0.0, SQUISH),
             stretch_y: Spring::new(0.0, SQUISH),
-            hit: Edge::Top,
             seen: None,
             last: None,
         }
@@ -276,7 +273,7 @@ struct PopoverMotion {
     reported: Option<Rectangle>,
     /// Whether the host has been told the island is back to itself.
     closed: bool,
-    /// Whether this way of the morph, opening or closing, has had its overshoot.
+    /// Whether this close has had its splat.
     squished: bool,
     /// How much the island's items show: they make way for the panel.
     items: Spring,
@@ -460,14 +457,6 @@ impl Motion {
         match (popover.opening(), popover.rect) {
             (Some(panel), _) => {
                 self.edges.aim(panel);
-                // Splats against where its bottom lands.
-                let landing = panel.y + panel.height - self.edges.bottom.value;
-                if !popover.squished && landing < theme::SQUISH_LAND {
-                    popover.squished = true;
-                    self.hit = Edge::Bottom;
-                    self.stretch_y.velocity = -theme::SQUISH_OPEN_FLATTEN;
-                    self.stretch_x.velocity = theme::SQUISH_OPEN_WIDEN;
-                }
                 popover.items.target = 0.0;
                 popover.panel.target = if popover.items.value < REST_DISTANCE
                     && self.edges.progress(island, panel) > 0.5
@@ -483,7 +472,6 @@ impl Motion {
                 let landing = self.edges.bottom.value - (island.y + island.height);
                 if !popover.open && !popover.squished && landing < theme::SQUISH_LAND {
                     popover.squished = true;
-                    self.hit = Edge::Top;
                     self.stretch_y.velocity = -theme::SQUISH_CLOSE_FLATTEN;
                     self.stretch_x.velocity = theme::SQUISH_CLOSE_WIDEN;
                 }
@@ -596,19 +584,17 @@ impl Motion {
     }
 
     /// The shape as it's drawn: its edges, splatting. Stretching along one axis pulls the other
-    /// in. It stretches about its center across; up and down, the edge it hit stays put.
+    /// in. It stretches about its center across, and down from its top, which it hit.
     fn shape(&self) -> Rectangle {
         let edges = self.edges.rect();
         let (stretch_x, stretch_y) = (self.stretch_x.value, self.stretch_y.value);
+        if stretch_x == 0.0 && stretch_y == 0.0 {
+            return edges;
+        }
         let width = (edges.width + stretch_x - theme::SQUISH_BULGE * stretch_y).max(0.0);
         let height = (edges.height + stretch_y - theme::SQUISH_BULGE * stretch_x).max(0.0);
-        // The edge it hit stays put.
-        let top = match self.hit {
-            Edge::Top => edges.y,
-            Edge::Bottom => edges.y + edges.height - height,
-        };
         Rectangle::new(
-            Point::new(edges.center_x() - width / 2.0, top),
+            Point::new(edges.center_x() - width / 2.0, edges.y),
             Size::new(width, height),
         )
     }
@@ -1470,27 +1456,17 @@ mod tests {
     }
 
     #[test]
-    fn a_popover_splats_against_the_edge_it_hits() {
+    fn a_closing_popover_splats_against_the_top() {
         let island = rect(100.0, 120.0);
         let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 200.0));
         let mut motion = settled(island, &[1]);
         let gap = f32::from(theme::EDGE_GAP);
 
-        // Opening: the bottom lands and stays put; the top gives.
+        // Opening: no splat, the shape is its edges all the way.
         popover(&mut motion, true, panel, true);
-        let (mut splat, mut dipped) = (false, false);
         run(&mut motion, Instant::now(), |motion| {
-            let (shape, edges) = (motion.shape(), motion.edges.rect());
-            splat |= shape.height < edges.height - 1.0 && shape.width > edges.width + 1.0;
-            dipped |= shape.y > edges.y + 0.5;
-            assert!(
-                (shape.y + shape.height - (edges.y + edges.height)).abs() < 0.01,
-                "the bottom stays put"
-            );
-            assert!(shape.y > 0.0 && shape.width - edges.width < 2.0 * gap);
+            assert_eq!(motion.shape(), motion.edges.rect());
         });
-        assert!(splat, "flatter and wider");
-        assert!(dipped, "the top comes down into it");
         assert_eq!(motion.shape(), panel);
 
         // Closing: the top stays on the bar; the bottom gives.

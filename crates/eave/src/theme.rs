@@ -52,19 +52,16 @@ pub const MORPH_DAMPING: f32 = 0.9;
 /// fades in on (and back). Critically damped, so a fade never overshoots.
 pub const FADE_STIFFNESS: f32 = 1500.0;
 pub const FADE_DAMPING: f32 = 1.0;
-/// The spring a popover's splat rides on, on top of its morph. Just under critical, so one kick
+/// The spring a closing popover's splat rides on, on top of its morph. Just under critical, so one kick
 /// squashes the shape and it eases back, without a visible bounce.
 pub const SQUISH_STIFFNESS: f32 = 250.0;
 pub const SQUISH_DAMPING: f32 = 0.75;
-/// How hard an opening popover splats against where its bottom lands, in logical pixels per
-/// second: flattened and widened by about 3 px each at the peak, before the bulge below.
-pub const SQUISH_OPEN_FLATTEN: f32 = 115.0;
-pub const SQUISH_OPEN_WIDEN: f32 = 115.0;
-/// How hard a closing popover's island splats against the top: about 2 px flatter and 5 px wider
-/// at the peak, before the bulge. Wider stays inside the `EDGE_GAP` from the screen's sides.
-pub const SQUISH_CLOSE_FLATTEN: f32 = 70.0;
-pub const SQUISH_CLOSE_WIDEN: f32 = 180.0;
-/// How close, in logical pixels, a popover's bottom edge comes to where it's going before it
+/// How hard a closing popover's island splats against the top, in logical pixels per second:
+/// about 1.5 px flatter and 3.5 px wider at the peak, before the bulge. Wider stays inside the
+/// `EDGE_GAP` from the screen's sides.
+pub const SQUISH_CLOSE_FLATTEN: f32 = 50.0;
+pub const SQUISH_CLOSE_WIDEN: f32 = 125.0;
+/// How close, in logical pixels, a closing popover's bottom edge comes to its island's before it
 /// splats. The splat peaks about four frames after, as the shape arrives.
 pub const SQUISH_LAND: f32 = 5.0;
 /// How much stretching along one axis pulls the other in, per pixel stretched.

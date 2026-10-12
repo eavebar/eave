@@ -701,24 +701,28 @@ There's still one hover path for everything. `Slot` follows the pointer, and not
 
 ---
 
-## D-40: Popovers splat against the edge they hit
+## D-40: A closing popover splats against the top
 
 **Status:** accepted (2026-10-12)
 
-**What:** a popover's morph (D-28) lands like it hit something, so it feels soft instead of a rectangle being resized. Opening, its bottom lands and stays put, and the shape splats into it: flatter and wider, the top dipping a few pixels, then it settles. Closing, the island hits the top: the top stays on the bar, and the shape splats up into it, flatter and wider, then settles. The edges, the fades and their timing, `progress` and `PopoverClosed` are untouched: the splat only changes the drawn shape (`Motion::shape`).
-- Two springs, `stretch_x` and `stretch_y`, in pixels added to the width and height. They rest at 0 and get one velocity kick each way of the morph, like a nudge (D-32): flatter (`stretch_y` down) and wider (`stretch_x` up). Their feel (`SQUISH_STIFFNESS` 250, `SQUISH_DAMPING` 0.75) is just under critical, so one kick squashes and it eases back with a rebound of about 3 %, too little to see. *(It was 400 / 0.35 at first, which swung back visibly. The user wanted it less springy and smoother. The kicks went up ~15 % to keep the splat's size under the heavier damping.)*
-- Both kick when the shape's bottom edge is within `SQUISH_LAND` (5 px) of where it's going, so the splat peaks about four frames later, as the shape arrives. Opening: `SQUISH_OPEN_FLATTEN` and `SQUISH_OPEN_WIDEN` (both 115 px/s, about 5 px flatter and wider with the bulge). Closing: `SQUISH_CLOSE_FLATTEN` 70 and `SQUISH_CLOSE_WIDEN` 180 (about 4–5 px flatter and 6 px wider on a 32 px island).
-- **The edge it hit stays put** (`Motion::hit`): the bottom when opening, the top when closing. All the change in height goes to the other edge.
-- The kicks are in pixels, not a share of the size: the surface only has `EDGE_GAP` beside the islands, so a wider splat would be cut off.
+**What:** when a popover closes (D-28), the island lands like it hit the top: the top stays on the bar, and the shape splats up into it, a little flatter and wider, then eases back. Opening has no splat: the morph alone. The edges, the fades and their timing, `progress` and `PopoverClosed` are untouched: the splat only changes the drawn shape (`Motion::shape`).
+- Two springs, `stretch_x` and `stretch_y`, in pixels added to the width and height. They rest at 0 and get one velocity kick per close, like a nudge (D-32): flatter (`stretch_y` down) and wider (`stretch_x` up). Their feel (`SQUISH_STIFFNESS` 250, `SQUISH_DAMPING` 0.75) is just under critical, so it squashes and eases back with a rebound of about 3 %, too little to see.
+- The kick comes when the shape's bottom edge is within `SQUISH_LAND` (5 px) of the island's, so the splat peaks about four frames later, as the shape arrives. `SQUISH_CLOSE_FLATTEN` 50 and `SQUISH_CLOSE_WIDEN` 125 px/s: about 3 px flatter and 4 px wider on a 32 px island, bulge included.
+- The top stays put; all the change in height goes to the bottom. The kicks are in pixels, not a share of the size: the surface only has `EDGE_GAP` beside the islands, so a wider splat would be cut off.
 - Stretching along one axis pulls the other in by `SQUISH_BULGE` (0.5) per pixel. The shape stretches about its center across.
-- *Superseded, same branch:* first, opening squeezed in from the sides and swung wider, and closing landed flattened. Then it overshot instead: opening went too tall, closing landed too wide. At first that was with the top pinned, which looked nailed to the bar. Then the top took 40 % of every change in height (`SQUISH_TOP`). The user wanted it to feel like it *hit* an edge: the bottom when opening, the top when closing. Overshooting past an edge reads as bouncing through it; splatting against it, with that edge still, reads as hitting it.
+- *Superseded, same branch, in order:*
+  1. Opening squeezed in from the sides and swung wider; closing landed flattened.
+  2. An overshoot instead: opening too tall, closing too wide, first with the top pinned (it looked nailed to the bar), then with the top taking 40 % of every change in height (`SQUISH_TOP`).
+  3. A splat against the edge each way hit: the bottom when opening (top dipping), the top when closing. That was on a springy spring (400 / 0.35) that swung back visibly. The user wanted it smoother, so the spring went near critical. Then they dropped the opening splat entirely and asked for a smaller closing one (it was 70 / 180 px/s).
+
+  The rule that came out of it: overshooting past an edge reads as bouncing through it. Splatting against an edge that stays still reads as hitting it. Only closing, the island returning to the bar, has something to hit.
 - The island's items ride along and squish with it. `Motion::follow` moves each one to where the stretch takes its center, and the island sets how much the shape is stretched (`Motion::squish`, width and height ratios) around drawing its items. Each thing the host draws squishes itself about its own center, one axis at a time:
   - **Why per leaf:** the renderer only scales the same both ways. iced_tiny_skia reads one `scale_factor()` from a `Transformation`, and draws text at a font size. So nothing outside an item can stretch it along one axis. A canvas frame can (`scale_nonuniform`, as the battery's gulp already did), and an image can be drawn into any rectangle.
   - **Symbol icons** (`icon.rs`) squish their canvas frame. **App icons** are drawn by a small host widget (`apps.rs`, `Picture`) into stretched bounds, not snapped to pixels while squished. **Labels** (`label.rs`) and **counters** are plain text at rest. While squished they draw their text with canvas `fill_text`, which both renderers turn into glyph outlines under a non-uniform transform. Outlines aren't hinted, so text is a touch softer for the moment a squish lasts.
   - **How the squish gets there** (`squish.rs`): a thread-local the island sets around drawing its items and puts back after. It changes every frame, only while drawing, and has to reach leaves inside alternates, buttons and gulps. Widgets have no way to hand something down the tree per draw: operations run at layout time. Drawing is on the one UI thread. Panels aren't squished: their stretch is 1–2 %.
   - *Superseded:* items first scaled uniformly with the shape's height (one `Transformation` per item). Squishing both axes at once looked wrong to the user: an icon shrank instead of squishing.
   - **Measured** (Asahi, release, the user's config, 10 s after start, no popover opened): RSS 15.7 MB on `main`, 15.8–15.9 MB here. Idle CPU the same (11 ticks in 20 s each). Binary 8,285,248 → 8,350,784 bytes (+64 KB, the canvas text path). No new dependencies. At rest every leaf takes the old path. *Gotcha:* the first run or two after a fresh build sometimes sat at 23–33 MB, on the commit before this change too, so compare several runs.
-- Turning around mid-morph splats again. A popover taken away without closing doesn't.
+- Closing again after reopening mid-close splats again. A popover taken away without closing doesn't.
 - Hit testing still uses the edges: the difference is a few pixels for a fraction of a second.
 
 **Alternatives:**
