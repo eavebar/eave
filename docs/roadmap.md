@@ -5,6 +5,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 ## Done
 
 - [x] **0. Skeleton.** Layer-shell surface anchored top, 32px exclusive zone, no keyboard focus. Three-part layout (left / center / right). Clock and date on a 1 s tick. CPU renderer by default, `gpu` feature optional. Baseline measured.
+- [x] **0.6 Reload and restart.** `config.toml` hot reload through inotify, keeping unchanged widgets' state. `eave-build --restart`. systemd user units for the bar and for rebuilding when `plugins.toml` changes ([D-16–D-18](decisions.md), [running.md](running.md)).
 - [x] **0.5 Plugin foundation.** Workspace split into `eave-api` (SDK), `eave` (host) and `eave-build`. Closed UI vocabulary, type-erased widget registry, `config.toml` zones (empty bar without it), the clock rewritten as a plugin with a calendar popover, host-owned popover layer surfaces in daemon mode, and third-party plugins compiled in from git ([D-11–D-15](decisions.md)).
 
 ## Next
@@ -30,7 +31,6 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 
 ## Later
 
-- [ ] Hot reload of `config.toml` (the file itself exists since 0.5).
 - [ ] One bar per monitor, following monitor hotplug. The host already runs as an `iced_layershell::daemon` (0.5), so this needs `StartMode::AllScreens` plus per-output state.
 - [ ] Notch-aware layout on Asahi when `apple_dcp.show_notch=1` ([platform.md](platform.md#asahi-specifics)).
 - [ ] `PKGBUILD` for Asahi and CachyOS.

@@ -36,4 +36,6 @@ Everything must build from source on both aarch64 and x86_64. In practice:
   - `.socket.sock`: request/response (same as `hyprctl -j ...`)
   - `.socket2.sock`: newline-separated event stream, `EVENT>>DATA`
 
+- **`hyprctl`**, only from `eave-build --restart`, to relaunch a bar started from the Hyprland config. Hyprland 0.56 moved to Lua configs, where `hyprctl dispatch <args>` is evaluated as Lua (`hl.dispatch(<args>)`), so we try `hyprctl eval 'hl.exec_cmd(…)'` first and fall back to `dispatch exec` on older releases ([D-18](decisions.md)).
+
 Hyprland's IPC changes between releases more often than freedesktop APIs do. Keep parsing tolerant: ignore unknown events, and don't crash on extra fields.
