@@ -1,0 +1,21 @@
+[package]
+name = "eave"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iced = { version = "0.14", default-features = false, features = ["tiny-skia", "wayland", "tokio", "crisp"] }
+iced_layershell = "0.19"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# iced_exdevtools 0.19.1 fails to build against winit-core beta.3 (new Key variant); drop once fixed upstream.
+winit-core = "=0.31.0-beta.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[features]
+# GPU renderer (wgpu); tiny-skia stays as fallback. Default is CPU-only, which is lighter for a bar.
+gpu = ["iced/wgpu"]
