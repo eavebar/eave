@@ -148,7 +148,7 @@ async fn snapshot() -> std::io::Result<eave_hyprland::types::Window> {
 }
 ```
 
-`eave_hyprland::dispatch("workspace 3")` and `request("…")` send commands. Run them in a `Task`.
+`eave_hyprland::dispatch("hl.dsp.focus({ workspace = 3 })", "workspace 3")` runs a dispatcher. Give it in both the Lua syntax of Hyprland 0.56+ and the older one, and it uses whichever this Hyprland speaks. `request("…")` sends any other command. Run them in a `Task`.
 
 ### The rules
 

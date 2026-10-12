@@ -73,10 +73,10 @@ impl Widget for Workspaces {
                 self.active = Some(snapshot.active);
             }
             Message::Hyprland(Update::Event(event)) => self.apply(event),
-            Message::Go(id) => return dispatch(format!("workspace {id}")),
+            Message::Go(id) => return focus(id.to_string()),
             // Relative to the monitor, over the workspaces it has open.
-            Message::Previous => return dispatch("workspace m-1".into()),
-            Message::Next => return dispatch("workspace m+1".into()),
+            Message::Previous => return focus("\"m-1\"".into()),
+            Message::Next => return focus("\"m+1\"".into()),
         }
         self.refresh();
         Effect::none()
@@ -162,9 +162,12 @@ async fn snapshot() -> std::io::Result<Snapshot> {
     })
 }
 
-fn dispatch(command: String) -> Effect<Message> {
+/// Goes to `workspace`, a Lua value: a number, or a quoted relative target like `"m+1"`.
+fn focus(workspace: String) -> Effect<Message> {
     Task::future(async move {
-        if let Err(error) = eave_hyprland::dispatch(&command).await {
+        let lua = format!("hl.dsp.focus({{ workspace = {workspace} }})");
+        let legacy = format!("workspace {}", workspace.trim_matches('"'));
+        if let Err(error) = eave_hyprland::dispatch(&lua, &legacy).await {
             eprintln!("eave-workspaces: {error}");
         }
     })

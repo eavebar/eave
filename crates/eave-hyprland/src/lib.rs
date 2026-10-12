@@ -23,6 +23,7 @@ pub mod types;
 use std::io;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use futures_util::stream;
@@ -101,12 +102,36 @@ pub async fn query<T: DeserializeOwned>(what: &str) -> io::Result<T> {
     serde_json::from_str(&reply).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
-/// Runs a dispatcher, like `dispatch("workspace 3")`.
-pub async fn dispatch(command: &str) -> io::Result<()> {
-    let reply = request(&format!("dispatch {command}")).await?;
-    match reply.trim() {
-        "ok" => Ok(()),
-        error => Err(io::Error::other(format!("dispatch {command}: {error}"))),
+/// Runs a dispatcher, given in both syntaxes: Lua for Hyprland 0.56 and later, like
+/// `hl.dsp.focus({ workspace = 3 })`, and the older one, like `workspace 3`. The first call finds
+/// out which one this Hyprland speaks, and later calls use only that one.
+pub async fn dispatch(lua: &str, legacy: &str) -> io::Result<()> {
+    const UNKNOWN: u8 = 0;
+    const LUA: u8 = 1;
+    const LEGACY: u8 = 2;
+    static SYNTAX: AtomicU8 = AtomicU8::new(UNKNOWN);
+
+    let run = async |command: &str| {
+        let reply = request(&format!("dispatch {command}")).await?;
+        match reply.trim() {
+            "ok" => Ok(()),
+            error => Err(io::Error::other(format!("dispatch {command}: {error}"))),
+        }
+    };
+    match SYNTAX.load(Ordering::Relaxed) {
+        LUA => run(lua).await,
+        LEGACY => run(legacy).await,
+        _ => match run(lua).await {
+            Ok(()) => {
+                SYNTAX.store(LUA, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(_) => {
+                run(legacy).await?;
+                SYNTAX.store(LEGACY, Ordering::Relaxed);
+                Ok(())
+            }
+        },
     }
 }
 
