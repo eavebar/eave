@@ -607,6 +607,8 @@ The volume item is now `alternate([icon, counter(volume, 0..=max, "%")], showing
 
 **Cost:** a bool compare per pointer event over the bar, inside the widget tree. Entering or leaving an item redraws for one fade (240 ms). Nothing reaches `update` in the app.
 
+**Revised by [D-38](#d-38-expand-is-a-growing-alternate-secondary-clicks-on-buttons)** (2026-10-12): the slot still is the only thing following the pointer, but `SetHovered` now hands alternates the pointer and the item's bounds, and each alternate decides whether it's hovered. Ordinary ones still go by the whole item, as above. Growing ones (`expand`) go by their own width, and wait for the pointer to rest.
+
 ## D-36: Popovers take the keyboard while open
 
 **Status:** accepted (2026-10-12)
@@ -652,15 +654,23 @@ The workspaces widget is its first user. Each workspace shows its name and the i
 
 ---
 
-## D-38: `expand` and secondary clicks on buttons
+## D-38: `expand` is a growing alternate; secondary clicks on buttons
 
 **Status:** accepted (2026-10-12)
 
-**What:** `ui::expand(collapsed, expanded)` shows `collapsed`, or `expanded` once the pointer has rested over it for `EXPAND_DELAY` (200 ms). It collapses as soon as the pointer leaves. It's only as big as what it shows, so the item grows and the island springs to its new width (D-27). It counts as hovered across its whole width, from the top of the bar to its bottom edge, so a pointer pushed against the screen edge still hovers it. `crates/eave/src/expand.rs` lays out only the child it shows. When hover changes what it shows, it invalidates the layout, and it waits for the delay with `request_redraw_at`, never polling.
+**What:** `ui::expand(collapsed, expanded)` is an alternate (D-33) with `grows: true`. `Kind::Alternate` gains that field, and `expand` builds `alternate([collapsed, expanded], 0).on_hover(1)` with it set. So it fades and slides exactly like `hover` on volume, battery and clock, and turns around mid-fade the same way. A growing alternate differs only where its changing size calls for it:
+- **Size:** it's as wide as the option on screen, not the widest one. The height stays the tallest, so nothing jumps up or down. The width changes at the fade's midpoint, when the new option comes on screen. The island springs to it (D-27), so the old option fades out at its own size and the new one fades in as the island grows or shrinks.
+- **Hover area:** it's hovered by the pointer over its own width, at any height within the item, not by the whole item. The full height still counts, so a pointer pushed against the screen edge hovers it, and each workspace in a row has its own hover.
+- **Rest:** it changes only once the pointer has rested on it for `HOVER_REST` (200 ms), and changes back as soon as the pointer leaves. It waits with `request_redraw_at`, never polling.
+
+There's still one hover path for everything. `Slot` follows the pointer, and nothing else does. `SetHovered` no longer carries a verdict. It carries the item's bounds, the pointer now and before, and the time, and each alternate decides for itself: an ordinary one by the item, a growing one by its own width. The slide direction (`toward`) moved from the slot into the alternate, so it's worked out from whichever region was crossed. The slot runs `SetHovered` when the pointer comes onto or leaves the item, as before. It also runs it on moves within the item, but only when the item has a growing alternate, which it learns through a `HasGrowing` query once per view. It asks for a frame only if an alternate reports a change.
 
 `button(...).on_secondary(message)` sends a message on a right click on that button. The kit wraps the button in a `mouse_area`. A popover opens on the bar where its item was last pressed. A press on an inner button is captured before `Slot` sees it, so `Slot` now sends `Touched(window, id)` before its content sees any press on the item. That lets a right click on a workspace open the popover even if the item was never left-clicked.
 
-**Why not `alternate`/`hover` (D-33, D-35):** an alternate keeps room for its biggest option, so the item doesn't change size, and it reacts to the whole item. Here the extra room is the point, and each workspace in the row needs its own hover.
+**Why the rest:** growing shifts everything after it. Without the rest, sweeping the pointer across the workspaces opens each in turn, and the one you're heading for keeps moving away. Only growing alternates wait, because only they move their neighbors. The volume percent still shows at once.
 
-**Why the delay:** expanding shifts everything after it. Without a delay, sweeping the pointer across the workspaces opens each in turn, and the one you're heading for keeps moving away.
+**Superseded:** the first version of this decision, on the same branch. `expand` was its own node and its own host widget (`expand.rs`). It tracked hover itself, by checking the pointer against its own bounds, and swapped its two views instantly. That made two hover paths and two motions, so an expanding workspace moved differently from every other hover in the bar. Any plugin choosing between `hover` and `expand` would have got different behavior. The rule is one behavior for every plugin: one hover path, through the slot, and one widget that changes what it shows, the alternate. The original text:
 
+> `ui::expand(collapsed, expanded)` shows `collapsed`, or `expanded` once the pointer has rested over it for `EXPAND_DELAY` (200 ms). It collapses as soon as the pointer leaves. It's only as big as what it shows, so the item grows and the island springs to its new width (D-27). It counts as hovered across its whole width, from the top of the bar to its bottom edge, so a pointer pushed against the screen edge still hovers it. `crates/eave/src/expand.rs` lays out only the child it shows. When hover changes what it shows, it invalidates the layout, and it waits for the delay with `request_redraw_at`, never polling.
+>
+> **Why not `alternate`/`hover` (D-33, D-35):** an alternate keeps room for its biggest option, so the item doesn't change size, and it reacts to the whole item. Here the extra room is the point, and each workspace in the row needs its own hover.

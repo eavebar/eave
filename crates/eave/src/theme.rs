@@ -85,8 +85,8 @@ pub const ALTERNATE_FADE: Duration = Duration::from_millis(240);
 /// sideways, or up and down (less, to stay inside the island).
 pub const ALTERNATE_SLIDE_X: f32 = 6.0;
 pub const ALTERNATE_SLIDE_Y: f32 = 4.0;
-/// How long the pointer rests over an expand before it expands.
-pub const EXPAND_DELAY: Duration = Duration::from_millis(200);
+/// How long the pointer rests on a growing alternate before it changes.
+pub const HOVER_REST: Duration = Duration::from_millis(200);
 /// How long a counter takes to count to a new number, through every one in between.
 pub const COUNTER_COUNT: Duration = Duration::from_millis(320);
 /// How long a switcher's mark takes to reach a newly current option.

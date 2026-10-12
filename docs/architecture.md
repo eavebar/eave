@@ -95,11 +95,11 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/kit.rs               ui nodes → iced elements, styled
   src/icon.rs              status icons (volume, Wi-Fi, wired, battery) as vector paths
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
-  src/expand.rs            expand: the collapsed or expanded child, after the pointer rests on it
   src/theme.rs             every color, size and font
   src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay
   src/squircle.rs          the squircle path
-  src/slot.rs              item wrapper: clicks and scroll steps
+  src/slot.rs              item wrapper: clicks, scroll steps, and the pointer for alternates
+  src/alternate.rs         alternate: one option at a time with fades; hover, and growing (expand)
   src/switcher.rs          switcher: row of options with a sliding, frame-paced mark
 crates/eave-build/         builds the widgets config.toml uses, installs and restarts; `update`, `init`
 crates/eave-dbus/          service: shared system bus, snapshot-on-PropertiesChanged watcher

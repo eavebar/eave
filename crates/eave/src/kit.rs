@@ -9,7 +9,6 @@ use iced::{Background, Border, Element, Length, Theme, alignment};
 use crate::alternate::Alternate;
 use crate::apps::{AppIcon, Icons};
 use crate::counter::Counter;
-use crate::expand::Expand;
 use crate::icon;
 use crate::switcher::Switcher;
 use crate::theme;
@@ -28,10 +27,6 @@ pub fn app_ids<M>(node: Node<M>, out: &mut Vec<String>) {
         Kind::Alternate { options, .. } => all(options),
         Kind::Row(children) | Kind::Column(children) => all(children),
         Kind::Grid { cells, .. } => all(cells),
-        Kind::Expand {
-            collapsed,
-            expanded,
-        } => all(vec![*collapsed, *expanded]),
         Kind::Button { content, .. } => all(vec![*content]),
         Kind::Switcher { options, .. } => all(options.into_iter().map(|(node, _)| node).collect()),
         Kind::Label { .. }
@@ -78,15 +73,8 @@ fn render<'a>(node: Node<AnyMessage>, inherited: Tone, icons: &Icons) -> Element
             options,
             current,
             hovered,
-        } => Alternate::new(all(options).collect(), current, hovered).into(),
-        Kind::Expand {
-            collapsed,
-            expanded,
-        } => Expand::new(
-            render(*collapsed, inherited, icons),
-            render(*expanded, inherited, icons),
-        )
-        .into(),
+            grows,
+        } => Alternate::new(all(options).collect(), current, hovered, grows).into(),
         Kind::Row(children) => row(all(children))
             .spacing(theme::SPACING)
             .align_y(alignment::Vertical::Center)

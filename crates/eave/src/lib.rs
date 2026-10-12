@@ -5,7 +5,6 @@ mod app;
 mod apps;
 mod config;
 mod counter;
-mod expand;
 mod icon;
 mod island;
 mod kit;

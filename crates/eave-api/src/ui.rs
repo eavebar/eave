@@ -67,10 +67,8 @@ pub enum Kind<M> {
         current: usize,
         /// Shown instead of `current` while the pointer is over the item.
         hovered: Option<usize>,
-    },
-    Expand {
-        collapsed: Box<Node<M>>,
-        expanded: Box<Node<M>>,
+        /// As wide as the option on screen, hovered by its own width, after a rest ([`expand`]).
+        grows: bool,
     },
     Row(Vec<Node<M>>),
     Column(Vec<Node<M>>),
@@ -142,6 +140,7 @@ pub fn alternate<M>(options: impl IntoIterator<Item = Node<M>>, current: usize) 
         options: options.into_iter().collect(),
         current,
         hovered: None,
+        grows: false,
     })
 }
 
@@ -151,13 +150,16 @@ pub fn hover<M>(normal: Node<M>, hovered: Node<M>) -> Node<M> {
     alternate([normal, hovered], 0).on_hover(1)
 }
 
-/// `collapsed`, or `expanded` while the pointer is over this node. Unlike [`hover`], it's only as
-/// big as what it shows, so the item grows to make room and the host springs the island along: a
+/// `collapsed`, or `expanded` once the pointer rests on this node, fading between them like a
+/// [`hover`]. Unlike `hover`, it's only as big as what it shows, so the item grows to make room
+/// and the island springs along, and it reacts to the pointer over it, not the whole item: a
 /// workspace that shows every window when you point at it.
 pub fn expand<M>(collapsed: Node<M>, expanded: Node<M>) -> Node<M> {
-    Node(Kind::Expand {
-        collapsed: Box::new(collapsed),
-        expanded: Box::new(expanded),
+    Node(Kind::Alternate {
+        options: vec![collapsed, expanded],
+        current: 0,
+        hovered: Some(1),
+        grows: true,
     })
 }
 
@@ -254,13 +256,6 @@ impl<M> Node<M> {
                 children.iter_mut().for_each(|child| child.set_tone(new));
             }
             Kind::Button { content, .. } => content.set_tone(new),
-            Kind::Expand {
-                collapsed,
-                expanded,
-            } => {
-                collapsed.set_tone(new);
-                expanded.set_tone(new);
-            }
             Kind::Switcher { options, .. } => {
                 options
                     .iter_mut()
@@ -293,17 +288,12 @@ impl<M> Node<M> {
                 options,
                 current,
                 hovered,
+                grows,
             } => Kind::Alternate {
                 options: map_all(options),
                 current,
                 hovered,
-            },
-            Kind::Expand {
-                collapsed,
-                expanded,
-            } => Kind::Expand {
-                collapsed: Box::new(collapsed.map(f)),
-                expanded: Box::new(expanded.map(f)),
+                grows,
             },
             Kind::Row(children) => Kind::Row(map_all(children)),
             Kind::Column(children) => Kind::Column(map_all(children)),
