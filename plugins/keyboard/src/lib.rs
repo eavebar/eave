@@ -1,9 +1,9 @@
-//! The active keyboard layout. Click to switch to the next one. Hidden when only one layout is
-//! configured, since there's nothing to switch.
+//! The active keyboard layout. Click to switch to the next one, right click for the list of
+//! layouts. Hidden when only one layout is configured, since there's nothing to switch.
 
 use std::collections::BTreeMap;
 
-use eave_api::ui::{self, Item};
+use eave_api::ui::{self, Icon, Item, Panel};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
 use eave_hyprland::types::{Devices, Keyboard as Device};
 use eave_hyprland::{Event, Update};
@@ -27,6 +27,20 @@ pub struct Keyboard {
     switchable: bool,
     /// Already aliased.
     layout: String,
+    /// The configured layouts, in Hyprland's order.
+    layouts: Vec<Layout>,
+    /// Which of `layouts` is active.
+    active: Option<usize>,
+    /// Long names by layout code and variant, read from the xkb rules once the list is first
+    /// opened.
+    names: Option<BTreeMap<(String, String), String>>,
+}
+
+/// One configured layout: its code (`us`) and variant (`intl`, or empty).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Layout {
+    code: String,
+    variant: String,
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +48,11 @@ pub enum Message {
     Hyprland(Update<Option<Device>>),
     Refreshed(Option<Device>),
     Next,
+    /// Opens the list of layouts.
+    List,
+    Opened,
+    Names(BTreeMap<(String, String), String>),
+    Switch(usize),
 }
 
 impl Widget for Keyboard {
@@ -46,6 +65,9 @@ impl Widget for Keyboard {
             device: None,
             switchable: false,
             layout: String::new(),
+            layouts: Vec::new(),
+            active: None,
+            names: None,
         };
         (keyboard, Task::none())
     }
@@ -55,6 +77,8 @@ impl Widget for Keyboard {
             Message::Hyprland(Update::Snapshot(device)) | Message::Refreshed(device) => {
                 self.device = device.as_ref().map(|d| d.name.clone());
                 self.switchable = device.as_ref().is_some_and(|d| d.layout.contains(','));
+                self.layouts = device.as_ref().map(layouts).unwrap_or_default();
+                self.active = device.as_ref().and_then(|d| d.active_layout_index);
                 self.set_layout(device.map(|d| d.active_keymap).unwrap_or_default());
             }
             Message::Hyprland(Update::Event(Event::ActiveLayout { keyboard, layout })) => {
@@ -64,30 +88,28 @@ impl Widget for Keyboard {
                     .is_none_or(|device| *device == keyboard)
                 {
                     self.set_layout(layout);
+                    // The event names the layout but not its place in the list.
+                    return refresh();
                 }
             }
             // The configured layouts may have changed.
-            Message::Hyprland(Update::Event(Event::ConfigReloaded)) => {
+            Message::Hyprland(Update::Event(Event::ConfigReloaded)) => return refresh(),
+            Message::Hyprland(Update::Event(_)) => {}
+            Message::Next => return switch("next".into()).into(),
+            Message::List => return Effect::none().open_popover(),
+            Message::Opened if self.names.is_none() => {
                 return Task::future(async {
-                    snapshot().await.unwrap_or_else(|error| {
-                        eprintln!("eave-keyboard: {error}");
-                        None
-                    })
+                    std::fs::read_to_string(XKB_RULES)
+                        .map(|rules| names(&rules))
+                        .unwrap_or_default()
                 })
-                .map(Message::Refreshed)
+                .map(Message::Names)
                 .into();
             }
-            Message::Hyprland(Update::Event(_)) => {}
-            Message::Next => {
-                return Task::future(async {
-                    match eave_hyprland::request("switchxkblayout current next").await {
-                        Ok(reply) if reply.trim() == "ok" => {}
-                        Ok(reply) => eprintln!("eave-keyboard: switchxkblayout: {}", reply.trim()),
-                        Err(error) => eprintln!("eave-keyboard: {error}"),
-                    }
-                })
-                .discard()
-                .into();
+            Message::Opened => {}
+            Message::Names(names) => self.names = Some(names),
+            Message::Switch(index) => {
+                return Effect::task(switch(index.to_string())).close_popover();
             }
         }
         Effect::none()
@@ -101,8 +123,112 @@ impl Widget for Keyboard {
         if !self.switchable || self.layout.is_empty() {
             return Item::hidden();
         }
-        Item::new(ui::label(self.layout.clone())).on_press(Message::Next)
+        Item::new(ui::label(self.layout.clone()))
+            .on_press(Message::Next)
+            .on_secondary(Message::List)
     }
+
+    fn popover(&self) -> Option<Panel<Message>> {
+        if !self.switchable {
+            return None;
+        }
+        let rows = self.layouts.iter().enumerate().map(|(index, layout)| {
+            let active = self.active == Some(index);
+            let key = (layout.code.clone(), layout.variant.clone());
+            let name = self
+                .names
+                .as_ref()
+                .and_then(|names| names.get(&key))
+                .cloned()
+                .unwrap_or_else(|| layout.code.clone());
+            let code = if layout.variant.is_empty() {
+                layout.code.clone()
+            } else {
+                format!("{} · {}", layout.code, layout.variant)
+            };
+            let row = ui::list_item(name)
+                .leading(ui::badge(layout.code.to_uppercase()))
+                .subtitle(code)
+                .selected(active)
+                .on_press(Message::Switch(index));
+            if active {
+                row.trailing(ui::icon(Icon::Check))
+            } else {
+                row
+            }
+        });
+        let content = ui::column([ui::header("Keyboard"), ui::list(rows)]);
+        Some(Panel::new(content).on_open(Message::Opened))
+    }
+}
+
+/// Where xkb lists every layout and variant with its long name.
+const XKB_RULES: &str = "/usr/share/X11/xkb/rules/evdev.lst";
+
+/// Long names by layout code and variant (empty for a layout's default), from xkb's
+/// `evdev.lst`: `  us              English (US)` under `! layout`, and
+/// `  intl            us: English (US, intl., with dead keys)` under `! variant`.
+fn names(rules: &str) -> BTreeMap<(String, String), String> {
+    let mut names = BTreeMap::new();
+    let mut section = "";
+    for line in rules.lines() {
+        if let Some(name) = line.strip_prefix("! ") {
+            section = name.trim();
+            continue;
+        }
+        let Some((key, rest)) = line.trim().split_once(char::is_whitespace) else {
+            continue;
+        };
+        let rest = rest.trim();
+        match section {
+            "layout" => {
+                names.insert((key.to_string(), String::new()), rest.to_string());
+            }
+            "variant" => {
+                if let Some((code, name)) = rest.split_once(": ") {
+                    names.insert((code.to_string(), key.to_string()), name.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+/// The layouts a keyboard has, from its comma-separated layouts and variants.
+fn layouts(device: &Device) -> Vec<Layout> {
+    let mut variants = device.variant.split(',');
+    device
+        .layout
+        .split(',')
+        .map(|code| Layout {
+            code: code.trim().to_string(),
+            variant: variants.next().unwrap_or("").trim().to_string(),
+        })
+        .collect()
+}
+
+fn refresh() -> Effect<Message> {
+    Task::future(async {
+        snapshot().await.unwrap_or_else(|error| {
+            eprintln!("eave-keyboard: {error}");
+            None
+        })
+    })
+    .map(Message::Refreshed)
+    .into()
+}
+
+/// Switches the main keyboard to `to`: `next`, or a layout's index.
+fn switch(to: String) -> Task<Message> {
+    Task::future(async move {
+        match eave_hyprland::request(&format!("switchxkblayout current {to}")).await {
+            Ok(reply) if reply.trim() == "ok" => {}
+            Ok(reply) => eprintln!("eave-keyboard: switchxkblayout: {}", reply.trim()),
+            Err(error) => eprintln!("eave-keyboard: {error}"),
+        }
+    })
+    .discard()
 }
 
 impl Keyboard {
@@ -126,7 +252,34 @@ mod tests {
             layout: layouts.into(),
             active_keymap: active.into(),
             main: true,
+            ..Device::default()
         })
+    }
+
+    #[test]
+    fn reads_long_names_from_the_xkb_rules() {
+        let rules = "! model\n  pc105  Generic 105-key PC\n! layout\n  us              English (US)\n  it              Italian\n! variant\n  intl            us: English (US, intl., with dead keys)\n! option\n  grp             Switching";
+        let names = names(rules);
+        assert_eq!(names[&("us".into(), String::new())], "English (US)");
+        assert_eq!(names[&("it".into(), String::new())], "Italian");
+        assert_eq!(
+            names[&("us".into(), "intl".into())],
+            "English (US, intl., with dead keys)"
+        );
+        assert_eq!(names.len(), 3);
+    }
+
+    #[test]
+    fn pairs_layouts_with_their_variants() {
+        let device = Device {
+            layout: "us,it,us".into(),
+            variant: ",,intl".into(),
+            ..Device::default()
+        };
+        let layouts = layouts(&device);
+        assert_eq!(layouts.len(), 3);
+        assert_eq!(layouts[2].variant, "intl");
+        assert_eq!(layouts[1].variant, "");
     }
 
     #[test]

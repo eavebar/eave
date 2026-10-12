@@ -54,8 +54,12 @@ pub struct Keyboard {
     pub name: String,
     /// Configured layouts, comma-separated, like `us,it`.
     pub layout: String,
+    /// Each layout's variant, comma-separated in the same order, empty for the default one.
+    pub variant: String,
     /// The active layout's long name, like `English (US)`.
     pub active_keymap: String,
+    /// The active layout's place in `layout`.
+    pub active_layout_index: Option<usize>,
     /// The keyboard that `switchxkblayout current` acts on.
     pub main: bool,
 }
