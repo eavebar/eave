@@ -96,7 +96,7 @@ pub const BATTERY_GULPS: u32 = 3;
 pub const BATTERY_GULP_EVERY: Duration = Duration::from_secs(8);
 /// How long each of a [`eave_api::ui::gulp`]'s gulps takes, and how much it grows at the height
 /// of one. Slow and steady, unlike the battery icon's quick bursts.
-pub const GULP: Duration = Duration::from_millis(1500);
+pub const GULP: Duration = Duration::from_millis(700);
 pub const GULP_SWELL: f32 = 0.08;
 /// How often the charging battery is redrawn: 30 frames a second, cheaper than the compositor's
 /// rate and smooth enough for motion this small.
