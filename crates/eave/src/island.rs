@@ -601,6 +601,24 @@ impl Motion {
         )
     }
 
+    /// Where the overshoot takes something centered at `at`: its center goes where the stretch
+    /// takes that point of the edges, and it scales with the shape's height. Iced only scales both
+    /// ways at once, so it can't be squished along one axis.
+    fn follow(&self, at: Point) -> Transformation {
+        let (edges, shape) = (self.edges.rect(), self.shape());
+        if edges.width < 1.0 || edges.height < 1.0 || shape == edges {
+            return Transformation::IDENTITY;
+        }
+        let (sx, sy) = (shape.width / edges.width, shape.height / edges.height);
+        let to = Point::new(
+            shape.x + (at.x - edges.x) * sx,
+            shape.y + (at.y - edges.y) * sy,
+        );
+        Transformation::translate(to.x, to.y)
+            * Transformation::scale(sy)
+            * Transformation::translate(-at.x, -at.y)
+    }
+
     fn offset(&self) -> Vector {
         Vector::new(
             self.x.value + self.push_x.value,
@@ -819,11 +837,16 @@ fn draw_island<M>(
                         continue;
                     }
                     let moved = Vector::new(dx, motion.item_lift(*key));
-                    renderer.with_translation(moved, |renderer| {
-                        item.as_widget()
-                            .draw(tree, renderer, theme, style, child, cursor, viewport);
-                        // In the item's moved coordinates, the shape is the other way.
-                        fade(renderer, bounds, shape - moved, shown);
+                    // It rides along with the overshoot: placed where the stretch takes its
+                    // center, and scaled with the shape's height.
+                    let follow = motion.follow(bounds.center() + moved);
+                    renderer.with_transformation(follow, |renderer| {
+                        renderer.with_translation(moved, |renderer| {
+                            item.as_widget()
+                                .draw(tree, renderer, theme, style, child, cursor, viewport);
+                            // In the item's own coordinates, the shape is the other way.
+                            fade(renderer, bounds, shape * follow.inverse() - moved, shown);
+                        });
                     });
                 }
                 if let Some((panel, tree, layout)) = panel {
@@ -1448,7 +1471,7 @@ mod tests {
         assert_eq!(motion.shape(), panel);
 
         popover(&mut motion, false, panel, true);
-        let (mut wider, mut dipped) = (false, false);
+        let (mut wider, mut dipped, mut spread) = (false, false, false);
         run(&mut motion, Instant::now(), |motion| {
             let shape = motion.shape();
             wider |= shape.width > island.width + 1.0;
@@ -1458,8 +1481,13 @@ mod tests {
                 "stays on the surface"
             );
             dipped |= shape.y > island.y + 0.5;
+            // An item right of center moves right and gets smaller.
+            let at = Point::new(island.x + island.width * 0.75, island.center_y());
+            let follow = motion.follow(at);
+            spread |= (at * follow).x > at.x + 0.5 && follow.scale_factor() < 0.99;
         });
         assert!(wider, "lands too wide");
+        assert!(spread, "the items spread and shrink with it");
         assert!(dipped, "the top comes down a little as it lands");
         assert_eq!(motion.shape(), island);
         assert!(motion.closing_done());
