@@ -1,8 +1,9 @@
-//! The primary network connection: Wi-Fi name and signal, wired, VPN, or offline. Read from the
-//! kernel through `eave-net`, so it works under any network manager. The popover has the
-//! details: signal and band, address, gateway, interface.
+//! The primary network connection: a Wi-Fi icon with as many bars as the signal, a wired icon,
+//! VPN, or a struck-through Wi-Fi icon when offline. Read from the kernel through `eave-net`, so it
+//! works under any network manager. The popover has the details: network name, signal and band,
+//! address, gateway, interface.
 
-use eave_api::ui::{self, Item, Panel, Tone};
+use eave_api::ui::{self, Icon, Item, Panel, Tone};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
 use eave_net::{Kind, Network as Status, State};
 use serde::Deserialize;
@@ -11,17 +12,11 @@ pub fn register(registry: &mut Registry) {
     registry.widget::<Network>("network");
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// Show the Wi-Fi network name in the bar, not only the signal.
+    /// Show the Wi-Fi network name in the bar, next to the icon.
     show_name: bool,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self { show_name: true }
-    }
 }
 
 pub struct Network {
@@ -62,17 +57,21 @@ impl Widget for Network {
             State::Connecting | State::Offline => Tone::Dim,
         };
         let content = match (self.status.state, &self.status.primary) {
-            (State::Connecting, _) => ui::label("Connecting…"),
-            (State::Offline, _) | (_, None) => ui::label("Offline"),
+            (State::Connecting | State::Offline, _) | (_, None) => {
+                ui::icon(Icon::Wifi { strength: None })
+            }
             (State::Online, Some(connection)) => match &connection.kind {
-                Kind::Wifi { ssid, strength, .. } if self.show_name && !ssid.is_empty() => {
-                    ui::row([
-                        ui::label(ssid.clone()),
-                        ui::label(format!("{strength}%")).tone(Tone::Dim),
-                    ])
+                Kind::Wifi { ssid, strength, .. } => {
+                    let icon = ui::icon(Icon::Wifi {
+                        strength: Some(f32::from(*strength) / 100.0),
+                    });
+                    if self.show_name && !ssid.is_empty() {
+                        ui::row([icon, ui::label(ssid.clone())])
+                    } else {
+                        icon
+                    }
                 }
-                Kind::Wifi { strength, .. } => ui::label(format!("Wi-Fi {strength}%")),
-                Kind::Wired => ui::label("Wired"),
+                Kind::Wired => ui::icon(Icon::Wired),
                 Kind::Vpn => ui::label("VPN"),
                 Kind::Other => ui::label(connection.interface.clone()),
             },
@@ -152,14 +151,28 @@ mod tests {
         assert!(network(State::Online, Some(wifi())).popover().is_some());
     }
 
+    fn icon(network: &Network) -> Option<Icon> {
+        match network.item().into_parts().content?.into_kind() {
+            ui::Kind::Icon { icon, .. } => Some(icon),
+            _ => None,
+        }
+    }
+
     #[test]
     fn shown_while_offline() {
-        assert!(
-            network(State::Offline, None)
-                .item()
-                .into_parts()
-                .content
-                .is_some()
+        assert_eq!(
+            icon(&network(State::Offline, None)),
+            Some(Icon::Wifi { strength: None })
+        );
+    }
+
+    #[test]
+    fn wifi_shows_its_signal() {
+        assert_eq!(
+            icon(&network(State::Online, Some(wifi()))),
+            Some(Icon::Wifi {
+                strength: Some(0.7)
+            })
         );
     }
 }

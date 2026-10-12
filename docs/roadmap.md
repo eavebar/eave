@@ -33,7 +33,7 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 - [x] Popover open/close animation, owned by the host: the island morphs into its popover and back ([D-28](decisions.md)).
 - [x] Shared services crate (with step 1), so widgets on the same source share one connection. Hyprland is done ([D-17](decisions.md)); D-Bus is done too (`eave-dbus`, [D-18](decisions.md)), and so is the kernel's network state (`eave-net`, [D-23](decisions.md)).
 - [ ] Publish `eave-api` on crates.io, so plugins build standalone without a `[patch]`.
-- [ ] Kit primitives as widgets need them: icon, meter, slider, toggle. Switcher and item scroll are done ([D-16](decisions.md)).
+- [ ] Kit primitives as widgets need them: meter, slider, toggle. Switcher and item scroll are done ([D-16](decisions.md)), and so are status icons ([D-29](decisions.md)).
 - [ ] Per-monitor workspaces once there's one bar per monitor (the widget shows every monitor's workspaces today).
 
 ## Later

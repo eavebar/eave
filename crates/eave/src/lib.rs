@@ -2,6 +2,7 @@
 
 mod app;
 mod config;
+mod icon;
 mod island;
 mod kit;
 mod slot;

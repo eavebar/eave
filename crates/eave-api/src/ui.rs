@@ -17,6 +17,20 @@ pub enum Tone {
     Critical,
 }
 
+/// A status symbol. It names what to show and how full it is; the host draws it in the text's
+/// tone, at the text's size. Fractions are 0.0 to 1.0.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Icon {
+    /// A speaker with sound waves for the level. Above 1.0 is amplified.
+    Volume { level: f32, muted: bool },
+    /// A Wi-Fi fan with as many bars as the signal. `None` when there's no link.
+    Wifi { strength: Option<f32> },
+    /// A wired connection.
+    Wired,
+    /// A battery filled to its charge.
+    Battery { charge: f32, charging: bool },
+}
+
 /// A piece of UI. Build it with the functions in this module.
 pub struct Node<M>(Kind<M>);
 
@@ -28,6 +42,10 @@ pub enum Kind<M> {
     },
     Heading {
         text: String,
+        tone: Option<Tone>,
+    },
+    Icon {
+        icon: Icon,
         tone: Option<Tone>,
     },
     Row(Vec<Node<M>>),
@@ -61,6 +79,11 @@ pub fn heading<M>(text: impl Into<String>) -> Node<M> {
         text: text.into(),
         tone: None,
     })
+}
+
+/// A symbol, sized like a label.
+pub fn icon<M>(icon: Icon) -> Node<M> {
+    Node(Kind::Icon { icon, tone: None })
 }
 
 /// Children side by side, vertically centered.
@@ -120,7 +143,7 @@ impl<M> Node<M> {
 
     fn set_tone(&mut self, new: Tone) {
         match &mut self.0 {
-            Kind::Label { tone, .. } | Kind::Heading { tone, .. } => {
+            Kind::Label { tone, .. } | Kind::Heading { tone, .. } | Kind::Icon { tone, .. } => {
                 tone.get_or_insert(new);
             }
             Kind::Row(children)
@@ -146,6 +169,7 @@ impl<M> Node<M> {
         Node(match self.0 {
             Kind::Label { text, tone } => Kind::Label { text, tone },
             Kind::Heading { text, tone } => Kind::Heading { text, tone },
+            Kind::Icon { icon, tone } => Kind::Icon { icon, tone },
             Kind::Row(children) => Kind::Row(map_all(children)),
             Kind::Column(children) => Kind::Column(map_all(children)),
             Kind::Grid { columns, cells } => Kind::Grid {
@@ -303,17 +327,21 @@ mod tests {
 
     #[test]
     fn tone_fills_only_unset_text() {
-        let node: Node<()> = row([label("a").tone(Tone::Accent), label("b")]).tone(Tone::Dim);
+        let node: Node<()> =
+            row([label("a").tone(Tone::Accent), label("b"), icon(Icon::Wired)]).tone(Tone::Dim);
         let Kind::Row(children) = node.into_kind() else {
             unreachable!()
         };
         let tones: Vec<_> = children
             .into_iter()
             .map(|child| match child.into_kind() {
-                Kind::Label { tone, .. } => tone,
+                Kind::Label { tone, .. } | Kind::Icon { tone, .. } => tone,
                 _ => None,
             })
             .collect();
-        assert_eq!(tones, [Some(Tone::Accent), Some(Tone::Dim)]);
+        assert_eq!(
+            tones,
+            [Some(Tone::Accent), Some(Tone::Dim), Some(Tone::Dim)]
+        );
     }
 }

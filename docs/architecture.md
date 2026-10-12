@@ -93,6 +93,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/config.rs            config.toml → zone entries
   src/watch.rs             inotify watch on the config directory
   src/kit.rs               ui nodes → iced elements, styled
+  src/icon.rs              status icons (volume, Wi-Fi, wired, battery) as vector paths
   src/theme.rs             every color, size and font
   src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay
   src/squircle.rs          the squircle path
