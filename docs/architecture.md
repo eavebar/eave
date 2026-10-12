@@ -97,6 +97,8 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
   src/theme.rs             every color, size and font
   src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay
+  src/squish.rs            how squished the items being drawn are, set by their island
+  src/label.rs             a label that can squish (outlines while squished)
   src/squircle.rs          the squircle path
   src/slot.rs              item wrapper: clicks, scroll steps, and the pointer for alternates
   src/alternate.rs         alternate: one option at a time with fades; hover, and growing (expand)

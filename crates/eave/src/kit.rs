@@ -3,14 +3,15 @@
 
 use eave_api::erased::AnyMessage;
 use eave_api::ui::{Kind, Node, Tone};
-use iced::widget::{button, column, container, image, mouse_area, row, rule, text};
+use iced::widget::{button, column, container, mouse_area, row, rule, text};
 use iced::{Background, Border, Element, Length, Theme, alignment};
 
 use crate::alternate::Alternate;
-use crate::apps::{AppIcon, Icons};
+use crate::apps::Icons;
 use crate::counter::Counter;
 use crate::gulp::Gulp;
 use crate::icon;
+use crate::label::Label;
 use crate::switcher::Switcher;
 use crate::theme;
 
@@ -50,10 +51,12 @@ fn render<'a>(node: Node<AnyMessage>, inherited: Tone, icons: &Icons) -> Element
         Kind::Label {
             text: content,
             tone,
-        } => text(content)
-            .size(theme::TEXT_SIZE)
-            .color(theme::tone(tone.unwrap_or(inherited)))
-            .into(),
+        } => Label::new(
+            content,
+            theme::TEXT_SIZE,
+            theme::tone(tone.unwrap_or(inherited)),
+        )
+        .into(),
         Kind::Heading {
             text: content,
             tone,
@@ -145,18 +148,14 @@ fn app_icon<'a>(app_id: &str, tone: Tone, icons: &Icons) -> Element<'a, AnyMessa
         1.0
     };
     match icons.get(app_id) {
-        Some(Some(AppIcon(handle))) => image(handle.clone())
-            .width(theme::ICON_SIZE)
-            .height(theme::ICON_SIZE)
-            .opacity(opacity)
-            .into(),
+        Some(Some(icon)) => icon.view(opacity),
         _ => {
             let letter: String = app_id
                 .chars()
                 .take(1)
                 .flat_map(char::to_uppercase)
                 .collect();
-            container(text(letter).size(theme::TEXT_SIZE).color(theme::tone(tone)))
+            container(Label::new(letter, theme::TEXT_SIZE, theme::tone(tone)))
                 .width(theme::ICON_SIZE)
                 .height(theme::ICON_SIZE)
                 .center(theme::ICON_SIZE)

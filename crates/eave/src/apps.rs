@@ -15,11 +15,76 @@ use iced::widget::image;
 use resvg::tiny_skia::{FilterQuality, Pixmap, PixmapPaint, Transform};
 use resvg::usvg;
 
-use crate::theme;
+use iced::advanced::widget::Tree;
+use iced::advanced::{Layout, Widget, layout, mouse, renderer};
+use iced::{Element, Length, Rectangle, Size};
+
+use crate::{squish, theme};
 
 /// A loaded icon, ready to draw.
 #[derive(Debug, Clone)]
 pub struct AppIcon(pub image::Handle);
+
+impl AppIcon {
+    /// The icon at the bar's icon size, faded to `opacity`.
+    pub fn view<'a, M: 'a>(&self, opacity: f32) -> Element<'a, M> {
+        Element::new(Picture {
+            handle: self.0.clone(),
+            opacity,
+        })
+    }
+}
+
+/// An app icon on screen. Unlike iced's image, it squishes with its island ([`squish`]): an image
+/// can be drawn into any rectangle, so it's drawn into a stretched one.
+struct Picture {
+    handle: image::Handle,
+    opacity: f32,
+}
+
+impl<M> Widget<M, iced::Theme, iced::Renderer> for Picture {
+    fn size(&self) -> Size<Length> {
+        Size::new(
+            Length::Fixed(theme::ICON_SIZE),
+            Length::Fixed(theme::ICON_SIZE),
+        )
+    }
+
+    fn layout(
+        &mut self,
+        _tree: &mut Tree,
+        _renderer: &iced::Renderer,
+        _limits: &layout::Limits,
+    ) -> layout::Node {
+        layout::Node::new(Size::new(theme::ICON_SIZE, theme::ICON_SIZE))
+    }
+
+    fn draw(
+        &self,
+        _tree: &Tree,
+        renderer: &mut iced::Renderer,
+        _theme: &iced::Theme,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+    ) {
+        use iced::advanced::image::Renderer as _;
+
+        let squish = squish::current();
+        let bounds = squish.rect(layout.bounds());
+        renderer.draw_image(
+            iced::advanced::image::Image {
+                opacity: self.opacity,
+                // Snapping to whole pixels would make a squish jitter.
+                snap: squish.is_none(),
+                ..iced::advanced::image::Image::new(self.handle.clone())
+            },
+            bounds,
+            bounds,
+        );
+    }
+}
 
 /// What the host knows so far: `None` for an app with no icon to be found.
 pub type Icons = HashMap<String, Option<AppIcon>>;

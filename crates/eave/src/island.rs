@@ -26,6 +26,7 @@ use iced::widget::canvas::{Cache, Stroke};
 use iced::{Color, Element, Event, Length, Point, Rectangle, Size, Transformation, Vector, window};
 
 use crate::squircle::{Bump, Edge, squircle};
+use crate::squish::{self, Squish};
 use crate::theme;
 
 pub struct Island<'a, M> {
@@ -601,22 +602,31 @@ impl Motion {
         )
     }
 
-    /// Where the overshoot takes something centered at `at`: its center goes where the stretch
-    /// takes that point of the edges, and it scales with the shape's height. Iced only scales both
-    /// ways at once, so it can't be squished along one axis.
-    fn follow(&self, at: Point) -> Transformation {
+    /// How much the overshoot stretches the shape, across and up and down.
+    fn squish(&self) -> Squish {
         let (edges, shape) = (self.edges.rect(), self.shape());
         if edges.width < 1.0 || edges.height < 1.0 || shape == edges {
-            return Transformation::IDENTITY;
+            return Squish::NONE;
         }
-        let (sx, sy) = (shape.width / edges.width, shape.height / edges.height);
+        Squish {
+            x: shape.width / edges.width,
+            y: shape.height / edges.height,
+        }
+    }
+
+    /// How far the overshoot moves something centered at `at`: to where the stretch takes that
+    /// point of the edges. What's there squishes itself, about its own center ([`squish`]).
+    fn follow(&self, at: Point) -> Vector {
+        let squish = self.squish();
+        if squish == Squish::NONE {
+            return Vector::ZERO;
+        }
+        let (edges, shape) = (self.edges.rect(), self.shape());
         let to = Point::new(
-            shape.x + (at.x - edges.x) * sx,
-            shape.y + (at.y - edges.y) * sy,
+            shape.x + (at.x - edges.x) * squish.x,
+            shape.y + (at.y - edges.y) * squish.y,
         );
-        Transformation::translate(to.x, to.y)
-            * Transformation::scale(sy)
-            * Transformation::translate(-at.x, -at.y)
+        to - at
     }
 
     fn offset(&self) -> Vector {
@@ -837,16 +847,16 @@ fn draw_island<M>(
                         continue;
                     }
                     let moved = Vector::new(dx, motion.item_lift(*key));
-                    // It rides along with the overshoot: placed where the stretch takes its
-                    // center, and scaled with the shape's height.
-                    let follow = motion.follow(bounds.center() + moved);
-                    renderer.with_transformation(follow, |renderer| {
-                        renderer.with_translation(moved, |renderer| {
+                    // It rides along with the overshoot, to where the stretch takes its center,
+                    // and squishes with the shape.
+                    let moved = moved + motion.follow(bounds.center() + moved);
+                    renderer.with_translation(moved, |renderer| {
+                        squish::with(motion.squish(), || {
                             item.as_widget()
                                 .draw(tree, renderer, theme, style, child, cursor, viewport);
-                            // In the item's own coordinates, the shape is the other way.
-                            fade(renderer, bounds, shape * follow.inverse() - moved, shown);
                         });
+                        // In the item's moved coordinates, the shape is the other way.
+                        fade(renderer, bounds, shape - moved, shown);
                     });
                 }
                 if let Some((panel, tree, layout)) = panel {
@@ -1481,13 +1491,14 @@ mod tests {
                 "stays on the surface"
             );
             dipped |= shape.y > island.y + 0.5;
-            // An item right of center moves right and gets smaller.
+            // An item right of center moves right, and squishes wide and short.
             let at = Point::new(island.x + island.width * 0.75, island.center_y());
-            let follow = motion.follow(at);
-            spread |= (at * follow).x > at.x + 0.5 && follow.scale_factor() < 0.99;
+            let squish = motion.squish();
+            spread |= motion.follow(at).x > 0.5 && squish.x > 1.01 && squish.y < 0.99;
         });
         assert!(wider, "lands too wide");
-        assert!(spread, "the items spread and shrink with it");
+        assert!(spread, "the items spread and squish with it");
+        assert_eq!(motion.squish(), Squish::NONE);
         assert!(dipped, "the top comes down a little as it lands");
         assert_eq!(motion.shape(), island);
         assert!(motion.closing_done());
