@@ -11,10 +11,17 @@ pub const ISLAND_HEIGHT: u32 = 30;
 /// Space between the islands and the top, left and right screen edges. A popover keeps the same
 /// distance from the sides.
 pub const EDGE_GAP: u16 = 6;
-/// Transparent space below the islands, so a dragged island can dip down without being cut off.
-pub const DRAG_ROOM: u16 = 6;
-/// The bar surface and its exclusive zone: an island, the gap above it and the room below it.
-pub const BAR_HEIGHT: u32 = EDGE_GAP as u32 + ISLAND_HEIGHT + DRAG_ROOM as u32;
+/// Transparent space below the islands, so a dragged island can stretch down without being cut
+/// off.
+pub const DRAG_ROOM: u16 = 14;
+/// How much of `DRAG_ROOM` the bar keeps windows out of. The rest of the surface hangs over the
+/// top of the windows below it, outside its input region, so it never takes their clicks (D-45).
+pub const RESERVED_ROOM: u16 = 6;
+/// The bar's exclusive zone, and the strip that takes the pointer: an island, the gap above it
+/// and the reserved room below it.
+pub const BAR_HEIGHT: u32 = EDGE_GAP as u32 + ISLAND_HEIGHT + RESERVED_ROOM as u32;
+/// The bar surface: an island, the gap above it and all the room below it.
+pub const SURFACE_HEIGHT: u32 = EDGE_GAP as u32 + ISLAND_HEIGHT + DRAG_ROOM as u32;
 
 pub const ISLAND_BG: Color = Color::BLACK;
 pub const ISLAND_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
@@ -34,10 +41,19 @@ pub const ISLAND_RADIUS: f32 = 14.0;
 pub const ISLAND_SMOOTHING: f32 = 0.6;
 /// How far each side of a pressed island moves in, in logical pixels.
 pub const PRESS_INSET: f32 = 1.5;
-/// The most a dragged island moves, sideways and up or down. It only approaches these: the further
-/// the pointer goes, the harder it pulls back.
+/// The most the part of a dragged island under the pointer moves, sideways and up or down. It only
+/// approaches these: the further the pointer goes, the harder it pulls back.
 pub const DRAG_LIMIT_X: f32 = 10.0;
-pub const DRAG_LIMIT_Y: f32 = 5.0;
+pub const DRAG_LIMIT_Y: f32 = 6.0;
+/// How much of a drag moves the whole island. The rest stretches the part near where it was
+/// grabbed, less and less further away, and not at all past `DRAG_REACH`. Wide, so a pull bends
+/// the island in one long curve rather than a dent.
+pub const DRAG_FOLLOW: f32 = 0.5;
+pub const DRAG_REACH: f32 = 200.0;
+/// The spring a drag pulls the island on, and brings it back on: softer than the press, and
+/// damped enough that letting go only overshoots a little.
+pub const DRAG_STIFFNESS: f32 = 220.0;
+pub const DRAG_DAMPING: f32 = 0.7;
 /// How directly a drag moves the island at first: 1 follows the pointer, lower feels heavier.
 pub const DRAG_RESISTANCE: f32 = 0.5;
 /// The spring that moves an island back into place: stiffness, and damping ratio (below 1 it

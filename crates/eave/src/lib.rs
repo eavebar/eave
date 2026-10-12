@@ -85,7 +85,7 @@ pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
         layer_settings: LayerShellSettings {
             anchor: Anchor::Top | Anchor::Left | Anchor::Right,
             layer: Layer::Top,
-            size: Some((0, theme::BAR_HEIGHT)),
+            size: Some((0, theme::SURFACE_HEIGHT)),
             exclusive_zone: theme::BAR_HEIGHT as i32,
             keyboard_interactivity: KeyboardInteractivity::None,
             ..Default::default()
