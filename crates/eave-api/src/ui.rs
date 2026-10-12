@@ -33,6 +33,34 @@ pub enum Icon {
     Wired,
     /// A battery filled to its charge.
     Battery { charge: f32, charging: bool },
+    /// A padlock: a secured network.
+    Lock,
+    /// An `i` in a circle: more about this.
+    Info,
+    /// A chevron pointing left: back, or earlier.
+    Back,
+    /// A chevron pointing right: on, or later.
+    Forward,
+    /// A check mark: the one in use.
+    Check,
+    /// A circling arrow: look again.
+    Refresh,
+    /// A cross: close this.
+    Close,
+    /// An eye: show what's hidden.
+    Reveal,
+    /// A lightning bolt: charging.
+    Bolt,
+    /// A power plug: on mains power.
+    Plug,
+    /// A microphone, struck through when muted.
+    Mic { muted: bool },
+    /// A loudspeaker box: built-in speakers.
+    Speaker,
+    /// Headphones, or a headset.
+    Headphones,
+    /// A screen: a monitor or TV that plays sound.
+    Display,
 }
 
 /// A piece of UI. Build it with the functions in this module.
@@ -80,6 +108,8 @@ pub enum Kind<M> {
         content: Box<Node<M>>,
         on_press: M,
         on_secondary: Option<M>,
+        /// The main action of a popover page: filled with the accent.
+        prominent: bool,
     },
     Switcher {
         options: Vec<(Node<M>, M)>,
@@ -88,6 +118,62 @@ pub enum Kind<M> {
     Gulp(Box<Node<M>>),
     Separator,
     Empty,
+    ListItem {
+        title: String,
+        subtitle: Option<String>,
+        leading: Option<Box<Node<M>>>,
+        trailing: Option<Box<Node<M>>>,
+        selected: bool,
+        on_press: Option<M>,
+        on_secondary: Option<M>,
+    },
+    List(Vec<Node<M>>),
+    Section {
+        title: String,
+        trailing: Option<Box<Node<M>>>,
+    },
+    Header {
+        title: String,
+        on_back: Option<M>,
+        trailing: Option<Box<Node<M>>>,
+    },
+    Detail {
+        name: String,
+        value: Box<Node<M>>,
+    },
+    Fill,
+    Slider {
+        value: f32,
+        range: RangeInclusive<f32>,
+        step: f32,
+        on_change: Box<dyn Fn(f32) -> M>,
+        on_release: Option<M>,
+    },
+    Toggle {
+        on: bool,
+        on_toggle: M,
+    },
+    Meter {
+        fraction: f32,
+        /// Where a limit sits along it, like a battery's charge limit.
+        limit: Option<f32>,
+        tone: Option<Tone>,
+    },
+    TextInput {
+        placeholder: String,
+        value: String,
+        on_input: Box<dyn Fn(String) -> M>,
+        on_submit: Option<M>,
+        secret: bool,
+        trailing: Option<Box<Node<M>>>,
+        tone: Option<Tone>,
+    },
+    Display(Box<Node<M>>),
+    Mark(Box<Node<M>>),
+    Badge {
+        text: String,
+        tone: Option<Tone>,
+    },
 }
 
 pub fn label<M>(text: impl Into<String>) -> Node<M> {
@@ -187,6 +273,7 @@ pub fn button<M>(content: Node<M>, on_press: M) -> Node<M> {
         content: Box::new(content),
         on_press,
         on_secondary: None,
+        prominent: false,
     })
 }
 
@@ -219,6 +306,129 @@ pub fn empty<M>() -> Node<M> {
     Node(Kind::Empty)
 }
 
+/// A row in a popover list: a network, a device, a window. Give it a [`subtitle`](Node::subtitle),
+/// a [`leading`](Node::leading) icon, a [`trailing`](Node::trailing) node at the far end (a lock,
+/// an info button), mark the one in use with [`selected`](Node::selected), and make it clickable
+/// with [`on_press`](Node::on_press). A long title fades out at the end rather than wrapping.
+pub fn list_item<M>(title: impl Into<String>) -> Node<M> {
+    Node(Kind::ListItem {
+        title: title.into(),
+        subtitle: None,
+        leading: None,
+        trailing: None,
+        selected: false,
+        on_press: None,
+        on_secondary: None,
+    })
+}
+
+/// Rows stacked closely, usually [`list_item`]s. In a popover, a long list scrolls instead of
+/// growing past a few rows.
+pub fn list<M>(rows: impl IntoIterator<Item = Node<M>>) -> Node<M> {
+    Node(Kind::List(rows.into_iter().collect()))
+}
+
+/// A small caption over a group in a popover ("Output", "Health"), with an optional
+/// [`trailing`](Node::trailing) node at the far end.
+pub fn section<M>(title: impl Into<String>) -> Node<M> {
+    Node(Kind::Section {
+        title: title.into(),
+        trailing: None,
+    })
+}
+
+/// The title of a popover page. Sub-pages get a back button with [`on_back`](Node::on_back); a
+/// [`trailing`](Node::trailing) node sits at the far end (a switch, a count).
+pub fn header<M>(title: impl Into<String>) -> Node<M> {
+    Node(Kind::Header {
+        title: title.into(),
+        on_back: None,
+        trailing: None,
+    })
+}
+
+/// A named value on one line: the name dimmed at the start, the value at the end.
+pub fn detail<M>(name: impl Into<String>, value: Node<M>) -> Node<M> {
+    Node(Kind::Detail {
+        name: name.into(),
+        value: Box::new(value),
+    })
+}
+
+/// Takes the free space in a popover row, pushing what follows to the end. Nothing in the bar.
+pub fn fill<M>() -> Node<M> {
+    Node(Kind::Fill)
+}
+
+/// A value dragged along `range`: a volume. Sends `on_change` while dragging; add
+/// [`on_release`](Node::on_release) to act once it's let go, and [`step`](Node::step) to snap.
+pub fn slider<M: 'static>(
+    value: f32,
+    range: RangeInclusive<f32>,
+    on_change: impl Fn(f32) -> M + 'static,
+) -> Node<M> {
+    Node(Kind::Slider {
+        value,
+        range,
+        step: 1.0,
+        on_change: Box::new(on_change),
+        on_release: None,
+    })
+}
+
+/// An on/off switch. Sends `on_toggle` when clicked; the host slides it over.
+pub fn toggle<M>(on: bool, on_toggle: M) -> Node<M> {
+    Node(Kind::Toggle { on, on_toggle })
+}
+
+/// A bar filled to `fraction` (0.0 to 1.0), in its tone: a charge, a signal. The host eases it to
+/// a new value.
+pub fn meter<M>(fraction: f32) -> Node<M> {
+    Node(Kind::Meter {
+        fraction,
+        limit: None,
+        tone: None,
+    })
+}
+
+/// A field to type into, showing `value`. Sends `on_input` with the new text on every change.
+/// It takes the focus when it appears, and while it has it, keys stay in the popover; Esc still
+/// closes it. [`on_submit`](Node::on_submit) is sent on Enter. One per popover page. A
+/// [`Tone::Critical`] tone marks it as wrong.
+pub fn text_input<M: 'static>(
+    placeholder: impl Into<String>,
+    value: impl Into<String>,
+    on_input: impl Fn(String) -> M + 'static,
+) -> Node<M> {
+    Node(Kind::TextInput {
+        placeholder: placeholder.into(),
+        value: value.into(),
+        on_input: Box::new(on_input),
+        on_submit: None,
+        secret: false,
+        trailing: None,
+        tone: None,
+    })
+}
+
+/// Its text, large: the one number a popover is about, like a battery's charge.
+pub fn display<M>(content: Node<M>) -> Node<M> {
+    Node(Kind::Display(Box::new(content)))
+}
+
+/// Its content on a filled accent circle: today in a calendar.
+pub fn mark<M>(content: Node<M>) -> Node<M> {
+    Node(Kind::Mark(Box::new(content)))
+}
+
+/// A short code in a small outlined box: a keyboard layout's `US`.
+pub fn badge<M>(text: impl Into<String>) -> Node<M> {
+    Node(Kind::Badge {
+        text: text.into(),
+        tone: None,
+    })
+}
+
 impl<M> Node<M> {
     /// Sets the tone of this text, or of every text inside this node that has none yet.
     pub fn tone(mut self, tone: Tone) -> Self {
@@ -235,10 +445,114 @@ impl<M> Node<M> {
         self
     }
 
-    /// For a [`button`]: sent on a secondary (right) click on it. Other nodes ignore it.
+    /// For a [`button`] or [`list_item`]: sent on a secondary (right) click on it. Other nodes
+    /// ignore it.
     pub fn on_secondary(mut self, message: M) -> Self {
-        if let Kind::Button { on_secondary, .. } = &mut self.0 {
+        if let Kind::Button { on_secondary, .. } | Kind::ListItem { on_secondary, .. } = &mut self.0
+        {
             *on_secondary = Some(message);
+        }
+        self
+    }
+
+    /// For a [`button`]: the main action of its page, filled with the accent. Other nodes ignore
+    /// it.
+    pub fn prominent(mut self) -> Self {
+        if let Kind::Button { prominent, .. } = &mut self.0 {
+            *prominent = true;
+        }
+        self
+    }
+
+    /// For a [`list_item`]: sent on a click on it. Other nodes ignore it.
+    pub fn on_press(mut self, message: M) -> Self {
+        if let Kind::ListItem { on_press, .. } = &mut self.0 {
+            *on_press = Some(message);
+        }
+        self
+    }
+
+    /// For a [`list_item`]: a second, dimmer line under the title. Other nodes ignore it.
+    pub fn subtitle(mut self, text: impl Into<String>) -> Self {
+        if let Kind::ListItem { subtitle, .. } = &mut self.0 {
+            *subtitle = Some(text.into());
+        }
+        self
+    }
+
+    /// For a [`list_item`]: an icon before the title. Other nodes ignore it.
+    pub fn leading(mut self, node: Node<M>) -> Self {
+        if let Kind::ListItem { leading, .. } = &mut self.0 {
+            *leading = Some(Box::new(node));
+        }
+        self
+    }
+
+    /// For a [`list_item`], [`section`], [`header`] or [`text_input`]: a node at the far end, like
+    /// a lock or an info button. Other nodes ignore it.
+    pub fn trailing(mut self, node: Node<M>) -> Self {
+        if let Kind::ListItem { trailing, .. }
+        | Kind::Section { trailing, .. }
+        | Kind::Header { trailing, .. }
+        | Kind::TextInput { trailing, .. } = &mut self.0
+        {
+            *trailing = Some(Box::new(node));
+        }
+        self
+    }
+
+    /// For a [`list_item`]: marks it as the one in use. Other nodes ignore it.
+    pub fn selected(mut self, yes: bool) -> Self {
+        if let Kind::ListItem { selected, .. } = &mut self.0 {
+            *selected = yes;
+        }
+        self
+    }
+
+    /// For a [`header`]: shows a back button that sends `message`. Other nodes ignore it.
+    pub fn on_back(mut self, message: M) -> Self {
+        if let Kind::Header { on_back, .. } = &mut self.0 {
+            *on_back = Some(message);
+        }
+        self
+    }
+
+    /// For a [`slider`]: the step its value snaps to (1 by default). Other nodes ignore it.
+    pub fn step(mut self, by: f32) -> Self {
+        if let Kind::Slider { step, .. } = &mut self.0 {
+            *step = by;
+        }
+        self
+    }
+
+    /// For a [`slider`]: sent when it's let go. Other nodes ignore it.
+    pub fn on_release(mut self, message: M) -> Self {
+        if let Kind::Slider { on_release, .. } = &mut self.0 {
+            *on_release = Some(message);
+        }
+        self
+    }
+
+    /// For a [`text_input`]: sent on Enter. Other nodes ignore it.
+    pub fn on_submit(mut self, message: M) -> Self {
+        if let Kind::TextInput { on_submit, .. } = &mut self.0 {
+            *on_submit = Some(message);
+        }
+        self
+    }
+
+    /// For a [`text_input`]: hides what's typed, like a password. Other nodes ignore it.
+    pub fn secret(mut self, yes: bool) -> Self {
+        if let Kind::TextInput { secret, .. } = &mut self.0 {
+            *secret = yes;
+        }
+        self
+    }
+
+    /// For a [`meter`]: marks a limit along it (0.0 to 1.0). Other nodes ignore it.
+    pub fn limit(mut self, at: f32) -> Self {
+        if let Kind::Meter { limit, .. } = &mut self.0 {
+            *limit = Some(at);
         }
         self
     }
@@ -249,7 +563,10 @@ impl<M> Node<M> {
             | Kind::Heading { tone, .. }
             | Kind::Icon { tone, .. }
             | Kind::AppIcon { tone, .. }
-            | Kind::Counter { tone, .. } => {
+            | Kind::Counter { tone, .. }
+            | Kind::Meter { tone, .. }
+            | Kind::TextInput { tone, .. }
+            | Kind::Badge { tone, .. } => {
                 tone.get_or_insert(new);
             }
             Kind::Alternate {
@@ -259,21 +576,47 @@ impl<M> Node<M> {
             | Kind::Column(children)
             | Kind::Grid {
                 cells: children, ..
-            } => {
+            }
+            | Kind::List(children) => {
                 children.iter_mut().for_each(|child| child.set_tone(new));
             }
-            Kind::Button { content, .. } | Kind::Gulp(content) => content.set_tone(new),
+            Kind::Button { content, .. }
+            | Kind::Gulp(content)
+            | Kind::Display(content)
+            | Kind::Mark(content)
+            | Kind::Detail { value: content, .. } => content.set_tone(new),
+            Kind::ListItem {
+                leading, trailing, ..
+            } => {
+                leading
+                    .iter_mut()
+                    .chain(trailing.iter_mut())
+                    .for_each(|child| child.set_tone(new));
+            }
             Kind::Switcher { options, .. } => {
                 options
                     .iter_mut()
                     .for_each(|(child, _)| child.set_tone(new));
             }
-            Kind::Separator | Kind::Empty => {}
+            Kind::Separator
+            | Kind::Empty
+            | Kind::Section { .. }
+            | Kind::Header { .. }
+            | Kind::Fill
+            | Kind::Slider { .. }
+            | Kind::Toggle { .. } => {}
         }
     }
 
-    pub fn map<N>(self, f: &impl Fn(M) -> N) -> Node<N> {
+    /// Converts every message in this node. Sliders and text fields keep `f` to convert the
+    /// messages they make later, so it must be `Clone + 'static`, like a function or a closure
+    /// that captures nothing.
+    pub fn map<N: 'static>(self, f: &(impl Fn(M) -> N + Clone + 'static)) -> Node<N>
+    where
+        M: 'static,
+    {
         let map_all = |nodes: Vec<Node<M>>| nodes.into_iter().map(|node| node.map(f)).collect();
+        let map_box = |node: Option<Box<Node<M>>>| node.map(|node| Box::new(node.map(f)));
 
         Node(match self.0 {
             Kind::Label { text, tone } => Kind::Label { text, tone },
@@ -312,10 +655,12 @@ impl<M> Node<M> {
                 content,
                 on_press,
                 on_secondary,
+                prominent,
             } => Kind::Button {
                 content: Box::new(content.map(f)),
                 on_press: f(on_press),
                 on_secondary: on_secondary.map(f),
+                prominent,
             },
             Kind::Switcher { options, current } => Kind::Switcher {
                 options: options
@@ -327,12 +672,105 @@ impl<M> Node<M> {
             Kind::Gulp(content) => Kind::Gulp(Box::new(content.map(f))),
             Kind::Separator => Kind::Separator,
             Kind::Empty => Kind::Empty,
+            Kind::ListItem {
+                title,
+                subtitle,
+                leading,
+                trailing,
+                selected,
+                on_press,
+                on_secondary,
+            } => Kind::ListItem {
+                title,
+                subtitle,
+                leading: map_box(leading),
+                trailing: map_box(trailing),
+                selected,
+                on_press: on_press.map(f),
+                on_secondary: on_secondary.map(f),
+            },
+            Kind::List(rows) => Kind::List(map_all(rows)),
+            Kind::Section { title, trailing } => Kind::Section {
+                title,
+                trailing: map_box(trailing),
+            },
+            Kind::Header {
+                title,
+                on_back,
+                trailing,
+            } => Kind::Header {
+                title,
+                on_back: on_back.map(f),
+                trailing: map_box(trailing),
+            },
+            Kind::Detail { name, value } => Kind::Detail {
+                name,
+                value: Box::new(value.map(f)),
+            },
+            Kind::Fill => Kind::Fill,
+            Kind::Slider {
+                value,
+                range,
+                step,
+                on_change,
+                on_release,
+            } => {
+                let g = f.clone();
+                Kind::Slider {
+                    value,
+                    range,
+                    step,
+                    on_change: Box::new(move |value| g(on_change(value))),
+                    on_release: on_release.map(f),
+                }
+            }
+            Kind::Toggle { on, on_toggle } => Kind::Toggle {
+                on,
+                on_toggle: f(on_toggle),
+            },
+            Kind::Meter {
+                fraction,
+                limit,
+                tone,
+            } => Kind::Meter {
+                fraction,
+                limit,
+                tone,
+            },
+            Kind::TextInput {
+                placeholder,
+                value,
+                on_input,
+                on_submit,
+                secret,
+                trailing,
+                tone,
+            } => {
+                let g = f.clone();
+                Kind::TextInput {
+                    placeholder,
+                    value,
+                    on_input: Box::new(move |text| g(on_input(text))),
+                    on_submit: on_submit.map(f),
+                    secret,
+                    trailing: map_box(trailing),
+                    tone,
+                }
+            }
+            Kind::Display(content) => Kind::Display(Box::new(content.map(f))),
+            Kind::Mark(content) => Kind::Mark(Box::new(content.map(f))),
+            Kind::Badge { text, tone } => Kind::Badge { text, tone },
         })
     }
 
     #[doc(hidden)]
     pub fn into_kind(self) -> Kind<M> {
         self.0
+    }
+
+    #[doc(hidden)]
+    pub fn kind(&self) -> &Kind<M> {
+        &self.0
     }
 }
 
@@ -383,7 +821,10 @@ impl<M> Item<M> {
         self
     }
 
-    pub fn map<N>(self, f: &impl Fn(M) -> N) -> Item<N> {
+    pub fn map<N: 'static>(self, f: &(impl Fn(M) -> N + Clone + 'static)) -> Item<N>
+    where
+        M: 'static,
+    {
         Item {
             content: self.content.map(|content| content.map(f)),
             on_press: self.on_press.map(f),
@@ -412,21 +853,59 @@ pub struct ItemParts<M> {
     pub on_scroll: Option<(M, M)>,
 }
 
-/// The contents of a popover. The host draws the surface, its background and its edges.
-pub struct Panel<M>(Node<M>);
+/// The contents of a popover. The host draws the surface, its background and its edges, and lays
+/// every popover out at the same width.
+pub struct Panel<M> {
+    content: Node<M>,
+    on_open: Option<M>,
+    on_close: Option<M>,
+}
 
 impl<M> Panel<M> {
     pub fn new(content: Node<M>) -> Self {
-        Self(content)
+        Self {
+            content,
+            on_open: None,
+            on_close: None,
+        }
     }
 
-    pub fn map<N>(self, f: &impl Fn(M) -> N) -> Panel<N> {
-        Panel(self.0.map(f))
+    /// Sent each time the popover opens: start a scan, show the first page.
+    pub fn on_open(mut self, message: M) -> Self {
+        self.on_open = Some(message);
+        self
+    }
+
+    /// Sent each time the popover starts closing: stop listening, forget what was typed.
+    pub fn on_close(mut self, message: M) -> Self {
+        self.on_close = Some(message);
+        self
+    }
+
+    pub fn map<N: 'static>(self, f: &(impl Fn(M) -> N + Clone + 'static)) -> Panel<N>
+    where
+        M: 'static,
+    {
+        Panel {
+            content: self.content.map(f),
+            on_open: self.on_open.map(f),
+            on_close: self.on_close.map(f),
+        }
     }
 
     #[doc(hidden)]
     pub fn into_node(self) -> Node<M> {
-        self.0
+        self.content
+    }
+
+    #[doc(hidden)]
+    pub fn on_open_message(self) -> Option<M> {
+        self.on_open
+    }
+
+    #[doc(hidden)]
+    pub fn on_close_message(self) -> Option<M> {
+        self.on_close
     }
 }
 
@@ -503,5 +982,120 @@ mod tests {
             tones,
             [Some(Tone::Accent), Some(Tone::Dim), Some(Tone::Dim)]
         );
+    }
+
+    #[test]
+    fn map_reaches_new_nodes_and_their_closures() {
+        let node = column([
+            header("h").on_back(1).trailing(toggle(true, 2)),
+            list([list_item("a")
+                .on_press(3)
+                .on_secondary(4)
+                .trailing(button(icon(Icon::Info), 5))]),
+            slider(0.5, 0.0..=1.0, |v| (v * 10.0) as i32).on_release(6),
+            text_input("p", "v", |text: String| text.len() as i32).on_submit(7),
+        ]);
+        let Kind::Column(children) = node.map(&|n: i32| n * 10).into_kind() else {
+            panic!("column became something else");
+        };
+        let mut children = children.into_iter().map(Node::into_kind);
+        let Some(Kind::Header {
+            on_back: Some(10),
+            trailing: Some(trailing),
+            ..
+        }) = children.next()
+        else {
+            panic!("header lost its back message");
+        };
+        assert!(matches!(
+            trailing.into_kind(),
+            Kind::Toggle { on_toggle: 20, .. }
+        ));
+        let Some(Kind::List(rows)) = children.next() else {
+            panic!("list lost");
+        };
+        let Some(Kind::ListItem {
+            on_press: Some(30),
+            on_secondary: Some(40),
+            trailing: Some(trailing),
+            ..
+        }) = rows.into_iter().next().map(Node::into_kind)
+        else {
+            panic!("list item lost its messages");
+        };
+        assert!(matches!(
+            trailing.into_kind(),
+            Kind::Button { on_press: 50, .. }
+        ));
+        let Some(Kind::Slider {
+            on_change,
+            on_release: Some(60),
+            ..
+        }) = children.next()
+        else {
+            panic!("slider lost");
+        };
+        assert_eq!(on_change(0.3), 30);
+        let Some(Kind::TextInput {
+            on_input,
+            on_submit: Some(70),
+            ..
+        }) = children.next()
+        else {
+            panic!("text input lost");
+        };
+        assert_eq!(on_input("abcd".into()), 40);
+    }
+
+    #[test]
+    fn modifiers_only_touch_their_nodes() {
+        let node: Node<i32> = label("a").trailing(label("b")).on_press(1).selected(true);
+        assert!(matches!(node.into_kind(), Kind::Label { .. }));
+        let node: Node<i32> = button(label("a"), 1).on_press(2).prominent();
+        assert!(matches!(
+            node.into_kind(),
+            Kind::Button {
+                on_press: 1,
+                prominent: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn tone_reaches_details_and_row_icons() {
+        let node: Node<()> = column([
+            detail("n", label("v")),
+            list_item("t").leading(icon(Icon::Lock)),
+        ])
+        .tone(Tone::Good);
+        let Kind::Column(children) = node.into_kind() else {
+            unreachable!()
+        };
+        let mut children = children.into_iter().map(Node::into_kind);
+        let Some(Kind::Detail { value, .. }) = children.next() else {
+            unreachable!()
+        };
+        assert!(matches!(
+            value.into_kind(),
+            Kind::Label {
+                tone: Some(Tone::Good),
+                ..
+            }
+        ));
+        let Some(Kind::ListItem {
+            leading: Some(leading),
+            ..
+        }) = children.next()
+        else {
+            unreachable!()
+        };
+        assert!(matches!(
+            leading.into_kind(),
+            Kind::Icon {
+                tone: Some(Tone::Good),
+                ..
+            }
+        ));
     }
 }

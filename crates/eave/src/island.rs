@@ -21,9 +21,11 @@ use iced::advanced::graphics::geometry::Renderer as _;
 use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::alignment::Horizontal;
+use iced::keyboard::{self, key};
 use iced::widget::canvas::{Cache, Stroke};
 use iced::{Color, Element, Event, Length, Point, Rectangle, Size, Transformation, Vector, window};
 
+use crate::field::AnyFocused;
 use crate::squircle::{Bump, Edge, squircle};
 use crate::theme;
 
@@ -678,6 +680,25 @@ fn place(island: Rectangle, panel: Size, align: Horizontal, surface_width: f32) 
     Rectangle::new(Point::new(x, island.y), Size::new(width, height))
 }
 
+/// What a key press does to an open popover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyAction {
+    /// Left unhandled, so the host closes the popover.
+    Close,
+    /// Kept: it was typed into a field.
+    Keep,
+}
+
+/// Any key closes a popover, unless a text field in it has the focus. Esc always closes it, even
+/// while typing (D-41).
+fn key_policy(key: &keyboard::Key, field_focused: bool) -> KeyAction {
+    match key {
+        keyboard::Key::Named(key::Named::Escape) => KeyAction::Close,
+        _ if field_focused => KeyAction::Keep,
+        _ => KeyAction::Close,
+    }
+}
+
 /// The panel's content, centered in its place.
 fn panel_offset(place: Size, content: Size) -> Vector {
     Vector::new(
@@ -781,16 +802,14 @@ fn draw_island<M>(
                 }
                 if let Some((panel, tree, layout)) = panel {
                     let shown = motion.popover.panel.value;
-                    if shown >= REST_DISTANCE {
-                        panel.as_widget().draw(
-                            tree,
-                            renderer,
-                            theme,
-                            style,
-                            layout,
-                            cursor,
-                            &layout.bounds(),
-                        );
+                    // The panel's viewport is what of it the shape shows, so a scrolling list or a
+                    // text field clips to the shape while it grows.
+                    if shown >= REST_DISTANCE
+                        && let Some(visible) = layout.bounds().intersection(&shape)
+                    {
+                        panel
+                            .as_widget()
+                            .draw(tree, renderer, theme, style, layout, cursor, &visible);
                         fade(renderer, layout.bounds(), shape, shown);
                     }
                 }
@@ -1092,14 +1111,19 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
         let panel = state
             .panel
             .get_or_insert_with(|| Tree::new(&popover.content));
-        // Unbounded and compressed: the content takes its natural size, and `Fill` children (a
-        // separator) stretch to their siblings, not to infinity.
-        let natural =
-            layout::Limits::with_compression(Size::ZERO, Size::INFINITE, Size::new(true, true));
+        // Every panel is as wide as `PANEL_WIDTH`, padding included, so rows can stretch to its
+        // edge (D-40). Its height is its own: unbounded and compressed, so `Fill` children don't
+        // stretch to infinity.
+        let width = theme::PANEL_WIDTH - 2.0 * f32::from(theme::PANEL_PADDING);
+        let limits = layout::Limits::with_compression(
+            Size::new(width, 0.0),
+            Size::new(width, f32::INFINITY),
+            Size::new(false, true),
+        );
         let content = popover
             .content
             .as_widget_mut()
-            .layout(panel, renderer, &natural);
+            .layout(panel, renderer, &limits);
 
         let island = self.layout.bounds() + self.translation;
         let rect = place(island, content.size(), self.island.align, bounds.width);
@@ -1160,12 +1184,32 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
         let Some(panel) = &mut state.panel else {
             return;
         };
+        let content = layout.children().next().expect("a morph has its panel");
+        // Keys go to the panel even while it fades in, so typing isn't lost; Esc never does, so
+        // it always closes the popover (D-41).
+        let key = match event {
+            Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => Some(key),
+            _ => None,
+        };
         let shown = state.motion.popover.panel.target > 0.0;
-        if popover.open && shown {
-            let content = layout.children().next().expect("a morph has its panel");
+        let escape = key.is_some_and(|key| *key == keyboard::Key::Named(key::Named::Escape));
+        let forward = popover.open && !escape && (shown || matches!(event, Event::Keyboard(_)));
+        if forward {
             popover.content.as_widget_mut().update(
                 panel, event, content, cursor, renderer, clipboard, shell, &rect,
             );
+        }
+        if let Some(key) = key
+            && popover.open
+        {
+            let mut focused = AnyFocused::default();
+            popover
+                .content
+                .as_widget_mut()
+                .operate(panel, content, renderer, &mut focused);
+            if key_policy(key, focused.found) == KeyAction::Keep {
+                shell.capture_event();
+            }
         }
         // A press anywhere on the shape is the popover's, handled or not: it isn't a click on the
         // bar, which would close it.
@@ -1173,6 +1217,25 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             && cursor.is_over(state.motion.edges.rect())
         {
             shell.capture_event();
+        }
+    }
+
+    fn operate(
+        &mut self,
+        layout: Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        let state = self.tree.state.downcast_mut::<State>();
+        if let (Some(popover), Some(panel), Some(content)) = (
+            self.island.popover.as_mut(),
+            state.panel.as_mut(),
+            layout.children().next(),
+        ) {
+            popover
+                .content
+                .as_widget_mut()
+                .operate(panel, content, renderer, operation);
         }
     }
 
@@ -1400,6 +1463,19 @@ mod tests {
         // Kept on screen.
         let clamped = place(rect(950.0, 44.0), panel, Horizontal::Left, 1000.0);
         assert_eq!(clamped.x + clamped.width, 1000.0 - gap);
+    }
+
+    #[test]
+    fn keys_close_a_popover_unless_a_field_has_the_focus() {
+        let escape = keyboard::Key::Named(key::Named::Escape);
+        let shift = keyboard::Key::Named(key::Named::Shift);
+        let letter = keyboard::Key::Character("a".into());
+        assert_eq!(key_policy(&escape, true), KeyAction::Close);
+        assert_eq!(key_policy(&escape, false), KeyAction::Close);
+        assert_eq!(key_policy(&letter, true), KeyAction::Keep);
+        assert_eq!(key_policy(&shift, true), KeyAction::Keep);
+        assert_eq!(key_policy(&shift, false), KeyAction::Close);
+        assert_eq!(key_policy(&letter, false), KeyAction::Close);
     }
 
     #[test]

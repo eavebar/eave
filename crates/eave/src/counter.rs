@@ -9,7 +9,9 @@ use std::time::Instant;
 use iced::advanced::text::{self, Paragraph as _};
 use iced::advanced::widget::{Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, renderer};
-use iced::{Color, Element, Event, Length, Pixels, Point, Rectangle, Size, alignment, window};
+use iced::{
+    Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Size, alignment, window,
+};
 
 use crate::theme;
 
@@ -20,6 +22,8 @@ pub struct Counter {
     range: RangeInclusive<i64>,
     unit: String,
     color: Color,
+    size: f32,
+    font: Option<Font>,
 }
 
 impl Counter {
@@ -29,7 +33,16 @@ impl Counter {
             range,
             unit,
             color,
+            size: theme::TEXT_SIZE,
+            font: None,
         }
+    }
+
+    /// Text at `size` in `font`, instead of a label's.
+    pub fn text(mut self, size: f32, font: Font) -> Self {
+        self.size = size;
+        self.font = Some(font);
+        self
     }
 }
 
@@ -98,15 +111,15 @@ struct State {
     digit: f32,
 }
 
-fn shape(content: &str, renderer: &iced::Renderer) -> Paragraph {
+fn shape(content: &str, renderer: &iced::Renderer, size: f32, font: Option<Font>) -> Paragraph {
     use iced::advanced::text::Renderer as _;
 
     Paragraph::with_text(text::Text {
         content,
         bounds: Size::INFINITE,
-        size: Pixels(theme::TEXT_SIZE),
+        size: Pixels(size),
         line_height: text::LineHeight::default(),
-        font: renderer.default_font(),
+        font: font.unwrap_or_else(|| renderer.default_font()),
         align_x: text::Alignment::Default,
         align_y: alignment::Vertical::Top,
         shaping: text::Shaping::Basic,
@@ -116,10 +129,10 @@ fn shape(content: &str, renderer: &iced::Renderer) -> Paragraph {
 
 impl State {
     /// Shapes the number on screen again, if it changed.
-    fn reshape(&mut self, unit: &str, renderer: &iced::Renderer) {
-        let text = format!("{}{unit}", self.count.shown);
+    fn reshape(&mut self, counter: &Counter, renderer: &iced::Renderer) {
+        let text = format!("{}{}", self.count.shown, counter.unit);
         if text != self.text {
-            self.paragraph = shape(&text, renderer);
+            self.paragraph = shape(&text, renderer, counter.size, counter.font);
             self.text = text;
         }
     }
@@ -151,19 +164,29 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Counter {
         let state = state.get_or_insert_with(|| State {
             count: Count::default(),
             text: String::new(),
-            paragraph: shape("", renderer),
+            paragraph: shape("", renderer, self.size, self.font),
             digit: ('0'..='9')
-                .map(|digit| shape(&digit.to_string(), renderer).min_bounds().width)
+                .map(|digit| {
+                    shape(&digit.to_string(), renderer, self.size, self.font)
+                        .min_bounds()
+                        .width
+                })
                 .fold(0.0, f32::max),
         });
         state.count.set(self.value);
-        state.reshape(&self.unit, renderer);
-        let unit = shape(&self.unit, renderer).min_bounds().width;
+        state.reshape(self, renderer);
+        let unit = shape(&self.unit, renderer, self.size, self.font)
+            .min_bounds()
+            .width;
         let room = places(&self.range) as f32 * state.digit + unit;
-        let target = shape(&format!("{}{}", self.value, self.unit), renderer).min_bounds();
-        let height = text::LineHeight::default()
-            .to_absolute(Pixels(theme::TEXT_SIZE))
-            .0;
+        let target = shape(
+            &format!("{}{}", self.value, self.unit),
+            renderer,
+            self.size,
+            self.font,
+        )
+        .min_bounds();
+        let height = text::LineHeight::default().to_absolute(Pixels(self.size)).0;
         layout::Node::new(Size::new(room.max(target.width).ceil(), height))
     }
 
@@ -204,7 +227,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Counter {
             && let Some(state) = tree.state.downcast_mut::<Option<State>>()
         {
             let more = state.count.step(*now);
-            state.reshape(&self.unit, renderer);
+            state.reshape(self, renderer);
             if more {
                 shell.request_redraw();
             }

@@ -174,6 +174,33 @@ impl<M> canvas::Program<M> for Glyph {
             Icon::Wifi { strength } => pen.wifi(strength),
             Icon::Wired => pen.wired(),
             Icon::Battery { charge, charging } => pen.battery(charge, charging, gulp),
+            Icon::Lock => pen.lock(),
+            Icon::Info => pen.info(),
+            Icon::Back => pen.polyline(&[(10.0, 3.5), (5.5, 8.0), (10.0, 12.5)]),
+            Icon::Forward => pen.polyline(&[(6.0, 3.5), (10.5, 8.0), (6.0, 12.5)]),
+            Icon::Check => pen.polyline(&[(3.0, 8.5), (6.5, 12.0), (13.0, 4.5)]),
+            Icon::Refresh => pen.refresh(),
+            Icon::Close => {
+                pen.polyline(&[(4.5, 4.5), (11.5, 11.5)]);
+                pen.polyline(&[(11.5, 4.5), (4.5, 11.5)]);
+            }
+            Icon::Reveal => pen.reveal(),
+            Icon::Bolt => {
+                let bolt = polygon(&[
+                    (9.0, 1.5),
+                    (3.5, 9.0),
+                    (7.5, 9.0),
+                    (6.5, 14.5),
+                    (12.5, 7.0),
+                    (8.5, 7.0),
+                ]);
+                pen.frame.fill(&bolt, pen.on);
+            }
+            Icon::Plug => pen.plug(),
+            Icon::Mic { muted } => pen.mic(muted),
+            Icon::Speaker => pen.speaker(),
+            Icon::Headphones => pen.headphones(),
+            Icon::Display => pen.display(),
         }
         vec![frame.into_geometry()]
     }
@@ -199,6 +226,130 @@ impl Pen<'_> {
                 .with_line_cap(LineCap::Round)
                 .with_line_join(LineJoin::Round),
         );
+    }
+
+    fn polyline(&mut self, points: &[(f32, f32)]) {
+        let path = Path::new(|path| {
+            let mut points = points.iter().map(|&(x, y)| Point::new(x, y));
+            if let Some(first) = points.next() {
+                path.move_to(first);
+                points.for_each(|point| path.line_to(point));
+            }
+        });
+        self.line(&path, self.on);
+    }
+
+    fn outline(&mut self, x: f32, y: f32, width: f32, height: f32, radius: f32) {
+        let path =
+            Path::rounded_rectangle(Point::new(x, y), Size::new(width, height), radius.into());
+        self.line(&path, self.on);
+    }
+
+    fn block(&mut self, x: f32, y: f32, width: f32, height: f32, radius: f32) {
+        let path =
+            Path::rounded_rectangle(Point::new(x, y), Size::new(width, height), radius.into());
+        self.frame.fill(&path, self.on);
+    }
+
+    fn dot(&mut self, x: f32, y: f32, radius: f32) {
+        self.frame
+            .fill(&Path::circle(Point::new(x, y), radius), self.on);
+    }
+
+    fn lock(&mut self) {
+        self.outline(3.5, 7.25, 9.0, 6.75, 1.75);
+        let shackle = Path::new(|path| {
+            path.move_to(Point::new(5.5, 7.25));
+            path.line_to(Point::new(5.5, 5.25));
+            path.arc(Arc {
+                center: Point::new(8.0, 5.25),
+                radius: 2.5,
+                start_angle: Radians(PI),
+                end_angle: Radians(TAU),
+            });
+            path.line_to(Point::new(10.5, 7.25));
+        });
+        self.line(&shackle, self.on);
+    }
+
+    fn info(&mut self) {
+        self.line(&Path::circle(Point::new(8.0, 8.0), 6.25), self.on);
+        self.polyline(&[(8.0, 7.5), (8.0, 11.0)]);
+        self.dot(8.0, 5.0, 0.9);
+    }
+
+    /// Most of a circle, and the arrowhead at its open end.
+    fn refresh(&mut self) {
+        let circle = arc(Point::new(8.0, 8.0), 5.25, 0.0, 1.75 * PI);
+        self.line(&circle, self.on);
+        self.polyline(&[(12.25, 1.75), (12.25, 4.75), (9.25, 4.75)]);
+    }
+
+    fn reveal(&mut self) {
+        let eye = Path::new(|path| {
+            path.move_to(Point::new(1.5, 8.0));
+            path.quadratic_curve_to(Point::new(8.0, -1.0), Point::new(14.5, 8.0));
+            path.quadratic_curve_to(Point::new(8.0, 17.0), Point::new(1.5, 8.0));
+            path.close();
+        });
+        self.line(&eye, self.on);
+        self.line(&Path::circle(Point::new(8.0, 8.0), 2.0), self.on);
+    }
+
+    fn plug(&mut self) {
+        self.polyline(&[(5.5, 1.5), (5.5, 4.5)]);
+        self.polyline(&[(10.5, 1.5), (10.5, 4.5)]);
+        let body = Path::new(|path| {
+            path.move_to(Point::new(3.5, 4.5));
+            path.line_to(Point::new(12.5, 4.5));
+            path.line_to(Point::new(12.5, 7.0));
+            path.arc(Arc {
+                center: Point::new(8.0, 7.0),
+                radius: 4.5,
+                start_angle: Radians(0.0),
+                end_angle: Radians(PI),
+            });
+            path.close();
+        });
+        self.line(&body, self.on);
+        self.polyline(&[(8.0, 11.5), (8.0, 14.5)]);
+    }
+
+    fn mic(&mut self, muted: bool) {
+        self.outline(5.75, 1.75, 4.5, 8.0, 2.25);
+        self.line(&arc(Point::new(8.0, 7.75), 4.5, 0.0, PI), self.on);
+        self.polyline(&[(8.0, 12.25), (8.0, 14.5)]);
+        if muted {
+            self.slash(Point::new(2.5, 2.5), Point::new(13.5, 13.5));
+        }
+    }
+
+    fn speaker(&mut self) {
+        self.outline(3.5, 1.75, 9.0, 12.5, 2.0);
+        self.line(&Path::circle(Point::new(8.0, 9.75), 2.25), self.on);
+        self.dot(8.0, 4.75, 0.9);
+    }
+
+    fn headphones(&mut self) {
+        let band = Path::new(|path| {
+            path.move_to(Point::new(2.5, 11.0));
+            path.line_to(Point::new(2.5, 8.5));
+            path.arc(Arc {
+                center: Point::new(8.0, 8.5),
+                radius: 5.5,
+                start_angle: Radians(PI),
+                end_angle: Radians(TAU),
+            });
+            path.line_to(Point::new(13.5, 11.0));
+        });
+        self.line(&band, self.on);
+        self.block(1.75, 9.5, 3.0, 4.75, 1.0);
+        self.block(11.25, 9.5, 3.0, 4.75, 1.0);
+    }
+
+    fn display(&mut self) {
+        self.outline(1.75, 2.75, 12.5, 8.5, 1.5);
+        self.polyline(&[(5.5, 13.75), (10.5, 13.75)]);
     }
 
     /// A slash with a gap of island background on either side, so it reads as cut through

@@ -3,16 +3,21 @@
 mod alternate;
 mod app;
 mod apps;
+mod clip;
 mod config;
 mod counter;
+mod ease;
+mod field;
 mod gulp;
 mod icon;
 mod island;
 mod kit;
+mod meter;
 mod slot;
 mod squircle;
 mod switcher;
 mod theme;
+mod toggle;
 mod watch;
 
 use eave_api::Registry;
