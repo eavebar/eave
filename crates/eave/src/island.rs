@@ -145,6 +145,10 @@ const SQUISH: Feel = Feel {
 struct Motion {
     /// Where the pointer went down, while the primary button is held.
     press: Option<Point>,
+    /// Where the island was grabbed, from the shape's top left: the drag stretches the shape most
+    /// there. Kept after letting go until it's back in place, so the spring back stays there too.
+    grab: Option<Vector>,
+    /// How far the drag pulls: the island under the pointer moves this far, the rest less.
     x: Spring,
     y: Spring,
     /// How far each side has moved in.
@@ -174,6 +178,7 @@ impl Default for Motion {
     fn default() -> Self {
         Self {
             press: None,
+            grab: None,
             x: Spring::new(0.0, PLAYFUL),
             y: Spring::new(0.0, PLAYFUL),
             inset: Spring::new(0.0, PLAYFUL),
@@ -309,6 +314,7 @@ impl PopoverMotion {
 impl Motion {
     fn press(&mut self, at: Point) {
         self.press = Some(at);
+        self.grab = Some(at - self.edges.rect().position());
         self.inset.target = theme::PRESS_INSET;
     }
 
@@ -553,6 +559,7 @@ impl Motion {
     fn step(&mut self, now: Instant) -> bool {
         self.aim();
         if self.at_rest() {
+            self.let_go_of_grab();
             self.last = None;
             return false;
         }
@@ -573,10 +580,18 @@ impl Motion {
         if self.at_rest() {
             self.springs().for_each(Spring::settle);
             self.jelly.settle();
+            self.let_go_of_grab();
             self.last = None;
             return false;
         }
         true
+    }
+
+    /// Forgets where it was grabbed, once it's let go and back in place.
+    fn let_go_of_grab(&mut self) {
+        if self.press.is_none() {
+            self.grab = None;
+        }
     }
 
     /// Whether a closing popover is all the way back to the island, and nobody's been told yet.
@@ -646,11 +661,30 @@ impl Motion {
         )
     }
 
+    /// How far the whole island has moved: its share of the drag, and any nudge.
     fn offset(&self) -> Vector {
         Vector::new(
-            self.x.value + self.push_x.value,
-            self.y.value + self.push_y.value,
+            self.x.value * theme::DRAG_FOLLOW + self.push_x.value,
+            self.y.value * theme::DRAG_FOLLOW + self.push_y.value,
         )
+    }
+
+    /// The rest of the drag: how far it stretches the point `at` of the drawn `shape`, all the
+    /// way at the grab and less further from it, easing to nothing at `DRAG_REACH`.
+    fn pull(&self, shape: Rectangle, at: Point) -> Vector {
+        let Some(grab) = self.grab else {
+            return Vector::ZERO;
+        };
+        let distance = at.distance(shape.position() + grab);
+        let near = (1.0 - distance / theme::DRAG_REACH).clamp(0.0, 1.0);
+        // Eased, so the stretch has no crease where it starts.
+        let near = near * near * (3.0 - 2.0 * near) * (1.0 - theme::DRAG_FOLLOW);
+        Vector::new(self.x.value * near, self.y.value * near)
+    }
+
+    /// Whether a drag stretches the shape right now.
+    fn pulled(&self) -> bool {
+        self.grab.is_some() && (self.x.value != 0.0 || self.y.value != 0.0)
     }
 
     /// How far an item laid out at `x` is from where it's drawn, and how much it shows.
@@ -820,25 +854,37 @@ fn draw_island<M>(
         * Transformation::scale(scale)
         * Transformation::translate(-center.x, -center.y);
 
-    // The frame clips to its size: it has room all round for the jelly.
-    let room = theme::NUDGE_BUMP_ROOM;
-    let bent = !motion.jelly.is_flat();
+    // The frame clips to its size: it has room all round for the jelly and the stretch.
+    let room = Vector::new(
+        theme::NUDGE_BUMP_ROOM + theme::DRAG_LIMIT_X,
+        theme::NUDGE_BUMP_ROOM + theme::DRAG_LIMIT_Y,
+    );
+    let pulled = motion.pulled();
+    let bent = !motion.jelly.is_flat() || pulled;
     if state.shape_bent.replace(bent) || bent {
         state.shape.clear();
     }
 
     renderer.with_translation(motion.offset(), |renderer| {
         renderer.with_transformation(transformation, |renderer| {
-            let frame_size = Size::new(shape.width + 2.0 * room, shape.height + 2.0 * room);
+            let frame_size = Size::new(shape.width + 2.0 * room.x, shape.height + 2.0 * room.y);
             let geometry = state.shape.draw(renderer, frame_size, |frame| {
                 let size = shape.size();
                 let radius = theme::ISLAND_RADIUS;
                 let smoothing = theme::ISLAND_SMOOTHING;
-                let outline = Rectangle::new(Point::new(room, room), size);
-                // Bent by the jelly while it moves, both paths the same way.
+                let outline = Rectangle::new(Point::ORIGIN + room, size);
+                // Bent by the jelly and stretched by the drag while they move, both paths the
+                // same way.
                 let bend = |path: Path| {
                     if bent {
-                        warp(&path, |at| motion.jelly.displace(outline, at))
+                        warp(&path, |at| {
+                            let at = motion.jelly.displace(outline, at);
+                            if pulled {
+                                at + motion.pull(outline, at)
+                            } else {
+                                at
+                            }
+                        })
                     } else {
                         path
                     }
@@ -849,7 +895,7 @@ fn draw_island<M>(
                 );
                 // Half a pixel in, so the whole hairline lands inside the fill.
                 let inset = Rectangle::new(
-                    Point::new(room + 0.5, room + 0.5),
+                    Point::new(room.x + 0.5, room.y + 0.5),
                     Size::new(size.width - 1.0, size.height - 1.0),
                 );
                 frame.stroke(
@@ -859,12 +905,14 @@ fn draw_island<M>(
                         .with_width(1.0),
                 );
             });
-            renderer.with_translation(Vector::new(shape.x - room, shape.y - room), |renderer| {
+            renderer.with_translation(Vector::new(shape.x, shape.y) - room, |renderer| {
                 renderer.draw_geometry(geometry);
             });
 
-            // Nothing pokes out of the shape while it changes.
-            renderer.with_layer(shape, |renderer| {
+            // Nothing pokes out of the shape while it changes, but where the drag stretched it.
+            let grab = shape.position() + motion.grab.unwrap_or_default();
+            let clip = stretched(shape, motion.pull(shape, grab));
+            renderer.with_layer(clip, |renderer| {
                 for ((key, item), (tree, child)) in keys
                     .iter()
                     .zip(items)
@@ -880,6 +928,8 @@ fn draw_island<M>(
                     // It rides along with the jelly where it is, and with the overshoot, to where
                     // the stretch takes its center. It squishes with both.
                     let moved = moved + motion.follow(bounds.center() + moved);
+                    // And it goes with the stretch where it ends up.
+                    let moved = moved + motion.pull(shape, bounds.center() + moved);
                     renderer.with_translation(moved, |renderer| {
                         squish::with(squished, || {
                             item.as_widget()
@@ -896,15 +946,32 @@ fn draw_island<M>(
                     if shown >= REST_DISTANCE
                         && let Some(visible) = layout.bounds().intersection(&shape)
                     {
-                        panel
-                            .as_widget()
-                            .draw(tree, renderer, theme, style, layout, cursor, &visible);
-                        fade(renderer, layout.bounds(), shape, shown);
+                        let moved = motion.pull(shape, layout.bounds().center());
+                        renderer.with_translation(moved, |renderer| {
+                            panel.as_widget().draw(
+                                tree,
+                                renderer,
+                                theme,
+                                style,
+                                layout,
+                                cursor,
+                                &(visible - moved),
+                            );
+                            fade(renderer, layout.bounds(), shape - moved, shown);
+                        });
                     }
                 }
             });
         });
     });
+}
+
+/// `shape`, grown by `pull` the way it points, to take in what the drag stretched out of it.
+fn stretched(shape: Rectangle, pull: Vector) -> Rectangle {
+    Rectangle::new(
+        Point::new(shape.x + pull.x.min(0.0), shape.y + pull.y.min(0.0)),
+        Size::new(shape.width + pull.x.abs(), shape.height + pull.y.abs()),
+    )
 }
 
 /// Fades what was just drawn in `bounds` toward the island's background. iced has no group
@@ -1306,6 +1373,32 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
                 shell.capture_event();
             }
         }
+        // A press the panel's content left alone grabs the popover, like a press on an island
+        // does. One on a control doesn't, so a slider doesn't stretch the panel too. The drag is
+        // followed here as well: what the overlay captures never reaches the island.
+        let motion = &mut state.motion;
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                if popover.open && !shell.is_event_captured() =>
+            {
+                if let Some(at) = cursor.position_over(motion.edges.rect()) {
+                    motion.press(at);
+                    shell.request_redraw();
+                }
+            }
+            Event::Mouse(mouse::Event::CursorMoved { position }) if motion.press.is_some() => {
+                motion.drag(*position);
+                shell.request_redraw();
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+            | Event::Mouse(mouse::Event::CursorLeft)
+                if motion.press.is_some() =>
+            {
+                motion.release();
+                shell.request_redraw();
+            }
+            _ => {}
+        }
         // A press anywhere on the shape is the popover's, handled or not: it isn't a click on the
         // bar, which would close it.
         if let Event::Mouse(mouse::Event::ButtonPressed(_)) = event
@@ -1648,6 +1741,44 @@ mod tests {
         assert!(lowest > -pulled / 2.0, "but only a little: {lowest}");
         assert_eq!(motion.offset(), Vector::ZERO);
         assert_eq!(motion.inset.value, 0.0);
+    }
+
+    #[test]
+    fn a_drag_stretches_most_where_it_was_grabbed() {
+        let island = rect(100.0, 300.0);
+        let mut motion = settled(island, &[1]);
+        motion.press(Point::new(120.0, 20.0));
+        motion.drag(Point::new(320.0, 20.0));
+        run(&mut motion, Instant::now(), |_| {});
+        assert!(motion.pulled());
+
+        let shape = motion.shape();
+        let at_grab = motion.pull(shape, Point::new(120.0, 20.0)).x;
+        let nearby = motion.pull(shape, Point::new(150.0, 20.0)).x;
+        let far = motion.pull(shape, Point::new(380.0, 20.0)).x;
+        assert!(at_grab > nearby && nearby > 0.0, "{at_grab} {nearby}");
+        assert_eq!(far, 0.0);
+        // Under the pointer, the island goes the whole way: its share plus the stretch.
+        let whole = motion.offset().x + at_grab;
+        assert!((whole - motion.x.value).abs() < 0.01, "{whole}");
+        assert!(whole > motion.offset().x * 2.0);
+    }
+
+    #[test]
+    fn letting_go_of_a_stretch_forgets_where_it_was_grabbed() {
+        let mut motion = settled(rect(100.0, 300.0), &[1]);
+        motion.press(Point::new(120.0, 20.0));
+        motion.drag(Point::new(200.0, 40.0));
+        run(&mut motion, Instant::now(), |_| {});
+        motion.release();
+        let mut stretched = false;
+        run(&mut motion, Instant::now(), |motion| {
+            stretched |= motion.pulled();
+        });
+        assert!(stretched, "springs back where it was grabbed");
+        assert_eq!(motion.grab, None);
+        assert!(!motion.pulled());
+        assert_eq!(motion.offset(), Vector::ZERO);
     }
 
     #[test]

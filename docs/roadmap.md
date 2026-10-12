@@ -9,7 +9,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **0.5 Plugin foundation.** Workspace split into `eave-api` (SDK), `eave` (host) and `eave-build`. Closed UI vocabulary, type-erased widget registry, `config.toml` zones (empty bar without it), the clock rewritten as a plugin with a calendar popover, host-owned popover layer surfaces in daemon mode, and third-party plugins compiled in from git ([D-11–D-15](decisions.md)).
 
 - [x] **5.5 Floating islands.** Left, center and right zones drawn as rounded islands that fit their items and vanish when empty, with a gap from the screen edges ([D-24](decisions.md)).
-- [x] **5.6 Islands you can touch.** Squircle corners. A press squeezes the island, a drag pulls it with a rubber band, and a spring snaps it back, all on the frame clock ([D-26](decisions.md)).
+- [x] **5.6 Islands you can touch.** Squircle corners. A press squeezes the island, a drag pulls it with a rubber band, and a spring snaps it back, all on the frame clock ([D-26](decisions.md)). Drags stretch it near the pointer, popovers too ([D-45](decisions.md)).
 - [x] **5.7 Islands that morph.** Islands spring to their new shape when items come or go, items slide and fade in, and a popover grows out of its island instead of opening its own surface ([D-27](decisions.md), [D-28](decisions.md)).
 - [x] **5.9 Nudges.** A plugin can nudge its island: volume bumps the edge above or below its icon, and switching workspace pushes the island the way it went ([D-32](decisions.md)).
 - [x] **5.10 Hover.** An alternate can show another option while its item is hovered: volume and battery show their percent, the clock its date ([D-35](decisions.md)).

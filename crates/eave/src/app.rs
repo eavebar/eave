@@ -104,6 +104,8 @@ pub enum Message {
     PopoverPlaced(u64, Rectangle),
     /// An island finished turning back from a popover.
     PopoverClosed(u64),
+    /// A bar surface opened: it takes the pointer only over its strip.
+    WindowOpened(window::Id),
     WindowClosed(window::Id),
     /// `config.toml` changed on disk: the new contents, or why they couldn't be loaded.
     ConfigChanged(Result<Config, String>),
@@ -308,7 +310,7 @@ impl Bar {
         let height = rects
             .iter()
             .map(|rect| (rect.y + rect.height).ceil() as u32 + u32::from(style::EDGE_GAP))
-            .fold(style::BAR_HEIGHT, u32::max);
+            .fold(style::SURFACE_HEIGHT, u32::max);
         let callback = ActionCallback::new(move |region| {
             // iced_layershell reuses one region and only clears the surface's current size, which
             // may be the old one: clear all of it, so no earlier popover's rect is left behind.
@@ -478,6 +480,7 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             let popover = bar.popovers.remove(position);
             bar.fit(popover.window)
         }
+        Message::WindowOpened(window) => bar.fit(window),
         Message::WindowClosed(window) => {
             bar.popovers.retain(|popover| popover.window != window);
             if bar.keyboard == Some(window) {
@@ -605,6 +608,7 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
             .map(|(id, message)| Message::Widget(id, message))
     });
     let mut subscriptions: Vec<_> = widgets.collect();
+    subscriptions.push(window::open_events().map(Message::WindowOpened));
     subscriptions.push(window::close_events().map(Message::WindowClosed));
     subscriptions.push(watch::config_changes().map(Message::ConfigChanged));
     // Pointer, click and key tracking only while a popover is open: otherwise every hover over the
