@@ -327,6 +327,8 @@ An optional `dist/systemd/eave-rebuild.path` runs it whenever `plugins.toml` cha
 
 **Gotcha:** in Lua configs, `hyprctl dispatch <args>` is evaluated as `hl.dispatch(<args>)`, so the classic `hyprctl dispatch exec <cmd>` fails there.
 
+**Gotcha:** the rebuild unit runs under systemd, which often lacks `HYPRLAND_INSTANCE_SIGNATURE` without uwsm. The install still happened, but the restart failed, and that was reported as a failed rebuild. Since 2026-10-12, `eave-build` falls back to the only instance under `$XDG_RUNTIME_DIR/hypr` (or `/tmp/hypr`) when the variable is missing.
+
 ---
 
 ## D-23: Core plugins depend only on Hyprland and the kernel

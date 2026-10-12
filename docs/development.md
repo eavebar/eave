@@ -17,6 +17,8 @@ cargo install --path crates/eave-build   # then `eave-build`: install what confi
 
 ```
 
+CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs the build, tests, clippy (`-D warnings`) and rustfmt on x86_64 and aarch64 for every push to main and every pull request, then runs `install.sh` from the checkout on x86_64.
+
 To install it and start it with your session, see [running.md](running.md). To have the installed bar built from your checkout instead of GitHub, put `eave = "~/path/to/eave"` at the top of config.toml. Then `eave-build` builds your working tree as it is, uncommitted changes included.
 
 Without `~/.config/eave/config.toml` the bar is empty. A minimal config:

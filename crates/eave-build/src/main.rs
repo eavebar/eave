@@ -578,13 +578,9 @@ fn restart_bar(binary: &Path) -> Result<()> {
         return Ok(());
     }
     // Check before stopping anything: without Hyprland we couldn't bring the bar back.
-    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
-        return Err(
-            "eave is running, but HYPRLAND_INSTANCE_SIGNATURE isn't set, so it can't be \
-             relaunched through Hyprland; restart it yourself"
-                .into(),
-        );
-    }
+    let socket = hyprland_socket().map_err(|error| {
+        format!("eave is running, but it can't be relaunched through Hyprland ({error}); restart it yourself")
+    })?;
 
     for &pid in &pids {
         let pid =
@@ -615,8 +611,11 @@ fn restart_bar(binary: &Path) -> Result<()> {
     // `eval` launched nothing, so trying both can't start two bars.
     // Both run the command through a shell.
     let command = shell_quote(&binary.to_string_lossy());
-    let launched = hyprland(&format!("eval hl.exec_cmd({})", lua_string(&command)))
-        .or_else(|_| hyprland(&format!("dispatch exec {command}")));
+    let launched = hyprland(
+        &socket,
+        &format!("eval hl.exec_cmd({})", lua_string(&command)),
+    )
+    .or_else(|_| hyprland(&socket, &format!("dispatch exec {command}")));
     if let Err(error) = launched {
         return Err(format!("relaunching eave through Hyprland: {error}"));
     }
@@ -624,21 +623,48 @@ fn restart_bar(binary: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Hyprland's request socket. `HYPRLAND_INSTANCE_SIGNATURE` names the instance. Without it, as
+/// in a systemd unit when the session didn't export it, the one running instance is used.
+fn hyprland_socket() -> Result<PathBuf> {
+    // Hyprland moved its sockets from /tmp/hypr to $XDG_RUNTIME_DIR/hypr in 0.40.
+    let dirs: Vec<PathBuf> = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|dir| PathBuf::from(dir).join("hypr"))
+        .into_iter()
+        .chain([PathBuf::from("/tmp/hypr")])
+        .collect();
+    if let Some(signature) = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE") {
+        let dir = dirs
+            .iter()
+            .find(|dir| dir.join(&signature).exists())
+            .unwrap_or(&dirs[dirs.len() - 1]);
+        return Ok(dir.join(signature).join(".socket.sock"));
+    }
+    dirs.iter()
+        .find_map(|dir| only_instance(dir))
+        .ok_or_else(|| {
+            "HYPRLAND_INSTANCE_SIGNATURE isn't set, and there isn't exactly one Hyprland running"
+                .into()
+        })
+}
+
+/// The request socket of the only Hyprland instance in `dir`. None when there are none, or
+/// several and we can't tell which one is ours.
+fn only_instance(dir: &Path) -> Option<PathBuf> {
+    let mut sockets = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path().join(".socket.sock"))
+        .filter(|socket| socket.exists());
+    let socket = sockets.next()?;
+    sockets.next().is_none().then_some(socket)
+}
+
 /// One command on Hyprland's request socket, as `hyprctl` sends it, without needing `hyprctl`.
 /// Hyprland answers `ok` on success and an error message otherwise.
-fn hyprland(command: &str) -> Result<()> {
+fn hyprland(path: &Path, command: &str) -> Result<()> {
     use std::io::{Read, Write};
 
-    let signature = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")
-        .ok_or("HYPRLAND_INSTANCE_SIGNATURE isn't set")?;
-    // Hyprland moved its sockets from /tmp/hypr to $XDG_RUNTIME_DIR/hypr in 0.40.
-    let dir = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(|dir| PathBuf::from(dir).join("hypr"))
-        .filter(|dir| dir.join(&signature).exists())
-        .unwrap_or_else(|| PathBuf::from("/tmp/hypr"));
-    let path = dir.join(signature).join(".socket.sock");
-
-    let mut socket = std::os::unix::net::UnixStream::connect(&path)
+    let mut socket = std::os::unix::net::UnixStream::connect(path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let mut reply = String::new();
     socket
@@ -922,6 +948,25 @@ mod tests {
             binary
         ));
         assert!(!is_bar("eave-build\n", binary, binary));
+    }
+
+    #[test]
+    fn finds_the_only_hyprland_instance() {
+        let dir = std::env::temp_dir().join(format!("eave-build-hypr-{}", std::process::id()));
+        let instance = |name: &str| {
+            std::fs::create_dir_all(dir.join(name)).unwrap();
+            std::fs::write(dir.join(name).join(".socket.sock"), "").unwrap();
+        };
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(only_instance(&dir), None);
+        instance("a");
+        // A leftover directory without a socket doesn't count.
+        std::fs::create_dir_all(dir.join("stale")).unwrap();
+        assert_eq!(only_instance(&dir), Some(dir.join("a/.socket.sock")));
+        instance("b");
+        assert_eq!(only_instance(&dir), None);
+        assert_eq!(only_instance(&dir.join("missing")), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -76,4 +76,9 @@ else
 fi
 
 say "done. Edit $config: it applies as you save."
-say "Update with: eave-build update"
+if [ "$(command -v eave-build)" = "$eave_build" ]; then
+	say "Update with: eave-build update"
+else
+	say "Update with: $eave_build update"
+	say "($(dirname "$eave_build") isn't on your PATH: add it to call eave-build by name)"
+fi
