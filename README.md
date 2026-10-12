@@ -8,7 +8,7 @@ Everything in it is a plugin, compiled in rather than loaded at runtime. Plugins
 
 ## Install
 
-You need Hyprland, Rust (`cargo`) and `git`:
+You need Hyprland, Rust (`cargo`), `git` and `pkg-config` (Arch and CachyOS have it already):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/francescomengarelli/eave/main/install.sh | sh

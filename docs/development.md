@@ -4,7 +4,7 @@
 
 - Rust (stable, edition 2024). Developed with 1.97.
 - A running Hyprland session (the bar needs a Wayland compositor with layer-shell).
-- System libraries: `wayland`, `libxkbcommon`. For the `gpu` feature, also a Vulkan loader plus drivers (Mesa on Asahi).
+- System libraries: `wayland`, `libxkbcommon` (with its headers), and `pkg-config` to find it at build time. Arch and CachyOS have all of them with Hyprland; Debian-like systems need `libxkbcommon-dev pkg-config`. For the `gpu` feature, also a Vulkan loader plus drivers (Mesa on Asahi).
 
 ## Build and run
 
