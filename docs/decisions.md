@@ -703,7 +703,7 @@ There's still one hover path for everything. `Slot` follows the pointer, and not
 
 ## D-40: A popover vocabulary: lists, sections, controls, one panel width
 
-**Status:** proposed (2026-10-12)
+**Status:** accepted (2026-10-13)
 
 **What:** popovers were a heading, labels and plain buttons, laid out at their natural size. That can't show a Wi-Fi list with the current network marked and an info button at the right edge, a volume slider, or battery health that reads at a glance. The `ui` vocabulary grows by:
 - **Rows:** `list_item(title)` with `.subtitle`, `.leading`, `.trailing`, `.selected` and `.on_press`; `list(rows)`, which scrolls past `LIST_MAX_ROWS`.
@@ -723,11 +723,15 @@ The designs were agreed first as mockups, kept in `docs/mockups/`.
 - A few panel widths chosen by plugins (`Panel::compact()`): the short lists look fine at the one width, so not yet.
 - A canvas node: D-13 says primitives first.
 
+**How it's drawn:** `kit::panel` renders a popover's nodes knowing it's in a panel (`kit::node` for the bar collapses `fill` and doesn't scroll lists). New host widgets: `toggle.rs` and `meter.rs` ease on the frame clock and ask for no frames at rest, `field.rs` boxes iced's text input, `clip.rs` cuts a long line and fades its end into what's behind it (iced 0.14 can't ellipsize). The island lays the panel out at `PANEL_WIDTH` and passes the visible part of its shape as the viewport, so a scrolling list clips to the shape while it grows. `Node::map` now takes `Clone + 'static` functions, because sliders and text fields keep it to map the messages they make later. The counter got a size and font for `display`.
+
+**Measured** (Asahi, release, the user's config, alternating runs, no popover open): binary 8,285,248 → 8,547,392 bytes for the kit (+256 KB: iced's text input, slider and scrollable, and the new widgets). RSS ~15.7 → ~16.5 MB, idle CPU unchanged (6–7 ticks per 10 s for both). The rest of the branch's growth is in D-42.
+
 ---
 
 ## D-41: Text fields in popovers
 
-**Status:** proposed (2026-10-12). Amends D-36.
+**Status:** accepted (2026-10-13). Amends D-36.
 
 **What:** `ui::text_input(placeholder, value, on_input)`, with `.on_submit` and `.secret()`. It's for joining a Wi-Fi network with a password. It focuses itself when it appears. D-36's rule changes to: any key closes the popover unless a text field in it is focused. Esc always closes it, focused or not. The island asks the panel's widgets whether a field has focus (a widget operation) and keeps every key while one does, so a lone Shift or an arrow doesn't close it.
 
@@ -739,7 +743,7 @@ The designs were agreed first as mockups, kept in `docs/mockups/`.
 
 ## D-42: Wi-Fi controls through iwd
 
-**Status:** proposed (2026-10-12). Amends D-23 for the network popover.
+**Status:** accepted (2026-10-13). Amends D-23 for the network popover.
 
 **What:** the kernel can list networks but can't join a WPA one, so the network popover's controls go through iwd's D-Bus API, in `crates/eave-iwd` on `eave-dbus`: the list of networks with signal, security and whether they're saved; scan; connect (with a passphrase through an iwd agent eave serves); disconnect; forget; auto-join; power. The bar item and the connection details stay kernel-only (`eave-net`). Without iwd, or without permission to use it (iwd allows root and the `wheel` and `network` groups), the popover shows the kernel's details and says Wi-Fi controls need iwd.
 
@@ -748,3 +752,9 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 **Why iwd and not NetworkManager:** iwd's API is small (station, network, known network, agent), and NetworkManager can run on top of it. NetworkManager's API is much larger and doesn't cover iwd-only or systemd-networkd setups.
 
 **What we give up:** controls on wpa_supplicant-only machines. They keep the read-only details.
+
+**How:** `eave_dbus::watch_all` re-reads on any signal from iwd (objects come and go while it scans), and the snapshot is one `GetManagedObjects` plus `Station.GetOrderedNetworks` for the signal order. Being turned away (`AccessDenied`) or iwd not running are states, not errors, so the popover can say which. The agent is a zbus interface served on the shared system connection and registered before each password join. iwd sends the request to the agent of whoever called `Connect`, so NetworkManager's agent doesn't get it. Checked live on this machine, where NetworkManager runs on top of iwd: the listing, signal order, saved networks and diagnostics come through.
+
+**Measured** (Asahi, release): the network popover, eave-dbus (first used here) and eave-iwd add ~787 KB of binary (8,612,928 → 9,399,648 bytes): zbus's object server, the `interface` macro's code, the fdo proxies, and zbus's tokio integration. zbus was already in the binary through `mundy`, on async-io. Building eave-dbus on zbus's `async-io` instead of `tokio` saves ~200 KB (9,202,864 bytes) but brings back the second executor D-7 avoided, so it stays on tokio. With the popover closed nothing watches iwd, so idle RSS and CPU don't change.
+
+**Other popovers on this branch:** eave-pulse now lists inputs (monitors left out) and apps' streams, with each device's kind from its port or properties. Its one event thread subscribes to sinks, sources, sink inputs and the server, and tells watchers what changed, so stream events never wake the bar item. Streams are read only while the sound popover is open, and a slider drag sends one level at a time. +64 KB. The battery reads design capacity, cycles, temperature, health, its charge limit and whether a charger is plugged in, from the same sysfs files on the same events. The keyboard reads layout names once from xkb's `evdev.lst`, a static data file, not a daemon.

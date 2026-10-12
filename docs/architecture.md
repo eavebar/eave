@@ -13,7 +13,7 @@ eave keeps these apart. The **host** does the first job and owns everything visu
 
 ```
 ┌──────────────────────────────── host (crates/eave) ────────────────────────────────┐
-│ surfaces: bar + popovers · zones from config.toml · theme · kit (nodes → pixels)   │
+│ surfaces: bars (popovers grow out of islands) · zones · theme · kit (nodes → pixels)│
 │ click routing · popover lifecycle · animation                                      │
 └───────────────▲───────────────────────────────────────────────▲────────────────────┘
                 │ Item / Panel (closed vocabulary)               │ Effect (task, open/close popover)
@@ -28,7 +28,7 @@ eave keeps these apart. The **host** does the first job and owns everything visu
 
 - **Host** ([D-11](decisions.md)): owns every surface, the layout, the look and the motion. It is not pluggable.
 - **Widgets** implement `eave_api::Widget`. They can't pick colors or sizes, can't build raw iced elements, and can't move other items or the bar ([D-13](decisions.md)).
-- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-net` holds one netlink listener for links, addresses, routes and Wi-Fi ([D-23](decisions.md)). `crates/eave-dbus` shares one system bus connection ([D-18](decisions.md)). `crates/eave-pulse` holds the one audio event subscription ([D-19](decisions.md)).
+- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-net` holds one netlink listener for links, addresses, routes and Wi-Fi ([D-23](decisions.md)). `crates/eave-dbus` shares one system bus connection ([D-18](decisions.md)). `crates/eave-pulse` holds the one audio event subscription ([D-19](decisions.md)). `crates/eave-iwd` controls Wi-Fi through iwd, watched only while the network popover is open ([D-42](decisions.md)).
 
 Core plugins depend only on Hyprland and the kernel, plus an audio server for volume. They don't need UPower, NetworkManager or any other daemon or binary to be installed ([D-23](decisions.md)).
 
@@ -101,8 +101,14 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/slot.rs              item wrapper: clicks, scroll steps, and the pointer for alternates
   src/alternate.rs         alternate: one option at a time with fades; hover, and growing (expand)
   src/switcher.rs          switcher: row of options with a sliding, frame-paced mark
+  src/toggle.rs            toggle: a pill whose knob slides over
+  src/meter.rs             meter: a thin bar eased to its value, with an optional limit tick
+  src/field.rs             text field box, its focus on appearing, and the focus query popovers use
+  src/clip.rs              a line of text cut at its room, fading at the end
+  src/ease.rs              a number eased to each new value on the frame clock
 crates/eave-build/         builds the widgets config.toml uses, installs and restarts; `update`, `init`
 crates/eave-dbus/          service: shared system bus, snapshot-on-PropertiesChanged watcher
+crates/eave-iwd/           service: Wi-Fi networks and controls through iwd's D-Bus API, and a passphrase agent
 crates/eave-net/           service: network state from the kernel over netlink (one event thread)
 crates/eave-pulse/         service: audio over the PulseAudio protocol (one event thread)
 crates/eave-hyprland/      service: shared socket2 events, socket1 queries and dispatches
@@ -111,7 +117,7 @@ plugins/workspaces/        Hyprland workspaces (eave-workspaces)
 plugins/window/            focused window title (eave-window)
 plugins/keyboard/          keyboard layout (eave-keyboard)
 plugins/battery/           battery from sysfs (eave-battery)
-plugins/network/           primary connection, via eave-net (eave-network)
+plugins/network/           primary connection, via eave-net; Wi-Fi to join via eave-iwd (eave-network)
 plugins/volume/            output volume and switching (eave-volume)
 vendor/softbuffer/         softbuffer 0.4.8 with an alpha-carrying Wayland buffer (D-25)
 dist/systemd/              user units: the bar, and the rebuild-on-config.toml pair
@@ -126,5 +132,5 @@ The rule: **split a file when it gets a second responsibility, not before.** Eac
 - `#[to_layer_message(multi)]` on `Message` adds the variants `iced_layershell` uses to create and control surfaces (`SizeChange`, `SetInputRegion`, `NewLayerShell`, `RemoveWindow`, …). `update` must handle them with a catch-all arm.
 - Margin tuples are `(top, right, bottom, left)`, despite the macro's doc comment.
 - Surfaces are transparent. The islands (popovers included) draw their own backgrounds, which is what gives them rounded corners and lets the wallpaper show around the islands. With the CPU renderer that needs our patched softbuffer ([D-25](decisions.md)).
-- `KeyboardInteractivity::None`: the bar and its popovers never steal keyboard focus. Something that needs typing (a launcher) will need its own settings.
+- `KeyboardInteractivity::None`, except while a popover is open: then its bar takes the keyboard (`Exclusive`), any key closes the popover, and keys stay with a focused text field in it ([D-36](decisions.md), [D-41](decisions.md)).
 - The bar opens on the active output (`StartMode` default). In daemon mode, every window is drawn as a bar, and popovers remember which bar they grew on, so one bar per monitor (`StartMode::AllScreens`) mostly needs per-output state.
