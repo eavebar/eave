@@ -48,6 +48,10 @@ pub const SPRING_DAMPING: f32 = 0.5;
 /// popover and back. Damped close to critical, so it settles without wobbling.
 pub const MORPH_STIFFNESS: f32 = 380.0;
 pub const MORPH_DAMPING: f32 = 0.9;
+/// The spring an island's items fade out on as it turns into a popover, and the popover's content
+/// fades in on (and back). Critically damped, so a fade never overshoots.
+pub const FADE_STIFFNESS: f32 = 1500.0;
+pub const FADE_DAMPING: f32 = 1.0;
 /// Horizontal padding inside each item, so its click target is wider than its text.
 pub const ITEM_PADDING: u16 = 6;
 pub const ITEM_SPACING: u32 = 4;

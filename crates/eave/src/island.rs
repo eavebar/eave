@@ -91,6 +91,12 @@ const MORPH: Feel = Feel {
     stiffness: theme::MORPH_STIFFNESS,
     damping: theme::MORPH_DAMPING,
 };
+/// The handover between an island's items and its popover's content: quicker than the shape, so
+/// one side is gone in time for the other to come in while the shape still moves.
+const FADE: Feel = Feel {
+    stiffness: theme::FADE_STIFFNESS,
+    damping: theme::FADE_DAMPING,
+};
 
 /// Where everything is going and how it's moving there. Positions are in logical pixels, in
 /// surface coordinates; fades go from 0 (hidden) to 1 (shown).
@@ -226,8 +232,8 @@ impl Default for PopoverMotion {
             fits: false,
             reported: None,
             closed: false,
-            items: Spring::new(1.0, MORPH),
-            panel: Spring::new(0.0, MORPH),
+            items: Spring::new(1.0, FADE),
+            panel: Spring::new(0.0, FADE),
         }
     }
 }
@@ -331,7 +337,9 @@ impl Motion {
     }
 
     /// Points the shape and the fades where they should go now. During a popover's morph, each
-    /// side's content only fades in once the shape is more than halfway its way.
+    /// side's content only fades in once the other side's is gone and the shape is more than
+    /// halfway its way. The two never show at once: each fades by covering itself with the
+    /// island's color, which would cover the other side's content too where they overlap.
     fn aim(&mut self) {
         let Some(island) = self.island else {
             return;
@@ -341,7 +349,9 @@ impl Motion {
             (Some(panel), _) => {
                 self.edges.aim(panel);
                 popover.items.target = 0.0;
-                popover.panel.target = if self.edges.progress(island, panel) > 0.5 {
+                popover.panel.target = if popover.items.value < REST_DISTANCE
+                    && self.edges.progress(island, panel) > 0.5
+                {
                     1.0
                 } else {
                     0.0
@@ -350,7 +360,9 @@ impl Motion {
             (None, Some(panel)) if popover.present => {
                 self.edges.aim(island);
                 popover.panel.target = 0.0;
-                popover.items.target = if self.edges.progress(panel, island) > 0.5 {
+                popover.items.target = if popover.panel.value < REST_DISTANCE
+                    && self.edges.progress(panel, island) > 0.5
+                {
                     1.0
                 } else {
                     0.0
@@ -441,6 +453,11 @@ impl Motion {
         }
     }
 }
+
+/// The plain arrow, as something other than `None`, which would let the pointer through to
+/// what's under a popover. Not `Idle`: iced_layershell turns that into the busy cursor. It turns
+/// any variant it doesn't name, like this one, into the default arrow.
+const ARROW: mouse::Interaction = mouse::Interaction::ContextMenu;
 
 /// The longest step a single frame may take.
 const MAX_FRAME: Duration = Duration::from_millis(50);
@@ -1014,7 +1031,11 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             _ => mouse::Interaction::None,
         };
         // Anything but `None`, so whatever is under the shape doesn't see the pointer.
-        inner.max(mouse::Interaction::Idle)
+        if inner == mouse::Interaction::None {
+            ARROW
+        } else {
+            inner
+        }
     }
 }
 
@@ -1133,24 +1154,39 @@ mod tests {
 
         popover(&mut motion, true, panel, true);
         let mut panel_before_halfway = false;
-        run(&mut motion, Instant::now(), |motion| {
+        let mut panel_while_items = false;
+        let frames = run(&mut motion, Instant::now(), |motion| {
             if motion.edges.progress(island, panel) < 0.4 && motion.popover.panel.value > 0.01 {
                 panel_before_halfway = true;
             }
+            panel_while_items |= both_show(motion);
         });
         assert!(!panel_before_halfway, "the panel waits for the shape");
+        assert!(!panel_while_items, "the panel waits for the items to go");
+        assert!(frames < 60, "settles in {frames} frames");
         assert_eq!(motion.edges.rect(), panel);
         assert_eq!(motion.item(1, 10.0), (0.0, 0.0), "the items made way");
         assert_eq!(motion.popover.panel.value, 1.0);
         assert!(!motion.closing_done(), "open, not closing");
 
         popover(&mut motion, false, panel, true);
-        run(&mut motion, Instant::now(), |_| {});
+        let mut items_while_panel = false;
+        run(&mut motion, Instant::now(), |motion| {
+            if both_show(motion) {
+                items_while_panel = true;
+            }
+        });
+        assert!(!items_while_panel, "the items wait for the panel to go");
         assert_eq!(motion.edges.rect(), island);
         assert_eq!(motion.item(1, 10.0), (0.0, 1.0));
         assert_eq!(motion.popover.panel.value, 0.0);
         assert!(motion.closing_done());
         assert!(!motion.closing_done(), "said only once");
+    }
+
+    /// Whether the island's items and the panel's content are both drawn.
+    fn both_show(motion: &Motion) -> bool {
+        motion.popover.items.value >= REST_DISTANCE && motion.popover.panel.value >= REST_DISTANCE
     }
 
     #[test]
