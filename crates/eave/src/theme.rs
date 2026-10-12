@@ -46,9 +46,14 @@ pub const PRESS_INSET: f32 = 1.5;
 pub const DRAG_LIMIT_X: f32 = 18.0;
 pub const DRAG_LIMIT_Y: f32 = 10.0;
 /// How much of a drag moves the whole island. The rest stretches the part near where it was
-/// grabbed, less and less further away, and not at all past `DRAG_REACH`.
-pub const DRAG_FOLLOW: f32 = 0.35;
-pub const DRAG_REACH: f32 = 60.0;
+/// grabbed, less and less further away, and not at all past `DRAG_REACH`. Wide, so a pull bends
+/// the island in one long curve rather than a dent.
+pub const DRAG_FOLLOW: f32 = 0.5;
+pub const DRAG_REACH: f32 = 200.0;
+/// The spring a drag pulls the island on, and brings it back on: softer than the press, and
+/// damped enough that letting go only overshoots a little.
+pub const DRAG_STIFFNESS: f32 = 220.0;
+pub const DRAG_DAMPING: f32 = 0.7;
 /// How directly a drag moves the island at first: 1 follows the pointer, lower feels heavier.
 pub const DRAG_RESISTANCE: f32 = 0.5;
 /// The spring that moves an island back into place: stiffness, and damping ratio (below 1 it

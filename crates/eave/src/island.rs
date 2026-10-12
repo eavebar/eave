@@ -112,10 +112,15 @@ struct Feel {
     damping: f32,
 }
 
-/// The press squeeze and the drag: springy, so letting go overshoots a little.
+/// The press squeeze: springy, so letting go overshoots a little.
 const PLAYFUL: Feel = Feel {
     stiffness: theme::SPRING_STIFFNESS,
     damping: theme::SPRING_DAMPING,
+};
+/// The drag: soft, so the stretch eases after the pointer and back.
+const DRAG: Feel = Feel {
+    stiffness: theme::DRAG_STIFFNESS,
+    damping: theme::DRAG_DAMPING,
 };
 /// Nudges: back into place without swinging past.
 const NUDGE: Feel = Feel {
@@ -179,8 +184,8 @@ impl Default for Motion {
         Self {
             press: None,
             grab: None,
-            x: Spring::new(0.0, PLAYFUL),
-            y: Spring::new(0.0, PLAYFUL),
+            x: Spring::new(0.0, DRAG),
+            y: Spring::new(0.0, DRAG),
             inset: Spring::new(0.0, PLAYFUL),
             island: None,
             edges: Edges::at(Rectangle::default()),
@@ -670,15 +675,16 @@ impl Motion {
     }
 
     /// The rest of the drag: how far it stretches the point `at` of the drawn `shape`, all the
-    /// way at the grab and less further from it, easing to nothing at `DRAG_REACH`.
+    /// way at the grab and less further from it, easing to nothing at `DRAG_REACH`. Flat at both
+    /// ends, so neither the grab point nor where the stretch fades out shows as a bend.
     fn pull(&self, shape: Rectangle, at: Point) -> Vector {
         let Some(grab) = self.grab else {
             return Vector::ZERO;
         };
         let distance = at.distance(shape.position() + grab);
         let near = (1.0 - distance / theme::DRAG_REACH).clamp(0.0, 1.0);
-        // Eased, so the stretch has no crease where it starts.
-        let near = near * near * (3.0 - 2.0 * near) * (1.0 - theme::DRAG_FOLLOW);
+        let near = near * near * near * (near * (6.0 * near - 15.0) + 10.0);
+        let near = near * (1.0 - theme::DRAG_FOLLOW);
         Vector::new(self.x.value * near, self.y.value * near)
     }
 
@@ -1761,7 +1767,7 @@ mod tests {
         // Under the pointer, the island goes the whole way: its share plus the stretch.
         let whole = motion.offset().x + at_grab;
         assert!((whole - motion.x.value).abs() < 0.01, "{whole}");
-        assert!(whole > motion.offset().x * 2.0);
+        assert!(whole > motion.offset().x * 1.5);
     }
 
     #[test]
