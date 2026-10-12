@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workspace and keyboard popovers</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#87B3FF}a:hover{color:#b3cfff}
+.board{box-sizing:border-box;background:#24272e;color:#E6E6EB;font:14px/1.3 'Noto Sans',sans-serif;padding:40px 48px;display:flex;flex-direction:column;gap:28px}
+.board h1{margin:0;font-size:22px;font-weight:700}
+.lede{margin:6px 0 0;color:#a3a3ae;max-width:680px}
+.states{display:flex;gap:40px;align-items:flex-start}
+.state{display:flex;flex-direction:column;gap:10px;width:320px}
+.cap{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#a3a3ae}
+.pop{width:320px;box-sizing:border-box;padding:12px;background:#000;border:1px solid rgba(255,255,255,.08);border-radius:14px;display:flex;flex-direction:column;gap:8px;color:#E6E6EB;font:14px/1.3 'Noto Sans',sans-serif}
+.hdr{display:flex;align-items:center;gap:6px;min-height:28px}
+.hdr h2{margin:0;font-size:17px;font-weight:700;flex:1;white-space:nowrap;overflow:hidden}
+.hdr .dim{font-size:12px}
+.list{display:flex;flex-direction:column;gap:2px}
+.li{display:flex;align-items:center;gap:10px;min-height:36px;padding:5px 6px 5px 8px;border-radius:6px;box-sizing:border-box;background:none;border:0;color:inherit;font:inherit;text-align:left;width:100%;cursor:default}
+.li.two{min-height:46px}
+.li.hov{background:rgba(255,255,255,.08)}
+.li.sel{background:rgba(135,179,255,.22)}
+.li .tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.ti{white-space:nowrap;overflow:hidden;-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 16px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 16px),transparent)}
+.sel .ti{font-weight:600}
+.st{font-size:12px;color:#8C8C99;white-space:nowrap}
+.sel .st{color:#a9b9d6}
+.lead{width:16px;height:16px;flex:none;color:#E6E6EB}
+.sel .lead{color:#87B3FF}
+.trail{display:flex;align-items:center;gap:2px;color:#8C8C99;flex:none}
+.sel .trail{color:#87B3FF}
+.ic{width:16px;height:16px;flex:none;display:block}
+.ib{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;background:none;border:0;color:#8C8C99;padding:0;flex:none}
+.app{width:16px;height:16px;border-radius:4px;display:grid;place-items:center;font-size:10px;font-weight:700;background:#30333c;color:#E6E6EB;flex:none}
+.kbd{min-width:22px;height:18px;padding:0 4px;box-sizing:border-box;border-radius:4px;border:1px solid rgba(255,255,255,.18);display:grid;place-items:center;font-size:11px;font-weight:600;color:#E6E6EB;flex:none}
+.sel .kbd{border-color:#87B3FF;color:#87B3FF}
+.dim{color:#8C8C99}
+</style>
+</helmet>
+<div class="board" style="width:776px;height:460px">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+<symbol id="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5L6.5 12L13 4.5"></path></symbol>
+<symbol id="close" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5"></path></symbol>
+</defs>
+</svg>
+
+<div>
+<h1>Workspace and keyboard</h1>
+<p class="lede">Both are plain lists. Right click a workspace for its windows: the focused one is marked, hovering a row offers close. Right click the layout for every layout you have; left click still cycles. Long names fade at the edge instead of breaking.</p>
+</div>
+
+<div class="states">
+
+<div class="state">
+<div class="cap">Workspace windows</div>
+<div class="pop">
+<div class="hdr"><h2>Workspace 2</h2><span class="dim">3 windows</span></div>
+<div class="list">
+<button class="li two sel"><span class="app">K</span><span class="tx"><span class="ti">~/code/fran/eave — nvim crates/eave/src/kit.rs</span><span class="st">kitty</span></span></button>
+<button class="li two hov"><span class="app">F</span><span class="tx"><span class="ti">eave popovers — Firefox</span><span class="st">firefox</span></span><span class="trail"><span class="ib" aria-label="Close window"><svg class="ic"><use href="#close"></use></svg></span></span></button>
+<button class="li two"><span class="app">O</span><span class="tx"><span class="ti">Notes</span><span class="st">obsidian</span></span></button>
+</div>
+</div>
+</div>
+
+<div class="state">
+<div class="cap">Keyboard layouts</div>
+<div class="pop">
+<div class="hdr"><h2>Keyboard</h2></div>
+<div class="list">
+<button class="li two sel"><span class="kbd">US</span><span class="tx"><span class="ti">English (US)</span><span class="st">us</span></span><span class="trail"><svg class="ic"><use href="#check"></use></svg></span></button>
+<button class="li two"><span class="kbd">IT</span><span class="tx"><span class="ti">Italian</span><span class="st">it</span></span></button>
+<button class="li two hov"><span class="kbd">US</span><span class="tx"><span class="ti">English (US, intl., with dead keys)</span><span class="st">us · intl</span></span></button>
+</div>
+</div>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":776,"height":460}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
