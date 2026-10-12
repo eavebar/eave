@@ -58,14 +58,25 @@ impl Default for Jelly {
 }
 
 impl Jelly {
-    /// Sets one side moving: each of its springs by `speed` at how far along the side it is (0 to
-    /// 1, left to right or top to bottom), outward in pixels per second. Kicks add up.
+    /// Sets one side moving: each of its springs at least `speed` at how far along the side it is
+    /// (0 to 1, left to right or top to bottom), outward in pixels per second. Kicks in a row
+    /// don't pile up: each brings a spring up to its speed rather than adding to it, and less of
+    /// it the further out the spring already is, so a stream of them levels off inside the room
+    /// instead of running into its end.
     pub fn kick(&mut self, side: Side, speed: impl Fn(f32) -> f32) {
         let (start, count) = side.span();
         for k in 0..count {
             let along = (k as f32 + 0.5) / count as f32;
             let along = if side.backwards() { 1.0 - along } else { along };
-            self.velocity[start + k] += speed(along);
+            let speed = speed(along);
+            let i = start + k;
+            let gone = (self.value[i] * speed.signum() / theme::NUDGE_BUMP_ROOM).clamp(0.0, 1.0);
+            let speed = speed * (1.0 - gone);
+            self.velocity[i] = if speed > 0.0 {
+                self.velocity[i].max(speed)
+            } else {
+                self.velocity[i].min(speed)
+            };
         }
     }
 
@@ -248,5 +259,35 @@ mod tests {
         assert!(jelly.displace(bounds, Point::new(70.0, 4.0)).y < 4.0);
         // Nothing moves the bottom.
         assert_eq!(jelly.displace(bounds, Point::new(70.0, 34.0)).y, 34.0);
+    }
+
+    #[test]
+    fn a_stream_of_kicks_levels_off_inside_the_room() {
+        let mut jelly = Jelly::default();
+        let bump = |along: f32| {
+            if (along - 0.5).abs() < 0.15 {
+                150.0
+            } else {
+                0.0
+            }
+        };
+        let (mut furthest, mut previous): (f32, f32) = (0.0, 0.0);
+        // Nudged every 3 frames for 2 s, like a held volume key.
+        for frame in 0..120 {
+            if frame % 3 == 0 {
+                jelly.kick(Side::Top, bump);
+            }
+            jelly.advance(FRAME);
+            let out = jelly.value(Side::Top, 0.5);
+            // Never faster than a kick sets it off.
+            assert!(
+                (out - previous).abs() <= 150.0 * FRAME,
+                "{previous} → {out}"
+            );
+            previous = out;
+            furthest = furthest.max(out);
+        }
+        assert!(furthest < 0.9 * theme::NUDGE_BUMP_ROOM, "{furthest}");
+        settle(&mut jelly, |_| {});
     }
 }
