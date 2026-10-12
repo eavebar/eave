@@ -8,8 +8,8 @@ use iced::{Color, Font, font};
 
 /// Height of an island, the visible part of the bar.
 pub const ISLAND_HEIGHT: u32 = 32;
-/// Space between the islands and the top, left and right screen edges. Same as [`PANEL_GAP`], so
-/// popovers line up with the islands.
+/// Space between the islands and the top, left and right screen edges. A popover keeps the same
+/// distance from the sides.
 pub const EDGE_GAP: u16 = 6;
 /// Transparent space below the islands, so a dragged island can dip down without being cut off.
 pub const DRAG_ROOM: u16 = 6;
@@ -17,8 +17,7 @@ pub const DRAG_ROOM: u16 = 6;
 pub const BAR_HEIGHT: u32 = EDGE_GAP as u32 + ISLAND_HEIGHT + DRAG_ROOM as u32;
 
 pub const ISLAND_BG: Color = Color::BLACK;
-pub const PANEL_BG: Color = Color::from_rgba(0.09, 0.09, 0.11, 0.95);
-pub const PANEL_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
+pub const ISLAND_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 pub const HOVER_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 pub const PRESSED_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.14);
 pub const SEPARATOR: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);
@@ -45,14 +44,16 @@ pub const DRAG_RESISTANCE: f32 = 0.5;
 /// overshoots a little before settling).
 pub const SPRING_STIFFNESS: f32 = 600.0;
 pub const SPRING_DAMPING: f32 = 0.5;
+/// The spring an island's shape and items follow when its content changes, or it turns into a
+/// popover and back. Damped close to critical, so it settles without wobbling.
+pub const MORPH_STIFFNESS: f32 = 380.0;
+pub const MORPH_DAMPING: f32 = 0.9;
 /// Horizontal padding inside each item, so its click target is wider than its text.
 pub const ITEM_PADDING: u16 = 6;
 pub const ITEM_SPACING: u32 = 4;
 
+/// Space between a popover's edge and its content.
 pub const PANEL_PADDING: u16 = 12;
-pub const PANEL_RADIUS: f32 = 10.0;
-/// Space between the bar and a popover, and between a popover and the screen edge.
-pub const PANEL_GAP: i32 = 6;
 pub const SPACING: u32 = 8;
 pub const GRID_CELL: f32 = 28.0;
 pub const BUTTON_RADIUS: f32 = 6.0;
