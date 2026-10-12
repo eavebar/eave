@@ -1,7 +1,7 @@
 # Plugin manifest. In a plugin's own repository this file sits at the repo root.
 [plugin]
 name = "network"
-description = "Network connection, with signal and addresses in the popover (from NetworkManager)"
+description = "Network connection, with signal and addresses in the popover (from the kernel, works with any network manager)"
 crate = "eave-network"
 path = "."
 api = "0.1"

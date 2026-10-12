@@ -1,18 +1,16 @@
-//! Battery level from UPower's display device, which combines every battery into one. Hidden
-//! when there's no battery (a desktop). The popover has the time left and the power draw.
+//! Battery level, read from the kernel's `/sys/class/power_supply`, with every system battery
+//! combined into one. Hidden when there's no battery (a desktop). The popover has the time left
+//! and the power draw.
 
 use eave_api::ui::{self, Item, Panel, Tone};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
-use eave_dbus::zbus::{self, Connection};
-use eave_dbus::{Snapshot, properties};
 use serde::Deserialize;
+
+mod sysfs;
 
 pub fn register(registry: &mut Registry) {
     registry.widget::<Battery>("battery");
 }
-
-const SERVICE: &str = "org.freedesktop.UPower";
-const DEVICE: &str = "/org/freedesktop/UPower/devices/DisplayDevice";
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -32,7 +30,7 @@ impl Default for Config {
     }
 }
 
-/// UPower's view of the battery, read as one snapshot.
+/// Every battery combined, read as one snapshot.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Reading {
     present: bool,
@@ -51,21 +49,19 @@ enum State {
     Unknown,
     Charging,
     Discharging,
-    Empty,
     Full,
     /// Plugged in, but not charging (charge limit reached, or waiting).
     NotCharging,
 }
 
 impl State {
-    /// UPower's `State` property.
-    fn from_upower(state: u32) -> Self {
-        match state {
-            1 => Self::Charging,
-            2 | 6 => Self::Discharging,
-            3 => Self::Empty,
-            4 => Self::Full,
-            5 => Self::NotCharging,
+    /// The kernel's `status` attribute.
+    fn from_sysfs(status: &str) -> Self {
+        match status {
+            "Charging" => Self::Charging,
+            "Discharging" => Self::Discharging,
+            "Full" => Self::Full,
+            "Not charging" => Self::NotCharging,
             _ => Self::Unknown,
         }
     }
@@ -100,7 +96,7 @@ impl Widget for Battery {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::run(|| eave_dbus::watch(SERVICE, read)).map(Message::Read)
+        Subscription::run(sysfs::watch).map(Message::Read)
     }
 
     fn item(&self) -> Item<Message> {
@@ -131,7 +127,6 @@ impl Widget for Battery {
             State::Discharging => "On battery".into(),
             State::Full => "Fully charged".into(),
             State::NotCharging => "Plugged in, not charging".into(),
-            State::Empty => "Empty".into(),
             State::Unknown => "Unknown state".into(),
         };
 
@@ -166,29 +161,6 @@ impl Battery {
             _ => Tone::Normal,
         }
     }
-}
-
-async fn read(connection: Connection) -> zbus::Result<Snapshot<Reading>> {
-    let device = properties(
-        &connection,
-        SERVICE,
-        DEVICE,
-        "org.freedesktop.UPower.Device",
-    )
-    .await?;
-    let reading = Reading {
-        present: device.get("IsPresent"),
-        percentage: device.get("Percentage"),
-        state: State::from_upower(device.get("State")),
-        time_to_empty: device.get("TimeToEmpty"),
-        time_to_full: device.get("TimeToFull"),
-        energy_rate: device.get("EnergyRate"),
-    };
-    let watch = vec![DEVICE.try_into()?];
-    Ok(Snapshot {
-        state: reading,
-        watch,
-    })
 }
 
 /// `2 h 05 min`, or `14 min` under an hour.
@@ -238,9 +210,9 @@ mod tests {
     }
 
     #[test]
-    fn maps_upower_states() {
-        assert_eq!(State::from_upower(1), State::Charging);
-        assert_eq!(State::from_upower(6), State::Discharging);
-        assert_eq!(State::from_upower(42), State::Unknown);
+    fn maps_sysfs_states() {
+        assert_eq!(State::from_sysfs("Charging"), State::Charging);
+        assert_eq!(State::from_sysfs("Not charging"), State::NotCharging);
+        assert_eq!(State::from_sysfs("Unknown"), State::Unknown);
     }
 }

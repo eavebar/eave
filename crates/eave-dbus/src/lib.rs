@@ -36,7 +36,8 @@ pub struct Snapshot<S> {
 
 /// A snapshot of `service`, then a new one after every property change on the objects the last
 /// snapshot listed. Unchanged snapshots aren't yielded, so a chatty service doesn't cause
-/// redraws. Errors are logged and retried on the service's next signal.
+/// redraws. Errors are logged and retried on the service's next signal. If the service isn't
+/// installed at all, the stream ends.
 pub fn watch<S, F, Fut>(service: &'static str, snapshot: F) -> impl Stream<Item = S>
 where
     S: PartialEq + Clone,
@@ -83,6 +84,12 @@ where
                             return Some((snapshot.state, state));
                         }
                     }
+                    Err(error) if state.last.is_none() && is_not_installed(&error) => {
+                        // Nothing provides it and nothing can start it: end, so the widget
+                        // keeps its "absent" state instead of waiting forever.
+                        eprintln!("eave-dbus: {service} isn't installed");
+                        return None;
+                    }
                     Err(error) => eprintln!("eave-dbus: {service}: {error}"),
                 }
             }
@@ -113,6 +120,18 @@ async fn subscribe(service: &'static str) -> zbus::Result<(Connection, MessageSt
         .build();
     let signals = MessageStream::for_match_rule(rule, &connection, Some(64)).await?;
     Ok((connection, signals))
+}
+
+/// The bus doesn't know the service and can't activate it. A service that is installed but not
+/// running yet (`NameHasNoOwner`) isn't this: its signals arrive once it starts.
+fn is_not_installed(error: &zbus::Error) -> bool {
+    match error {
+        zbus::Error::FDO(error) => matches!(**error, zbus::fdo::Error::ServiceUnknown(_)),
+        zbus::Error::MethodError(name, ..) => {
+            name.as_str() == "org.freedesktop.DBus.Error.ServiceUnknown"
+        }
+        _ => false,
+    }
 }
 
 fn is_relevant(message: zbus::Result<zbus::Message>, watched: &[OwnedObjectPath]) -> bool {

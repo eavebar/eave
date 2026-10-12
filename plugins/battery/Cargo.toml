@@ -8,7 +8,11 @@ repository.workspace = true
 
 [dependencies]
 eave-api.workspace = true
-eave-dbus.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# The uevent socket; already in the tree (D-21). `fs` only because rustix 1.1 fails to build
+# `net` alone (its socket timeouts need `timespec`).
+rustix = { version = "1", default-features = false, features = ["std", "net", "fs"] }
+tokio = { version = "1", default-features = false, features = ["sync"] }
 serde.workspace = true
 
 [dev-dependencies]

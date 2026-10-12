@@ -11,7 +11,7 @@
 //!
 //! `--install` copies the binary to `~/.local/bin/eave`. `--restart` also restarts a running bar
 //! on it: through systemd when the `eave.service` user unit runs it, otherwise by stopping it and
-//! relaunching it through Hyprland ([D-22](../../docs/decisions.md)).
+//! relaunching it through Hyprland's socket ([D-22](../../docs/decisions.md)).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -209,12 +209,14 @@ fn restart_bar(binary: &Path) -> Result<()> {
         );
     }
 
-    let status = Command::new("kill")
-        .args(pids.iter().map(u32::to_string))
-        .status()
-        .map_err(|e| format!("running kill: {e}"))?;
-    if !status.success() {
-        return Err("couldn't stop the running eave".into());
+    for &pid in &pids {
+        let pid =
+            rustix::process::Pid::from_raw(pid as i32).ok_or_else(|| format!("bad pid {pid}"))?;
+        match rustix::process::kill_process(pid, rustix::process::Signal::TERM) {
+            // Exited on its own in the meantime.
+            Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+            Err(error) => return Err(format!("couldn't stop the running eave: {error}")),
+        }
     }
     // A one-off wait in a CLI, not the bar: polling /proc here is fine.
     let gone = || {
@@ -236,24 +238,39 @@ fn restart_bar(binary: &Path) -> Result<()> {
     // `eval` launched nothing, so trying both can't start two bars.
     // Both run the command through a shell.
     let command = shell_quote(&binary.to_string_lossy());
-    let launched = hyprctl(&["eval", &format!("hl.exec_cmd({})", lua_string(&command))])
-        .or_else(|_| hyprctl(&["dispatch", "exec", &command]));
+    let launched = hyprland(&format!("eval hl.exec_cmd({})", lua_string(&command)))
+        .or_else(|_| hyprland(&format!("dispatch exec {command}")));
     if let Err(error) = launched {
-        return Err(format!("relaunching eave through hyprctl: {error}"));
+        return Err(format!("relaunching eave through Hyprland: {error}"));
     }
     eprintln!("eave-build: restarted eave");
     Ok(())
 }
 
-fn hyprctl(args: &[&str]) -> Result<()> {
-    let output = Command::new("hyprctl")
-        .args(args)
-        .output()
-        .map_err(|e| format!("running hyprctl: {e}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+/// One command on Hyprland's request socket, as `hyprctl` sends it, without needing `hyprctl`.
+/// Hyprland answers `ok` on success and an error message otherwise.
+fn hyprland(command: &str) -> Result<()> {
+    use std::io::{Read, Write};
+
+    let signature = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")
+        .ok_or("HYPRLAND_INSTANCE_SIGNATURE isn't set")?;
+    // Hyprland moved its sockets from /tmp/hypr to $XDG_RUNTIME_DIR/hypr in 0.40.
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|dir| PathBuf::from(dir).join("hypr"))
+        .filter(|dir| dir.join(&signature).exists())
+        .unwrap_or_else(|| PathBuf::from("/tmp/hypr"));
+    let path = dir.join(signature).join(".socket.sock");
+
+    let mut socket = std::os::unix::net::UnixStream::connect(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut reply = String::new();
+    socket
+        .write_all(command.as_bytes())
+        .and_then(|()| socket.read_to_string(&mut reply))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    match reply.trim() {
+        "ok" => Ok(()),
+        error => Err(error.to_owned()),
     }
 }
 
@@ -458,12 +475,13 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
     // host and every plugin share one eave-api, published on crates.io or not.
     // Same for the service crates plugins may use.
     manifest += &format!(
-        "\n[patch.crates-io]\neave-api = {{ path = {} }}\neave-dbus = {{ path = {} }}\neave-hyprland = {{ path = {} }}\neave-pulse = {{ path = {} }}\n",
-        quote(&api_dir),
-        quote(&eave_dir.join("crates/eave-dbus")),
-        quote(&eave_dir.join("crates/eave-hyprland")),
-        quote(&eave_dir.join("crates/eave-pulse"))
+        "\n[patch.crates-io]\neave-api = {{ path = {} }}\n",
+        quote(&api_dir)
     );
+    for service in ["eave-dbus", "eave-hyprland", "eave-net", "eave-pulse"] {
+        let dir = eave_dir.join("crates").join(service);
+        manifest += &format!("{service} = {{ path = {} }}\n", quote(&dir));
+    }
     // Same profile as eave's own release builds (D-10).
     manifest += "\n[profile.release]\nlto = \"thin\"\ncodegen-units = 1\nstrip = true\npanic = \"abort\"\n\n\
                  # Standalone: never part of an enclosing workspace.\n[workspace]\n";

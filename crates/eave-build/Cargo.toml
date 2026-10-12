@@ -9,3 +9,5 @@ repository.workspace = true
 [dependencies]
 serde.workspace = true
 toml = { version = "0.9", default-features = false, features = ["std", "parse", "display", "serde"] }
+# Signals for --restart; already in the tree (D-21).
+rustix = { version = "1", default-features = false, features = ["std", "process"] }
