@@ -588,15 +588,15 @@ impl Motion {
     }
 
     /// The shape as it's drawn: its edges, overshooting. Stretching along one axis pulls the
-    /// other in. It stretches about its center across, and down from its top, which stays on the
-    /// bar.
+    /// other in. It stretches about its center across; up and down, the top takes a share of it.
     fn shape(&self) -> Rectangle {
         let edges = self.edges.rect();
         let (stretch_x, stretch_y) = (self.stretch_x.value, self.stretch_y.value);
         let width = (edges.width + stretch_x - theme::SQUISH_BULGE * stretch_y).max(0.0);
         let height = (edges.height + stretch_y - theme::SQUISH_BULGE * stretch_x).max(0.0);
+        let top = edges.y - theme::SQUISH_TOP * (height - edges.height);
         Rectangle::new(
-            Point::new(edges.center_x() - width / 2.0, edges.y),
+            Point::new(edges.center_x() - width / 2.0, top),
             Size::new(width, height),
         )
     }
@@ -1432,7 +1432,7 @@ mod tests {
         let mut motion = settled(island, &[1]);
 
         popover(&mut motion, true, panel, true);
-        let mut taller = false;
+        let (mut taller, mut lifted) = (false, false);
         run(&mut motion, Instant::now(), |motion| {
             let shape = motion.shape();
             taller |= shape.height > panel.height + 1.0;
@@ -1440,13 +1440,15 @@ mod tests {
                 shape.height < panel.height + f32::from(theme::EDGE_GAP),
                 "stays on the surface"
             );
-            assert_eq!(shape.y, panel.y, "the top stays put");
+            lifted |= shape.y < panel.y - 0.5;
+            assert!(shape.y > 0.0, "stays on the surface");
         });
         assert!(taller, "overshoots its height");
+        assert!(lifted, "the top goes up a little too");
         assert_eq!(motion.shape(), panel);
 
         popover(&mut motion, false, panel, true);
-        let mut wider = false;
+        let (mut wider, mut dipped) = (false, false);
         run(&mut motion, Instant::now(), |motion| {
             let shape = motion.shape();
             wider |= shape.width > island.width + 1.0;
@@ -1455,9 +1457,10 @@ mod tests {
                 over < 2.0 * f32::from(theme::EDGE_GAP),
                 "stays on the surface"
             );
-            assert_eq!(shape.y, island.y, "lands against the top");
+            dipped |= shape.y > island.y + 0.5;
         });
         assert!(wider, "lands too wide");
+        assert!(dipped, "the top comes down a little as it lands");
         assert_eq!(motion.shape(), island);
         assert!(motion.closing_done());
     }

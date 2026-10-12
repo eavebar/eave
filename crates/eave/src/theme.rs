@@ -67,6 +67,10 @@ pub const SQUISH_CLOSE_SPEED: f32 = 190.0;
 pub const SQUISH_LAND: f32 = 5.0;
 /// How much stretching along one axis pulls the other in, per pixel stretched.
 pub const SQUISH_BULGE: f32 = 0.5;
+/// How much of an overshoot's change in height the top edge takes (the bottom takes the rest), so
+/// the top moves too: up a little as an opening popover goes too tall, down as a closing one lands.
+/// It moves into the `EDGE_GAP` above the islands.
+pub const SQUISH_TOP: f32 = 0.4;
 /// The spring a nudged island and its bump move back on: damped nearly to critical, so they come
 /// back without swinging past.
 pub const NUDGE_STIFFNESS: f32 = 600.0;

@@ -709,7 +709,7 @@ There's still one hover path for everything. `Slot` follows the pointer, and not
 - Two springs, `stretch_x` and `stretch_y`, in pixels added to the width and height. They rest at 0 and get one velocity kick each way of the morph, like a nudge (D-32). Their feel (`SQUISH_STIFFNESS` 400, `SQUISH_DAMPING` 0.35) is well under critical, so one kick stretches, swings back a little short and settles.
 - Both kick when the shape's bottom edge is within `SQUISH_LAND` (5 px) of where it's going, so the overshoot peaks about four frames later, as the shape arrives. Opening kicks `stretch_y` (`SQUISH_OPEN_SPEED`, about 4 px too tall). Closing kicks `stretch_x` (`SQUISH_CLOSE_SPEED`, about 6 px too wide, half on each side).
 - The kicks are in pixels, not a share of the size: the surface only has `EDGE_GAP` below the panel and beside the islands, so a bigger overshoot would be cut off.
-- Stretching along one axis pulls the other in by `SQUISH_BULGE` (0.5) per pixel. The shape stretches about its center across, and from its top down, since the top stays on the bar.
+- Stretching along one axis pulls the other in by `SQUISH_BULGE` (0.5) per pixel. The shape stretches about its center across. Up and down, the top edge takes `SQUISH_TOP` (0.4) of the change and the bottom the rest: the top lifts about 1.5 px as an opening popover goes too tall, and dips about 1 px as a closing one lands. Pinning the top to the bar (the first try) made the shape look nailed to it, since its top never moved by even a pixel. It moves into the `EDGE_GAP` above the islands.
 - Turning around mid-morph overshoots again. A popover taken away without closing doesn't.
 - Hit testing still uses the edges: the difference is a few pixels for a fraction of a second.
 
