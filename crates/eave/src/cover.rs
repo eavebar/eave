@@ -5,7 +5,7 @@
 //! icon size and at [`theme::COVER_SIZE`]. Only those small bitmaps are kept, by URL.
 
 use std::io::Read;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use iced::Element;
@@ -72,8 +72,9 @@ fn fetch(url: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// One agent for every download: its TLS setup and connections are kept between covers.
-static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
+/// A new agent for each download, dropped after it: covers change a few times an hour, and a
+/// kept agent would hold the TLS setup and the system's certificates in memory all the while.
+fn agent() -> ureq::Agent {
     let tls = ureq::tls::TlsConfig::builder()
         .provider(ureq::tls::TlsProvider::Rustls)
         .unversioned_rustls_crypto_provider(Arc::new(rustls::crypto::ring::default_provider()))
@@ -85,10 +86,10 @@ static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
         .timeout_global(Some(TIMEOUT))
         .build()
         .new_agent()
-});
+}
 
 fn download(url: &str) -> Option<Vec<u8>> {
-    let mut response = AGENT
+    let mut response = agent()
         .get(url)
         .call()
         .map_err(|error| eprintln!("eave: {url}: {error}"))
