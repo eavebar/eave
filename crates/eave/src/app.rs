@@ -542,10 +542,12 @@ impl Bar {
     /// Starts and stops each notification's clock: it runs while the panel is on screen and not
     /// pointed at. Then sets the timer for the next one to expire, unless it's already set.
     fn run_clocks(&mut self, now: Instant) -> Task<Message> {
-        let shown = self
-            .notices
-            .as_ref()
-            .is_some_and(|panel| panel.open && panel.rect.is_some() && !panel.hovered);
+        // Not while an answer is being typed either.
+        let shown = !self.typing()
+            && self
+                .notices
+                .as_ref()
+                .is_some_and(|panel| panel.open && panel.rect.is_some() && !panel.hovered);
         for toast in &mut self.toasts {
             let running = shown && !toast.leaving;
             match (running, toast.deadline) {
@@ -570,6 +572,29 @@ impl Bar {
         // Built inside the future: a tokio timer needs the runtime, which only runs tasks.
         let sleep = async move { tokio::time::sleep_until(at.into()).await };
         Task::perform(sleep, move |_| Message::ToastTimer(timer))
+    }
+
+    /// Whether a notification on screen has a field to answer it in. The bar has the keyboard
+    /// meanwhile ([D-49](../../../docs/decisions.md)).
+    fn typing(&self) -> bool {
+        self.notices.as_ref().is_some_and(|panel| panel.open)
+            && !self.toasts_held()
+            && self
+                .toasts
+                .iter()
+                .any(|toast| !toast.leaving && toast.notice.reply.is_some())
+    }
+
+    /// The messages that cancel every answer being typed.
+    fn cancel_replies(&self) -> Hooks {
+        self.toasts
+            .iter()
+            .filter(|toast| !toast.leaving)
+            .filter_map(|toast| {
+                let cancel = toast.notice.reply.as_ref()?.on_cancel.clone()?;
+                Some((toast.instance, cancel))
+            })
+            .collect()
     }
 
     /// The notifications whose time is up by `now`: their widgets get the message they asked for.
@@ -605,22 +630,23 @@ pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
         });
         tasks.push(report.discard());
     }
+    tasks.push(bar.sync_panel());
     tasks.extend(hand_keyboard(bar));
     tasks.extend(bar.load_icons());
-    tasks.push(bar.sync_panel());
     tasks.push(bar.run_clocks(Instant::now()));
     Task::batch(tasks)
 }
 
-/// Gives the keyboard to the bar surface with the open popover, and takes it back from the one
-/// that had it. Exclusive, not on demand: with `follow_mouse`, hovering a window would take the
+/// Gives the keyboard to the bar surface with the open popover, or with a notification being
+/// answered, and takes it back from the one that had it. Exclusive, not on demand: with `follow_mouse`, hovering a window would take the
 /// focus away ([D-36](../../../docs/decisions.md)).
 fn hand_keyboard(bar: &mut Bar) -> Vec<Task<Message>> {
     let wanted = bar
         .popovers
         .iter()
         .find(|popover| popover.open)
-        .map(|popover| popover.window);
+        .map(|popover| popover.window)
+        .or_else(|| bar.typing().then(|| bar.toast_window()).flatten());
     if wanted == bar.keyboard {
         return Vec::new();
     }
@@ -711,6 +737,8 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             bar.pointer_inside = false;
             Task::none()
         }
+        // Esc while answering a notification cancels the answer.
+        Message::KeyPressed if bar.typing() => send(bar.cancel_replies()),
         Message::KeyPressed => send(bar.close_popover()),
         Message::PopoverPlaced(id, rect) => {
             let Some(popover) = bar
@@ -951,8 +979,10 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
     subscriptions.push(watch::config_changes().map(Message::ConfigChanged));
     // Pointer, click and key tracking only while a popover is open: otherwise every hover over the
     // bar would wake us.
-    if bar.is_open() {
+    if bar.is_open() || bar.typing() {
         subscriptions.push(iced::event::listen_with(popover_event));
+    }
+    if bar.is_open() {
         subscriptions.push(Subscription::run(hyprland_events).filter_map(clicked));
     }
     Subscription::batch(subscriptions)
@@ -1251,14 +1281,19 @@ mod tests {
         // Turning around while it closes opens it again.
         assert_eq!(said(bar.open_popover(1)), [(1, "opened")]);
     }
-    /// Shows a notice per key it was told to add, each expiring after 5 s.
-    struct Notifying(Vec<u64>);
+
+    /// Shows a notice per key it was told to add, each expiring after 5 s, and a reply field on
+    /// the one being answered.
+    struct Notifying(Vec<u64>, Option<u64>);
 
     #[derive(Debug, Clone, PartialEq)]
     enum Note {
         Add(u64),
         Drop(u64),
         Expired(u64),
+        Answer(u64),
+        Typed(String),
+        Cancel,
     }
 
     impl Widget for Notifying {
@@ -1266,13 +1301,16 @@ mod tests {
         type Message = Note;
 
         fn new(_: Self::Config) -> (Self, eave_api::Task<Note>) {
-            (Self(Vec::new()), eave_api::Task::none())
+            (Self(Vec::new(), None), eave_api::Task::none())
         }
 
         fn update(&mut self, message: Note) -> Effect<Note> {
             match message {
                 Note::Add(key) => self.0.insert(0, key),
                 Note::Drop(key) | Note::Expired(key) => self.0.retain(|shown| *shown != key),
+                Note::Answer(key) => self.1 = Some(key),
+                Note::Typed(_) => {}
+                Note::Cancel => self.1 = None,
             }
             Effect::none()
         }
@@ -1285,8 +1323,15 @@ mod tests {
             self.0
                 .iter()
                 .map(|&key| {
-                    Notice::new(key, format!("notice {key}"))
-                        .expires(Duration::from_secs(5), Note::Expired(key))
+                    let notice = Notice::new(key, format!("notice {key}"))
+                        .expires(Duration::from_secs(5), Note::Expired(key));
+                    match self.1 {
+                        Some(answering) if answering == key => notice.reply(
+                            eave_api::ui::Reply::new("Reply", "", Note::Typed)
+                                .on_cancel(Note::Cancel),
+                        ),
+                        _ => notice,
+                    }
                 })
                 .collect()
         }
@@ -1422,5 +1467,31 @@ mod tests {
         );
         assert!(bar.toasts.is_empty());
         assert_eq!(panel(&bar), Some(false), "folds back empty");
+    }
+
+    #[test]
+    fn answering_a_notice_takes_the_keyboard_and_stops_the_clock() {
+        let mut bar = notifying_bar();
+        let window = bar.windows[0];
+        tell(&mut bar, Note::Add(1));
+        let _ = handle(&mut bar, Message::NoticesPlaced(placed()));
+        assert_eq!(bar.keyboard, None, "a notice alone never takes it");
+
+        tell(&mut bar, Note::Answer(1));
+        assert!(bar.typing());
+        assert_eq!(bar.keyboard, Some(window));
+        let _ = bar.run_clocks(Instant::now());
+        assert_eq!(bar.toasts[0].deadline, None, "no expiring while typing");
+
+        // Esc cancels the answer, and the keyboard goes back.
+        let cancels: Vec<(u64, Note)> = bar
+            .cancel_replies()
+            .into_iter()
+            .map(|(id, message)| (id, message.downcast().unwrap()))
+            .collect();
+        assert_eq!(cancels, [(0, Note::Cancel)]);
+        tell(&mut bar, Note::Cancel);
+        assert!(!bar.typing());
+        assert_eq!(bar.keyboard, None);
     }
 }

@@ -43,8 +43,10 @@ pub struct Notification {
     /// Plain text: markup stripped, entities decoded.
     pub body: String,
     /// Each action's key and label, in order. The `default` one is what clicking the
-    /// notification does.
+    /// notification does. An `inline-reply` one is in [`reply`](Self::reply) instead.
     pub actions: Vec<(String, String)>,
+    /// Whether the app takes a typed answer, and how to ask for it.
+    pub reply: Option<Reply>,
     pub urgency: Urgency,
     pub timeout: Timeout,
     pub received: SystemTime,
@@ -58,6 +60,18 @@ impl Notification {
             .find(|(key, _)| key == "default")
             .map(|(_, label)| label.as_str())
     }
+}
+
+/// A notification's inline reply: KDE's extension to the spec, which messengers use. The app
+/// offers it as an `inline-reply` action, and gets the answer back as `NotificationReplied`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reply {
+    /// The action's label: what to call the button that starts an answer. May be empty.
+    pub label: String,
+    /// What the field says while empty (`x-kde-reply-placeholder-text`).
+    pub placeholder: Option<String>,
+    /// What to call the button that sends it (`x-kde-reply-submit-button-text`).
+    pub submit: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -99,7 +113,7 @@ pub enum Event {
     /// It couldn't start, and why.
     Failed(String),
     /// A new notification, or one that replaces an earlier one with the same id.
-    Notified(Notification),
+    Notified(Box<Notification>),
     /// The app closed one of its notifications.
     Closed(u32),
 }
@@ -152,6 +166,15 @@ pub async fn invoke(id: u32, key: &str) -> zbus::Result<()> {
     server
         .connection
         .emit_signal(None::<()>, PATH, NAME, "ActionInvoked", &(id, key))
+        .await
+}
+
+/// Sends the app the answer typed into its notification ([`Reply`]).
+pub async fn reply(id: u32, text: &str) -> zbus::Result<()> {
+    let server = server().await?;
+    server
+        .connection
+        .emit_signal(None::<()>, PATH, NAME, "NotificationReplied", &(id, text))
         .await
 }
 
@@ -262,7 +285,7 @@ struct Notifications;
 #[zbus::interface(name = "org.freedesktop.Notifications")]
 impl Notifications {
     fn get_capabilities(&self) -> Vec<&'static str> {
-        vec!["actions", "body", "body-markup"]
+        vec!["actions", "body", "body-markup", "inline-reply"]
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -281,18 +304,20 @@ impl Notifications {
             0 => NEXT_ID.fetch_add(1, Ordering::Relaxed),
             id => id,
         };
+        let (reply, actions) = split_reply(pairs(actions), &hints);
         let notification = Notification {
             id,
+            reply,
             icon: icon(&app_icon, &hints),
             app: app_name,
             summary: strip(&summary),
             body: strip(&body),
-            actions: pairs(actions),
+            actions,
             urgency: urgency(&hints),
             timeout: timeout(expire_timeout, urgency(&hints)),
             received: SystemTime::now(),
         };
-        let _ = bus().send(Event::Notified(notification));
+        let _ = bus().send(Event::Notified(Box::new(notification)));
         id
     }
 
@@ -338,6 +363,29 @@ fn timeout(expire_timeout: i32, urgency: Urgency) -> Timeout {
         }
         _ => Timeout::Default,
     }
+}
+
+/// The inline reply out of the actions, if the app offered one.
+fn split_reply(
+    actions: Vec<(String, String)>,
+    hints: &HashMap<String, OwnedValue>,
+) -> (Option<Reply>, Vec<(String, String)>) {
+    let text = |hint: &str| {
+        hints
+            .get(hint)
+            .and_then(|value| <&str>::try_from(value).ok())
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    };
+    let (replies, actions): (Vec<_>, Vec<_>) = actions
+        .into_iter()
+        .partition(|(key, _)| key == "inline-reply");
+    let reply = replies.into_iter().next().map(|(_, label)| Reply {
+        label,
+        placeholder: text("x-kde-reply-placeholder-text"),
+        submit: text("x-kde-reply-submit-button-text"),
+    });
+    (reply, actions)
 }
 
 /// The spec's flat list of actions, key then label, as pairs.
@@ -393,6 +441,28 @@ mod tests {
         assert_eq!(icon("/tmp/a.png", &hints(&[])), None);
         assert_eq!(icon("file:///tmp/a.png", &hints(&[])), None);
         assert_eq!(icon("", &hints(&[])), None);
+    }
+
+    #[test]
+    fn an_inline_reply_comes_out_of_the_actions() {
+        let actions = pairs(vec![
+            "default".into(),
+            "Open".into(),
+            "inline-reply".into(),
+            "Reply".into(),
+        ]);
+        let hint = |text: &str| OwnedValue::try_from(zbus::zvariant::Value::from(text)).unwrap();
+        let hints = hints(&[("x-kde-reply-placeholder-text", hint("Message…"))]);
+        let (reply, actions) = split_reply(actions, &hints);
+        assert_eq!(
+            reply,
+            Some(Reply {
+                label: "Reply".into(),
+                placeholder: Some("Message…".into()),
+                submit: None,
+            })
+        );
+        assert_eq!(actions, [("default".to_string(), "Open".to_string())]);
     }
 
     #[test]

@@ -964,6 +964,85 @@ pub struct Notice<M> {
     on_press: Option<M>,
     on_dismiss: Option<M>,
     expires: Option<(std::time::Duration, M)>,
+    reply: Option<Reply<M>>,
+}
+
+/// A field on a [`Notice`] to type an answer into, like a reply to a message.
+///
+/// While a notice shows one, the host takes the keyboard, so show it only once asked to (after
+/// a click on a Reply button, say), and drop it once the answer is sent or cancelled. The
+/// notice doesn't expire meanwhile.
+pub struct Reply<M> {
+    placeholder: String,
+    value: String,
+    on_input: std::rc::Rc<dyn Fn(String) -> M>,
+    on_submit: Option<M>,
+    on_cancel: Option<M>,
+}
+
+impl<M> Reply<M> {
+    /// Shows `value`, and sends `on_input` with the new text on every change.
+    pub fn new(
+        placeholder: impl Into<String>,
+        value: impl Into<String>,
+        on_input: impl Fn(String) -> M + 'static,
+    ) -> Self {
+        Self {
+            placeholder: placeholder.into(),
+            value: value.into(),
+            on_input: std::rc::Rc::new(on_input),
+            on_submit: None,
+            on_cancel: None,
+        }
+    }
+
+    /// Sent on Enter, or a click on the field's send button.
+    pub fn on_submit(mut self, message: M) -> Self {
+        self.on_submit = Some(message);
+        self
+    }
+
+    /// Sent on Esc.
+    pub fn on_cancel(mut self, message: M) -> Self {
+        self.on_cancel = Some(message);
+        self
+    }
+
+    pub fn map<N: 'static>(self, f: &(impl Fn(M) -> N + Clone + 'static)) -> Reply<N>
+    where
+        M: 'static,
+    {
+        let g = f.clone();
+        let on_input = self.on_input;
+        Reply {
+            placeholder: self.placeholder,
+            value: self.value,
+            on_input: std::rc::Rc::new(move |text| g(on_input(text))),
+            on_submit: self.on_submit.map(f),
+            on_cancel: self.on_cancel.map(f),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn into_parts(self) -> ReplyParts<M> {
+        ReplyParts {
+            placeholder: self.placeholder,
+            value: self.value,
+            on_input: self.on_input,
+            on_submit: self.on_submit,
+            on_cancel: self.on_cancel,
+        }
+    }
+}
+
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct ReplyParts<M> {
+    pub placeholder: String,
+    pub value: String,
+    pub on_input: std::rc::Rc<dyn Fn(String) -> M>,
+    pub on_submit: Option<M>,
+    pub on_cancel: Option<M>,
 }
 
 impl<M> Notice<M> {
@@ -979,6 +1058,7 @@ impl<M> Notice<M> {
             on_press: None,
             on_dismiss: None,
             expires: None,
+            reply: None,
         }
     }
 
@@ -1031,6 +1111,12 @@ impl<M> Notice<M> {
         self
     }
 
+    /// A field to type an answer into ([`Reply`]).
+    pub fn reply(mut self, reply: Reply<M>) -> Self {
+        self.reply = Some(reply);
+        self
+    }
+
     pub fn map<N: 'static>(self, f: &(impl Fn(M) -> N + Clone + 'static)) -> Notice<N>
     where
         M: 'static,
@@ -1050,6 +1136,7 @@ impl<M> Notice<M> {
             on_press: self.on_press.map(f),
             on_dismiss: self.on_dismiss.map(f),
             expires: self.expires.map(|(after, message)| (after, f(message))),
+            reply: self.reply.map(|reply| reply.map(f)),
         }
     }
 
@@ -1070,6 +1157,7 @@ impl<M> Notice<M> {
             on_press: self.on_press,
             on_dismiss: self.on_dismiss,
             expires: self.expires,
+            reply: self.reply.map(Reply::into_parts),
         }
     }
 }
@@ -1087,6 +1175,7 @@ pub struct NoticeParts<M> {
     pub on_press: Option<M>,
     pub on_dismiss: Option<M>,
     pub expires: Option<(std::time::Duration, M)>,
+    pub reply: Option<ReplyParts<M>>,
 }
 
 #[cfg(test)]
@@ -1265,6 +1354,11 @@ mod tests {
             .on_press(3)
             .on_dismiss(4)
             .expires(std::time::Duration::from_secs(5), 5)
+            .reply(
+                Reply::new("p", "v", |text: String| text.len() as i32)
+                    .on_submit(6)
+                    .on_cancel(7),
+            )
             .map(&|n: i32| n * 10);
         assert_eq!(notice.key(), 7);
         let parts = notice.into_parts();
@@ -1273,6 +1367,9 @@ mod tests {
         assert_eq!(parts.on_press, Some(30));
         assert_eq!(parts.on_dismiss, Some(40));
         assert_eq!(parts.expires.map(|(_, m)| m), Some(50));
+        let reply = parts.reply.unwrap();
+        assert_eq!((reply.on_input)("abc".into()), 30);
+        assert_eq!((reply.on_submit, reply.on_cancel), (Some(60), Some(70)));
     }
 
     #[test]

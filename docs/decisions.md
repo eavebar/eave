@@ -889,7 +889,7 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 **Status:** accepted (2026-10-13)
 
 **What:** `crates/eave-notify` serves the freedesktop notification spec (`org.freedesktop.Notifications`, 1.2) on the session bus, inside the bar. `plugins/notifications` shows what it receives as notices (D-47), with a bell in the bar and the latest notifications in its popover.
-- **The server only receives and reports.** `watch()` starts it on first use and yields whether it's serving, then every notification and every `CloseNotification`. `close(id, reason)` and `invoke(id, key)` send `NotificationClosed` and `ActionInvoked`. Ids count up from 1, and `replaces_id` keeps the id. It advertises `actions`, `body` and `body-markup`. What to show and for how long is the plugin's business.
+- **The server only receives and reports.** `watch()` starts it on first use and yields whether it's serving, then every notification and every `CloseNotification`. `close(id, reason)` and `invoke(id, key)` send `NotificationClosed` and `ActionInvoked`. Ids count up from 1, and `replaces_id` keeps the id. It advertises `actions`, `body`, `body-markup` and `inline-reply` (D-49). What to show and for how long is the plugin's business.
 - **Made plain on arrival:** body markup is stripped to text, `<br>` becomes a line break, and entities are decoded (`markup.rs`). A `<` that doesn't open a tag stays. The icon is an app id: the `desktop-entry` hint, or `app_icon` when it names an icon rather than a file. The host looks it up in the icon theme like every app icon. Images (`image-data`, `image-path`, icon files) are left out for now: the vocabulary has no picture primitive yet.
 - **Timeouts:** `-1` is the plugin's default (`timeout`, 5 s), `0` is never, and critical notifications never expire, as the spec suggests.
 - **Never pushes another daemon out.** It asks for the name with no flags. If mako, dunst or swaync has it, the bus puts eave in line, the bell is dimmed, and the popover names the daemon (its pid's `/proc/<pid>/comm`). When that daemon quits, the name passes to eave, and it says so. And since it doesn't allow replacement, a daemon started later can't take the name from it. The bus calls are made directly, not through zbus's `request_name`, which takes its flags as a type zbus doesn't export, and which would start watching for the name only after asking.
@@ -909,3 +909,25 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 - the bar is now also the notification daemon. If it crashes or restarts, notifications sent meanwhile are lost, and the list starts empty after a restart.
 - users switching from mako, dunst or swaync have to stop starting it.
 - +704 KiB of binary when the widget is used. eave-build compiles it in only then.
+
+---
+
+## D-49: Answering a notification: a field, and the keyboard only once asked
+
+**Status:** accepted (2026-10-13)
+
+**What:** a notification can take a typed answer, like a reply to a message.
+- **The spec has no such thing, so we follow KDE's extension**, which messengers (Telegram, KDE Connect and others) use. The server advertises `inline-reply`. An app that wants an answer adds an `inline-reply` action, and may say what the field shows while empty (`x-kde-reply-placeholder-text`) and what the send button says (`x-kde-reply-submit-button-text`). The answer goes back as a `NotificationReplied(id, text)` signal. `eave-notify` takes that action out of the actions (`Notification::reply`), and `reply(id, text)` sends the signal.
+- **In the API:** `Notice::reply(Reply::new(placeholder, value, on_input).on_submit(..).on_cancel(..))`. The host draws a text field with a send button on the notice, in its tone, below the body. A `Reply` keeps `on_input` behind an `Rc`, because the host keeps notices it can clone.
+- **The keyboard only once asked.** While a notice on screen has a field, the bar takes the keyboard for the notifications' surface, as for a popover (D-36), and the field takes the focus as it appears (D-41). Then no notice expires, and Esc sends `on_cancel`. So a notification with a reply never takes the focus by itself: the plugin shows a Reply button first, and the field only after a click on it. Sending takes the notification away, after telling the app it closed. An empty answer isn't sent.
+- **In the popover's list too:** the expanded notification has the Reply button, then a field, which works like any popover's.
+
+**Alternatives:**
+- the field always there, and the bar taking the keyboard whenever a notification can be answered: every message would take the focus from what you're typing in.
+- `KeyboardInteractivity::OnDemand` while a field shows, so the compositor gives the bar the keyboard on a click: with `follow_mouse`, the focus would leave the field as soon as the pointer left the bar (D-36).
+- answering only in the popover: one more click, for the thing a message notification is most often for.
+
+**Why:** answering a message from where it appears is the point of a notification that offers it, and asking first keeps the bar from ever taking the keyboard unasked.
+
+**Cost:** no dependencies. While a field shows, the bar has the keyboard, as while a popover is open.
+

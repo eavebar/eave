@@ -155,11 +155,26 @@ pub fn notice<'a>(
             });
         row![fill(ctx)].extend(buttons).spacing(theme::SPACING)
     });
+    // A reply field is a text input like a popover's, with a send button at its end.
+    let reply = notice.reply.map(|reply| {
+        let on_input = reply.on_input;
+        let mut field =
+            eave_api::ui::text_input(reply.placeholder, reply.value, move |text| on_input(text));
+        if let Some(message) = reply.on_submit {
+            let send = eave_api::ui::button(
+                eave_api::ui::icon(eave_api::ui::Icon::Forward),
+                message.clone(),
+            );
+            field = field.on_submit(message).trailing(send);
+        }
+        render(field, ctx, icons)
+    });
     let card = column![]
         .push(countdown)
         .push(top)
         .push(summary)
         .push(body)
+        .push(reply)
         .push(actions)
         .spacing(4)
         .width(Length::Fill);
