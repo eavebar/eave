@@ -35,7 +35,7 @@ use iced::{
 use crate::field::AnyFocused;
 use crate::jelly::{Jelly, Side};
 use crate::spring::{DRAG, FADE, MAX_FRAME, MORPH, NUDGE, PLAYFUL, REST_DISTANCE, SQUISH, Spring};
-use crate::squircle::{self, CornerShape, squircle, warp};
+use crate::squircle::{self, CornerShape, squircle_corners, warp};
 use crate::squish::{self, Squish};
 use crate::theme;
 
@@ -64,6 +64,8 @@ pub struct Island<'a, M> {
     notch: Option<f32>,
     /// How it's rounded outwards where it meets the top edge, if it's attached there (D-72).
     shoulders: Option<CornerShape>,
+    /// Its corners: top left, top right, bottom right, bottom left (D-73).
+    corners: [CornerShape; 4],
 }
 
 /// The control at one end of an island that shows and hides its collapsible items: there while
@@ -116,6 +118,7 @@ impl<'a, M> Island<'a, M> {
             bleed: Padding::ZERO,
             notch: None,
             shoulders: None,
+            corners: [CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING); 4],
         }
     }
 
@@ -136,6 +139,13 @@ impl<'a, M> Island<'a, M> {
     /// reach on past it, if it's attached to the top: it hangs from the edge as the notch does.
     pub fn shoulders(mut self, shoulders: Option<CornerShape>) -> Self {
         self.shoulders = shoulders;
+        self
+    }
+
+    /// Rounded like this: top left, top right, bottom right, bottom left. A live island is rounder
+    /// until it grows into a popover.
+    pub fn corners(mut self, corners: [CornerShape; 4]) -> Self {
+        self.corners = corners;
         self
     }
 
@@ -222,8 +232,9 @@ struct State {
     toggle_shown: bool,
     /// Whether it's a live island, so `shape` is rebuilt when that changes.
     live: bool,
-    /// Its shoulders, so `shape` is rebuilt when they change.
+    /// Its shoulders and corners, so `shape` is rebuilt when they change.
     shoulders: Option<CornerShape>,
+    corners: [CornerShape; 4],
 }
 
 /// Where everything is going and how it's moving there. Positions are in logical pixels, in
@@ -1074,16 +1085,19 @@ fn panel_offset(place: Size, content: Size) -> Vector {
     )
 }
 
-/// The island's corner radius at `height`. A live one's corners are rounder, until it grows into
-/// a popover: they ease to the usual radius over the first island height it grows, so the panel
-/// looks like any other.
-fn radius(live: bool, height: f32) -> f32 {
+/// The island's corners at `height`. A live one's are rounder, until it grows into a popover:
+/// they ease to its own over the first island height it grows, so the panel looks like any other.
+fn corners(live: bool, height: f32, corners: [CornerShape; 4]) -> [CornerShape; 4] {
     if !live {
-        return theme::ISLAND_RADIUS;
+        return corners;
     }
     let island = theme::ISLAND_HEIGHT as f32;
     let grown = ((height - island) / island).clamp(0.0, 1.0);
-    theme::LIVE_ISLAND_RADIUS + (theme::ISLAND_RADIUS - theme::LIVE_ISLAND_RADIUS) * grown
+    corners.map(|corner| {
+        let radius =
+            theme::LIVE_ISLAND_RADIUS + (corner.radius - theme::LIVE_ISLAND_RADIUS) * grown;
+        CornerShape::new(radius, corner.smoothing)
+    })
 }
 
 /// Draws the island as it is right now: the shape, the items that show, and the popover panel if
@@ -1098,6 +1112,7 @@ fn draw_island<M>(
     panel: Option<(&Element<'_, M>, &Tree, Layout<'_>)>,
     bleed: Padding,
     shoulders: Option<CornerShape>,
+    own_corners: [CornerShape; 4],
     renderer: &mut iced::Renderer,
     theme: &iced::Theme,
     style: &renderer::Style,
@@ -1147,8 +1162,7 @@ fn draw_island<M>(
             let geometry = state.shape.draw(renderer, frame_size, |frame| {
                 let size = body.size();
                 // As round as the shape itself would be: what reaches past it doesn't count.
-                let radius = radius(state.live, shape.height);
-                let smoothing = theme::ISLAND_SMOOTHING;
+                let corners = corners(state.live, shape.height, own_corners);
                 let outline = Rectangle::new(Point::ORIGIN + room, size);
                 // The jelly bends the shape itself: its sides are where they'd be without the
                 // reach, and what reaches past one moves with it.
@@ -1180,15 +1194,21 @@ fn draw_island<M>(
                     let sides = [bleed.left <= 0.0, bleed.right <= 0.0];
                     (room.y - body.y, shoulder, sides)
                 });
-                let outline_of = |bounds: Rectangle, radius: f32, out: f32| match hanging {
-                    Some((edge, shoulder, sides)) => Path::new(|builder| {
-                        let corners = CornerShape::new(radius, smoothing);
-                        let shoulder = CornerShape::new(shoulder.radius + out, shoulder.smoothing);
-                        squircle::hanging(builder, bounds, corners, edge, shoulder, sides);
-                    }),
-                    None => squircle(bounds, radius, smoothing),
+                // `out` widens the shoulders and tightens the corners by as much.
+                let outline_of = |bounds: Rectangle, out: f32| {
+                    let corners = corners.map(|corner| {
+                        CornerShape::new((corner.radius - out).max(0.0), corner.smoothing)
+                    });
+                    match hanging {
+                        Some((edge, shoulder, sides)) => Path::new(|builder| {
+                            let shoulder =
+                                CornerShape::new(shoulder.radius + out, shoulder.smoothing);
+                            squircle::hanging(builder, bounds, corners, edge, shoulder, sides);
+                        }),
+                        None => squircle_corners(bounds, corners),
+                    }
                 };
-                frame.fill(&bend(outline_of(outline, radius, 0.0)), theme::ISLAND_BG);
+                frame.fill(&bend(outline_of(outline, 0.0)), theme::ISLAND_BG);
                 // Half a pixel in, so the whole hairline lands inside the fill; and half a pixel
                 // rounder round the shoulders, which curve the other way.
                 let inset = Rectangle::new(
@@ -1196,7 +1216,7 @@ fn draw_island<M>(
                     Size::new(size.width - 1.0, size.height - 1.0),
                 );
                 frame.stroke(
-                    &bend(outline_of(inset, radius - 0.5, 0.5)),
+                    &bend(outline_of(inset, 0.5)),
                     Stroke::default()
                         .with_color(theme::ISLAND_BORDER)
                         .with_width(1.0),
@@ -1320,6 +1340,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             own: (0.0, 0.0),
             live: false,
             shoulders: None,
+            corners: [CornerShape::SQUARE; 4],
         })
     }
 
@@ -1344,9 +1365,13 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         let spacing = theme::ITEM_SPACING as f32;
         let limits = layout::Limits::new(Size::new(0.0, height), Size::new(f32::INFINITY, height));
         let state = tree.state.downcast_mut::<State>();
-        if state.live != self.live || state.shoulders != self.shoulders {
+        if state.live != self.live
+            || state.shoulders != self.shoulders
+            || state.corners != self.corners
+        {
             state.live = self.live;
             state.shoulders = self.shoulders;
+            state.corners = self.corners;
             state.shape.clear();
         }
         state.toggle_shown = (state.hovered || self.expanded) && self.popover.is_none();
@@ -1434,6 +1459,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             None,
             self.bleed,
             self.shoulders,
+            self.corners,
             renderer,
             theme,
             style,
@@ -1735,6 +1761,7 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             Some((&popover.content, panel, content)),
             island.bleed,
             island.shoulders,
+            island.corners,
             renderer,
             theme,
             style,
