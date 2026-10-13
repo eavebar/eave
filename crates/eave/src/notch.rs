@@ -52,7 +52,7 @@ const MODELS: &[(&str, u32, u32)] = &[
 
 /// For a notch whose width nobody has measured: wide enough to clear any MacBook's, in logical
 /// pixels. `notch = { width = … }` in config.toml says better.
-const UNKNOWN_WIDTH: f32 = 260.0;
+pub const UNKNOWN_WIDTH: f32 = 260.0;
 
 /// The notch the bar goes around, as config.toml asks: found, given, or none.
 pub async fn resolve(setting: config::Notch) -> Option<Notch> {
@@ -108,6 +108,13 @@ pub async fn focused() -> Option<eave_hyprland::types::Monitor> {
     monitors
         .into_iter()
         .find(|monitor| monitor.focused && monitor.scale > 0.0)
+}
+
+/// This machine's notch as the hardware has it, in physical pixels, if the kernel shows it: its
+/// width, if someone has measured it, and its height. Reads files, so it blocks.
+pub fn hardware() -> Option<(Option<f32>, f32)> {
+    let found = find(Path::new("/"))?;
+    Some((found.width.map(|width| width as f32), found.height as f32))
 }
 
 /// The notch under `root` (`/`, or a fake tree in tests), if the kernel shows it.
