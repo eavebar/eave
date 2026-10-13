@@ -70,6 +70,16 @@ Notifications travel only over the session bus ([D-52](decisions.md)). The plugi
 4. The host runs each notice's clock while the panel is on screen and not pointed at (`NoticesHovered`), with one timer set for the next to expire (`ToastTimer`). When it runs out, the widget gets the notice's `expires` message.
 5. An open popover on the right island takes the island over, and the notices wait with their clocks stopped. The island's popover key changes, so it morphs straight from one to the other, both ways.
 
+## The dormer
+
+The dormer is the host's search dialog for widgets' actions ([D-84](decisions.md)). A Hyprland bind sends `eave-dormer` on socket2 (`bind = SUPER, SPACE, event, eave-dormer`, or `eave dormer`), and the bar's always-on socket2 filter turns it into `Dormer(Toggle)`:
+
+1. The host asks Hyprland how tall the focused screen is, then opens the dormer a fifth of the way down (`Opened(top)`). Opening it closes any popover, the same way opening a popover closes it.
+2. It asks every widget for `actions()`, and adds a row for each widget with a popover. `dormer.rs` ranks them for what's typed and keeps the best eight. After each of a widget's messages while it's open, the host asks again, and the selection stays on its row.
+3. `view` stacks a host island at the top center over the bar's islands: the notch's width, or a dot. Its popover is the dormer's panel, a `text_input` over a `list`, placed with `Placement::Centered { top }`. Placing, growing the surface, the input region and the morph are a popover's (`Placed`). Arrow keys reach the host through the popover's `on_key`. Every other key stays in the field.
+4. A pick (`Run`) closes the dormer, remembers the pick, and sends the action's message to its widget through the usual `Message::Widget` route, or opens the widget's popover.
+5. It closes like a popover: Esc, a key the field doesn't take, a click elsewhere, or the keybind again. When its island is back, it reports `Closed` and the surface shrinks.
+
 ## Data sources by widget
 
 | Widget | Source | Mechanism |
@@ -94,7 +104,7 @@ So far: clock, workspaces, active window, keyboard layout, battery, network, vol
 Cargo.toml                 workspace, release profile
 crates/eave-api/           the plugin SDK: what plugin authors depend on
   src/widget.rs            the Widget trait
-  src/ui.rs                the closed vocabulary: Node, Item, Panel, Notice, Tone
+  src/ui.rs                the closed vocabulary: Node, Item, Panel, Notice, Action, Tone
   src/effect.rs            Effect: a Task plus popover requests
   src/registry.rs          Registry: widget name → constructor
   src/erased.rs            type erasure for the host (doc-hidden)
@@ -108,6 +118,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/icon.rs              status icons (volume, Wi-Fi, wired, battery, brightness, media) as vector paths
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
   src/cover.rs             covers: a file or https URL → cropped, rounded 32 and 256 px bitmaps, off the UI thread
+  src/dormer.rs            the dormer's list: what widgets offer, ranked for what's typed, the selection and recent picks
   src/theme.rs             every color, size and font
   src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay, switching popovers mid-morph, the collapse chevron on hover
   src/squish.rs            how squished the items being drawn are, set by their island
@@ -134,6 +145,7 @@ crates/eave-net/           service: network state from the kernel over netlink (
 crates/eave-pulse/         service: audio over the PulseAudio protocol (one event thread)
 crates/eave-hyprland/      service: shared socket2 events, socket1 queries and dispatches
 eave-collection.toml       lists plugins/*: the built-ins, as one collection (D-46)
+plugins/apps/              installed apps as actions in the dormer, from desktop entries (eave-apps)
 plugins/clock/             the clock plugin (crate eave-clock) + its eave-plugin.toml
 plugins/workspaces/        Hyprland workspaces (eave-workspaces)
 plugins/window/            focused window title (eave-window)

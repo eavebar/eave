@@ -1743,3 +1743,35 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 **Tests** compare against the language, not literal numbers: a push peaks within 20 % of `NUDGE_PUSH × REACT_SIZE`, and swings back past rest no more than `REACT`'s `overshoot()` says. So retuning the feels keeps them meaningful.
 
 **Measured** (on the reference feel; the feels only change numbers. Asahi, release, GPU renderer, the user's config, both binaries from the same directory, 12 s after start, two runs each): binary 17,788,544 bytes before and after. RSS about 62 MB of anonymous and file pages either way (RssAnon 22.2 MB, RssFile 40.0 MB on both). Idle CPU 0–2 ticks per 10 s on both. No dependencies, nothing allocated. *Gotcha:* a binary run from tmpfs shows about 2 MB more RSS than the same one run from disk, so compare binaries from the same place.
+
+## D-84: The dormer: actions widgets declare, found by typing
+
+**Status:** accepted (2026-10-14).
+
+**What:** a keybind opens the dormer, a search dialog that drops out of the top center of the screen into its upper middle. It lists **actions**, and typing narrows them down: up and down (or Tab) pick a row, Enter or a click runs it, and Esc, any other key the field doesn't take, or a click elsewhere closes it, like a popover.
+- **Widgets declare their actions** with `Widget::actions()`, a list of `ui::action(title, message)` with `.subtitle`, `.keywords` and `.leading` (a small picture). Like `notices()`, the method is pure, and the host reads it, not the widget. It reads it only while the dormer is open: once when it opens, then after each of a widget's messages, so titles can follow state ("Mute" while sound plays, "Unmute" while muted). Running an action sends its message to its widget, as a click would, so an action that returns `open_popover()` opens that popover.
+- **Every widget with a popover gets a row of its own**, titled with its name, that opens it. So the dormer is useful before any widget declares an action.
+- **The dialog:** the host matches what's typed against titles, then keywords and subtitles: every character in order, scoring more for a start, a word start or a run, plus a little for recent picks. It shows the best eight, so nothing scrolls. With nothing typed, it lists the recent picks first, then the rest. The picks are kept in memory only, like the notification history.
+- **Its island:** a host island at the top center: the notch's width when there is one, otherwise a dot under the top edge, attached to the top. It is only there while the dormer is. The panel uses the popover machinery, with a new `Placement::Centered { top }`: centered across the surface, its top a fifth of the way down the focused screen (from Hyprland's `monitors`). The springs carry the shape down there and back up. The surface grows to fit it, and the bar takes the keyboard for it, as it does for a popover. The dormer and popovers take turns: opening either closes the other.
+- **The keybind** is a Hyprland custom event, `eave-dormer`: `bind = SUPER, SPACE, event, eave-dormer`, or `eave dormer` from anywhere, which dispatches that event. The bar's socket2 reader now runs all the time to catch it. Every other event stops in its filter, before `update`.
+- **`[[dormer]]` in config.toml** holds widgets that are only there for their actions. Their items aren't drawn and their popovers never open. eave-build compiles them in like any other.
+- **The `apps` plugin** is the first of those. It turns each desktop entry into an action that launches it through Hyprland's `exec`, so the app isn't a child of the bar. `Terminal=true` entries need `terminal = "foot"`. It reads the entries off the UI thread, then again whenever an `applications` directory changes (inotify, on a thread of its own).
+- **Built-in actions:** volume (mute, up, down, the mic, switch devices), media (play or pause, next, previous, follow another player), brightness (brighter, dimmer), workspaces (every window to switch to, every workspace, previous, next), keyboard (next layout, each other layout).
+
+**Why:**
+- **The host reads the actions; no plugin reads another's.** Plugins have no channel to each other, and the host owns every surface (D-11). The dormer as a plugin would need both. Declaring keeps one source of truth, as with `notices()` (D-47): the widget's state, not a copy the host keeps in step.
+- **A keyboard door to every plugin.** Popovers are reached with the pointer. Muting, skipping a track or finding a window by name are quicker typed, and a widget gets this by listing what it can already do.
+- **A launcher is just a plugin.** The roadmap's "launcher" needs nothing of its own: apps are actions too.
+- **Only while open.** Nothing is asked of the widgets while the dormer is closed, so the bar at rest does no more work than before.
+- **`actions()` sees no query.** A static list the host filters covers every built-in and the app launcher. A second reader (eave-claude handing actions to Claude as tools, say) can use the same list.
+
+**Alternatives:**
+- The dormer as a plugin: needs a way for plugins to read each other, and to own a surface.
+- Actions over D-Bus, so other programs could add theirs: a serialization layer between widgets and their own messages, for no reader yet.
+- A query-aware API (`actions(query)`, async results) for calculators and file search: more API before it's needed. It can be added beside this one.
+- A separate layer surface for the dialog: the bar surface already grows for popovers, and morphing out of an island is the motion eave uses everywhere.
+- Arrow keys through `ui` (an `on_key` primitive): the dormer is the host's own, so a host-only `Popover::on_key` does it without widening the vocabulary.
+
+**Cost:** no new dependency in the host. The apps plugin uses rustix's inotify and tokio's channel, both already in the tree. One always-on socket2 subscription, shared with every Hyprland widget. The `apps` plugin keeps its desktop entries in memory (a few KB) and one blocked thread.
+
+**Not yet:** network actions. The Wi-Fi state is read from iwd only while its popover is open (D-42), and the dormer closes that popover, so for now there is only the row that opens it. eave-notifications (do not disturb, clear) and eave-claude (focus a session) wait for this API on crates.io.

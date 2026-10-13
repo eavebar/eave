@@ -760,6 +760,7 @@ name = "eave"
 version = "0.1.0"
 dependencies = [
  "eave-api",
+ "eave-apps",
  "eave-battery",
  "eave-brightness",
  "eave-clock",
@@ -792,6 +793,19 @@ version = "0.1.5"
 dependencies = [
  "iced_futures",
  "iced_runtime",
+ "serde",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "eave-apps"
+version = "0.1.0"
+dependencies = [
+ "eave-api",
+ "eave-hyprland",
+ "futures-util",
+ "rustix 1.1.5",
  "serde",
  "tokio",
  "toml",

@@ -9,7 +9,7 @@ mod curve;
 mod sysfs;
 
 use eave_api::time::{Duration, every, sleep};
-use eave_api::ui::{self, Icon, Item, Panel, Tone};
+use eave_api::ui::{self, Action, Icon, Item, Panel, Tone};
 use eave_api::{Effect, Nudge, Registry, Subscription, Task, Widget};
 use serde::Deserialize;
 
@@ -231,6 +231,24 @@ impl Widget for Brightness {
             .on_close(Message::Closed);
         Some(panel)
     }
+
+    fn actions(&self) -> Vec<Action<Message>> {
+        let Some(display) = &self.display else {
+            return Vec::new();
+        };
+        let words = ["brightness", "screen", "display", "backlight"];
+        let sun = |level| ui::icon(Icon::Brightness { level });
+        vec![
+            ui::action("Brighter", Message::Up)
+                .subtitle(format!("{}%", display.percent))
+                .keywords(words.into_iter().chain(["up", "raise"]))
+                .leading(sun(1.0)),
+            ui::action("Dimmer", Message::Down)
+                .subtitle(format!("{}%", display.percent))
+                .keywords(words.into_iter().chain(["down", "lower", "darker"]))
+                .leading(sun(0.3)),
+        ]
+    }
 }
 
 /// A light's icon, its slider and its level.
@@ -394,6 +412,19 @@ mod tests {
         let (mut brightness, _) = Brightness::new(Config::default());
         brightness.update(Message::Read(lights(percent)));
         brightness
+    }
+
+    #[test]
+    fn brighter_and_dimmer_only_with_a_display() {
+        let titles = |brightness: &Brightness| {
+            brightness
+                .actions()
+                .into_iter()
+                .map(|action| action.title().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert!(titles(&Brightness::new(Config::default()).0).is_empty());
+        assert_eq!(titles(&brightness_at(50)), ["Brighter", "Dimmer"]);
     }
 
     fn level(brightness: &Brightness) -> u32 {

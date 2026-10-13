@@ -5,7 +5,7 @@
 //! the icon. It shows the percent while hovered, too.
 
 use eave_api::time::{Duration, sleep};
-use eave_api::ui::{self, Icon, Item, Panel, Tone};
+use eave_api::ui::{self, Action, Icon, Item, Panel, Tone};
 use eave_api::{Effect, Nudge, Registry, Subscription, Task, Widget};
 use eave_pulse::{Audio, Device, Direction, Form, Playback};
 use serde::Deserialize;
@@ -235,6 +235,80 @@ impl Widget for Volume {
             .on_open(Message::Opened)
             .on_close(Message::Closed);
         Some(panel)
+    }
+
+    fn actions(&self) -> Vec<Action<Message>> {
+        let Some(sink) = self.audio.default_sink() else {
+            return Vec::new();
+        };
+        let sound = ["sound", "volume", "audio"];
+        let speaker = |level: u32, muted| {
+            ui::icon(Icon::Volume {
+                level: level as f32 / 100.0,
+                muted,
+            })
+        };
+        let mute = if sink.muted { "Unmute" } else { "Mute" };
+        let mut actions = vec![
+            ui::action(mute, Message::ToggleMute)
+                .subtitle(sink.description.clone())
+                .keywords(sound.into_iter().chain(["silence", "quiet"]))
+                .leading(speaker(sink.volume, !sink.muted)),
+            ui::action("Volume up", Message::Up)
+                .subtitle(format!("{}%", sink.volume))
+                .keywords(sound.into_iter().chain(["louder", "raise"]))
+                .leading(speaker(100, false)),
+            ui::action("Volume down", Message::Down)
+                .subtitle(format!("{}%", sink.volume))
+                .keywords(sound.into_iter().chain(["quieter", "lower"]))
+                .leading(speaker(30, false)),
+        ];
+        if let Some(source) = self.audio.default_source() {
+            let mute = if source.muted {
+                "Unmute microphone"
+            } else {
+                "Mute microphone"
+            };
+            actions.push(
+                ui::action(mute, Message::ToggleMic)
+                    .subtitle(source.description.clone())
+                    .keywords(["mic", "input"])
+                    .leading(ui::icon(Icon::Mic {
+                        muted: !source.muted,
+                    })),
+            );
+        }
+        // The devices to switch to: the ones not in use.
+        for (direction, devices, default, kind) in [
+            (
+                Direction::Output,
+                &self.audio.sinks,
+                self.audio.default_sink,
+                "Sound output",
+            ),
+            (
+                Direction::Input,
+                &self.audio.sources,
+                self.audio.default_source,
+                "Sound input",
+            ),
+        ] {
+            for (index, device) in devices.iter().enumerate() {
+                if Some(index) == default {
+                    continue;
+                }
+                actions.push(
+                    ui::action(
+                        format!("Switch to {}", device.description),
+                        Message::Choose(direction, index),
+                    )
+                    .subtitle(kind)
+                    .keywords(sound.into_iter().chain(device.connection))
+                    .leading(ui::icon(form_icon(device.form))),
+                );
+            }
+        }
+        actions
     }
 }
 
@@ -608,6 +682,28 @@ mod tests {
         assert!(shows_label(&volume));
         volume.update(Message::HideLevel(volume.changes));
         assert!(!shows_label(&volume));
+    }
+
+    #[test]
+    fn its_actions_follow_the_sound() {
+        let titles = |volume: &Volume| {
+            volume
+                .actions()
+                .into_iter()
+                .map(|action| action.title().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let mut volume = volume_at(50);
+        let mut headphones = eave_pulse::test_device(20);
+        headphones.description = "Headphones".into();
+        volume.audio.sinks.push(headphones);
+        assert_eq!(
+            titles(&volume),
+            ["Mute", "Volume up", "Volume down", "Switch to Headphones"]
+        );
+        volume.update(Message::ToggleMute);
+        assert_eq!(titles(&volume)[0], "Unmute");
+        assert!(titles(&Volume::new(Config::default()).0).is_empty());
     }
 
     #[test]

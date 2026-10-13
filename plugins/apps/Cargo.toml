@@ -1,0 +1,20 @@
+[package]
+name = "eave-apps"
+version = "0.1.0"
+description = "Installed apps as actions in the dormer: type a name to launch it, for eave"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+# Apps are started by Hyprland's exec, so they aren't the bar's children.
+eave-hyprland.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# inotify on the applications directories; already in the tree (D-21).
+rustix = { version = "1", default-features = false, features = ["std", "fs"] }
+tokio = { version = "1", default-features = false, features = ["sync", "rt"] }
+serde.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

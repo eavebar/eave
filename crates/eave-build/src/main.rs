@@ -285,8 +285,8 @@ fn build(config_path: &Path, update: bool) -> Result<()> {
     Ok(())
 }
 
-/// `eave = "…"` and every `widget = "…"`, in bar order. Malformed entries are left to the bar,
-/// which reports them.
+/// `eave = "…"` and every `widget = "…"`, in bar order, then the dormer's. Malformed entries are
+/// left to the bar, which reports them.
 fn read_config(text: &str) -> Result<(Option<String>, Vec<String>)> {
     let table: toml::Table = text.parse().map_err(|e| format!("{e}"))?;
     let eave = match table.get("eave") {
@@ -294,7 +294,7 @@ fn read_config(text: &str) -> Result<(Option<String>, Vec<String>)> {
         Some(toml::Value::String(eave)) => Some(eave.clone()),
         Some(_) => return Err("`eave` must be a string".into()),
     };
-    let widgets = ["left", "center", "right"]
+    let widgets = ["left", "center", "right", "dormer"]
         .iter()
         .filter_map(|zone| table.get(*zone)?.as_array())
         .flatten()
@@ -1281,13 +1281,15 @@ mod tests {
             [[left]]
             widget = "someone/weather"
             units = "metric"
+            [[dormer]]
+            widget = "apps"
             [[left]]
             format = "no widget: the bar reports it"
             "#,
         )
         .unwrap();
         assert_eq!(eave.as_deref(), Some("~/code/eave"));
-        assert_eq!(widgets, ["someone/weather", "battery"]);
+        assert_eq!(widgets, ["someone/weather", "battery", "apps"]);
     }
 
     /// A scratch directory holding `files` (path, contents), removed by the caller.

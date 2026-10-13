@@ -7,7 +7,7 @@
 use std::time::Instant;
 
 use eave_api::time::{Duration, every, sleep};
-use eave_api::ui::{self, Icon, Item, Panel, Tone};
+use eave_api::ui::{self, Action, Icon, Item, Panel, Tone};
 use eave_api::{Effect, Nudge, Registry, Subscription, Task, Widget};
 use eave_mpris::{Player, Status};
 use serde::Deserialize;
@@ -291,6 +291,59 @@ impl Widget for Media {
             .on_open(Message::Opened)
             .on_close(Message::Closed);
         Some(panel)
+    }
+
+    fn actions(&self) -> Vec<Action<Message>> {
+        let Some(player) = self.current() else {
+            return Vec::new();
+        };
+        let music = ["music", "media", "track", "song"];
+        let mut actions = Vec::new();
+        let (title, icon) = if player.playing() {
+            ("Pause", Icon::Pause)
+        } else {
+            ("Play", Icon::Play)
+        };
+        if player.can_play || player.can_pause {
+            actions.push(
+                ui::action(title, Message::PlayPause)
+                    .subtitle(track(player))
+                    .keywords(music.into_iter().chain(["resume", "stop"]))
+                    .leading(ui::icon(icon)),
+            );
+        }
+        if player.can_go_next {
+            actions.push(
+                ui::action("Next track", Message::Next)
+                    .subtitle(player.identity.clone())
+                    .keywords(music.into_iter().chain(["skip"]))
+                    .leading(ui::icon(Icon::Next)),
+            );
+        }
+        if player.can_go_previous {
+            actions.push(
+                ui::action("Previous track", Message::Previous)
+                    .subtitle(player.identity.clone())
+                    .keywords(music.into_iter().chain(["back"]))
+                    .leading(ui::icon(Icon::Previous)),
+            );
+        }
+        for other in self
+            .players
+            .iter()
+            .filter(|other| other.bus_name != player.bus_name)
+        {
+            actions.push(
+                ui::action(
+                    format!("Follow {}", other.identity),
+                    Message::Choose(other.bus_name.clone()),
+                )
+                .subtitle(track(other))
+                .keywords(music.into_iter().chain(["player", "switch"]))
+                .leading(ui::app_icon(app_id(other))),
+            );
+        }
+        actions
     }
 }
 
@@ -655,6 +708,30 @@ mod tests {
             can_pause: true,
             can_seek: true,
         }
+    }
+
+    #[test]
+    fn its_actions_follow_the_player() {
+        let titles = |media: &Media| {
+            media
+                .actions()
+                .into_iter()
+                .map(|action| action.title().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let mut media = media(Config::default());
+        assert!(
+            titles(&media).is_empty(),
+            "nothing to control without a player"
+        );
+        media.update(Message::Players(vec![
+            player("a", Status::Playing, "One"),
+            player("b", Status::Paused, "Two"),
+        ]));
+        assert_eq!(
+            titles(&media),
+            ["Pause", "Next track", "Previous track", "Follow b"]
+        );
     }
 
     fn media(config: Config) -> Media {

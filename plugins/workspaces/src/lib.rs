@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use eave_api::ui::{self, Item, Node, Panel, Tone};
+use eave_api::ui::{self, Action, Item, Node, Panel, Tone};
 use eave_api::{Effect, Nudge, Registry, Subscription, Task, Widget};
 
 use eave_hyprland::types::{Client, Workspace};
@@ -215,6 +215,48 @@ impl Widget for Workspaces {
             .trailing(ui::label(count).tone(Tone::Dim));
         Some(Panel::new(ui::column([header, ui::list(rows)])))
     }
+
+    /// Every window to switch to, then every workspace to go to, then the ones on either side.
+    fn actions(&self) -> Vec<Action<Message>> {
+        let mut actions: Vec<_> = self
+            .windows
+            .iter()
+            .filter(|window| self.focused.as_ref() != Some(&window.address))
+            .map(|window| {
+                let title = if window.title.is_empty() {
+                    &window.class
+                } else {
+                    &window.title
+                };
+                let workspace = self
+                    .open
+                    .iter()
+                    .find(|(id, _)| *id == window.workspace)
+                    .map_or_else(|| window.workspace.to_string(), |(_, name)| name.clone());
+                ui::action(title.clone(), Message::Focus(window.address.clone()))
+                    .subtitle(format!("Window on workspace {workspace}"))
+                    .keywords([window.class.clone(), "window".into(), "switch".into()])
+                    .leading(ui::app_icon(window.class.clone()))
+            })
+            .collect();
+        actions.extend(
+            self.shown
+                .iter()
+                .filter(|workspace| Some(workspace.id) != self.active)
+                .map(|workspace| {
+                    ui::action(
+                        format!("Workspace {}", workspace.name),
+                        Message::Go(workspace.id),
+                    )
+                    .keywords(["go", "switch"])
+                }),
+        );
+        actions.extend([
+            ui::action("Previous workspace", Message::Previous).keywords(["left", "back"]),
+            ui::action("Next workspace", Message::Next).keywords(["right", "forward"]),
+        ]);
+        actions
+    }
 }
 
 impl Shown {
@@ -409,6 +451,48 @@ mod tests {
 
     fn bar(persistent: u32) -> Workspaces {
         Workspaces::new(Config { persistent }).0
+    }
+
+    #[test]
+    fn its_actions_switch_windows_and_workspaces() {
+        let mut workspaces = bar(0);
+        workspaces.open = vec![(1, "1".into()), (2, "web".into())];
+        workspaces.shown = vec![
+            Shown {
+                id: 1,
+                name: "1".into(),
+                classes: Vec::new(),
+            },
+            Shown {
+                id: 2,
+                name: "web".into(),
+                classes: Vec::new(),
+            },
+        ];
+        workspaces.active = Some(1);
+        let window = |address: &str, workspace, title: &str| Window {
+            address: address.into(),
+            workspace,
+            class: "firefox".into(),
+            title: title.into(),
+        };
+        workspaces.windows = vec![window("a", 1, "Here"), window("b", 2, "")];
+        workspaces.focused = Some("a".into());
+        let actions: Vec<_> = workspaces
+            .actions()
+            .into_iter()
+            .map(|action| action.into_parts())
+            .map(|parts| (parts.title, parts.subtitle))
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                ("firefox".into(), Some("Window on workspace web".into())),
+                ("Workspace web".into(), None),
+                ("Previous workspace".into(), None),
+                ("Next workspace".into(), None),
+            ]
+        );
     }
 
     fn ids(workspaces: &Workspaces) -> Vec<i64> {

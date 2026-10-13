@@ -6,7 +6,7 @@ An **eave** is the edge of a roof, the strip along the top of a house. The bar i
 
 ## What we are building
 
-A status bar for Hyprland: a thin surface pinned to a screen edge that reserves its own space and shows live system state. That means workspaces, the focused window, a clock, battery, audio, network, media, and a system tray. Later it may grow into more shell components (OSD, notifications, launcher), built on the same foundations.
+A status bar for Hyprland: a thin surface pinned to a screen edge that reserves its own space and shows live system state. That means workspaces, the focused window, a clock, battery, audio, network, media, and a system tray. Later it may grow into more shell components (OSD, notifications, launcher), built on the same foundations. Notifications are done, and the launcher is the dormer: a search dialog for what every widget can do ([D-84](decisions.md)).
 
 It is a personal tool first. It is built for one person's daily use on a MacBook running Asahi Linux, and must also work on a CachyOS desktop.
 

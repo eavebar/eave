@@ -1,15 +1,16 @@
 //! The host: holds the widget instances, routes their messages, and owns the bar surfaces. A
 //! popover isn't a surface of its own: the island holding its item morphs into it, and the bar
 //! surface grows to make room while it's there. Widgets' notifications turn the right island at
-//! the screen's edge into a panel the same way, while there are any.
+//! the screen's edge into a panel the same way, while there are any. The dormer, the search
+//! dialog for widgets' actions, drops out of the top of the screen the same way too (D-84).
 
 use std::time::{Duration, Instant};
 
 use eave_api::erased::{AnyMessage, ErasedWidget, PopoverRequest};
-use eave_api::ui::{Icon, Notice, NoticeParts, Tone};
+use eave_api::ui::{self as ui, Action, Icon, Notice, NoticeParts, Tone};
 use eave_api::{NudgeRequest, Registry};
 use iced::alignment::Horizontal;
-use iced::widget::{Space, container, row};
+use iced::widget::{Space, container, row, stack};
 use iced::{
     Color, Element, Event, Length, Padding, Rectangle, Subscription, Task, Theme, keyboard, mouse,
     theme, window,
@@ -22,7 +23,8 @@ use crate::apps::{self, AppIcon, FileIcon, FileKey, Frame, Icons, Wanted};
 use crate::config::{self, Config, Entry, Zone};
 use crate::countdown::Countdown;
 use crate::cover::{self, Cover};
-use crate::island::{self, Island, Toggle};
+use crate::dormer::{self, Recent, Session, Source};
+use crate::island::{self, Island, Placement, Toggle};
 use crate::notch::{self, Notch, Place, Side};
 use crate::slot::Slot;
 use crate::squircle::CornerShape;
@@ -60,6 +62,10 @@ pub struct Bar {
     toasts: Vec<Toast>,
     /// The right island while it's a panel of notifications.
     notices: Option<NoticePanel>,
+    /// The dormer, from the keybind until it has folded back.
+    dormer: Option<Session>,
+    /// The dormer's last picks, for as long as the bar runs.
+    recent: Recent,
     /// Bar surfaces, in the order they opened.
     windows: Vec<window::Id>,
     /// Numbers the expiry timer, so only the one set last counts.
@@ -172,6 +178,10 @@ struct NoticePanel {
 
 /// The panel's popover key: no widget instance has it.
 const NOTICES: u64 = u64::MAX;
+/// The dormer's popover key, and its island's one item's.
+const DORMER: u64 = u64::MAX - 1;
+/// Where the dormer's top goes when the screen's height can't be had, from the surface's top.
+const DORMER_TOP: f32 = 160.0;
 
 /// The time a notification gets back when the pointer leaves the panel, if it had less: enough
 /// to read the last words or reach for its close button.
@@ -215,6 +225,8 @@ pub enum Message {
     NoticesHovered(bool),
     /// The expiry timer with this number went off.
     ToastTimer(u64),
+    /// Something happened to the dormer.
+    Dormer(dormer::Event),
     /// A collapsed item's time out is up, if this is still its last reveal.
     Unreveal(u64, u64),
     /// A bar surface opened: it takes the pointer only over its strip.
@@ -253,6 +265,8 @@ impl Bar {
             fetching: Vec::new(),
             toasts: Vec::new(),
             notices: None,
+            dormer: None,
+            recent: Recent::default(),
             windows: Vec::new(),
             timer: 0,
             alarm: None,
@@ -348,6 +362,7 @@ impl Bar {
             .partition(|popover| self.find(popover.instance).is_some());
         self.popovers = kept;
         tasks.extend(gone.iter().map(|popover| self.fit(popover.window)));
+        self.refresh_dormer();
         self.config = config;
         Task::batch(tasks)
     }
@@ -375,6 +390,11 @@ impl Bar {
                         kit::wanted(panel.into_node(), &mut wanted);
                     }
                 }
+            }
+        }
+        if let Some(session) = self.dormer.as_ref().filter(|session| session.open) {
+            for picture in dormer_pictures(self, session).into_iter().flatten() {
+                kit::wanted(picture, &mut wanted);
             }
         }
         let notices = self.toasts.iter().map(|toast| &toast.notice);
@@ -449,7 +469,8 @@ impl Bar {
         let Some(instance) = self.find(id) else {
             return Hooks::new();
         };
-        if !instance.has_popover {
+        // One in the dormer has no island to grow it out of.
+        if !instance.has_popover || instance.entry.zone == Zone::Dormer {
             return Hooks::new();
         }
         // Opened from a notification or a signal, before its item was ever clicked: on the bar
@@ -495,6 +516,10 @@ impl Bar {
     /// Starts closing whatever is open. It stays until its island has morphed back. Returns the
     /// messages the widgets asked for on closing ([`eave_api::ui::Panel::on_close`]).
     fn close_popover(&mut self) -> Hooks {
+        // The dormer gives way the same way, and to the same things.
+        if let Some(session) = &mut self.dormer {
+            session.open = false;
+        }
         let mut hooks = Hooks::new();
         for popover in self.popovers.iter_mut().filter(|popover| popover.open) {
             popover.open = false;
@@ -511,7 +536,93 @@ impl Bar {
     }
 
     fn is_open(&self) -> bool {
-        self.popovers.iter().any(|popover| popover.open)
+        self.popovers.iter().any(|popover| popover.open) || self.dormer_open()
+    }
+
+    fn dormer_open(&self) -> bool {
+        self.dormer.as_ref().is_some_and(|session| session.open)
+    }
+
+    /// Everything the dormer can list: each widget's actions, and its popover if it has one.
+    /// Asked only while the dormer is open.
+    fn dormer_entries(&self) -> Vec<dormer::Entry> {
+        let mut entries = Vec::new();
+        for instance in &self.instances {
+            let actions = instance
+                .widget
+                .actions()
+                .into_iter()
+                .map(Action::into_parts);
+            for (index, action) in actions.enumerate() {
+                entries.push(dormer::Entry {
+                    instance: instance.id,
+                    source: Source::Action(index),
+                    title: action.title,
+                    subtitle: action.subtitle,
+                    keywords: action.keywords,
+                });
+            }
+            if instance.has_popover && instance.entry.zone != Zone::Dormer {
+                entries.push(dormer::Entry {
+                    instance: instance.id,
+                    source: Source::Popover,
+                    title: capitalized(config::widget_name(&instance.entry.widget)),
+                    subtitle: Some("Open".into()),
+                    keywords: Vec::new(),
+                });
+            }
+        }
+        entries
+    }
+
+    /// Asks the widgets again what the open dormer lists.
+    fn refresh_dormer(&mut self) {
+        if !self.dormer_open() {
+            return;
+        }
+        let entries = self.dormer_entries();
+        if let Some(session) = &mut self.dormer {
+            session.refresh(entries, &self.recent);
+        }
+    }
+
+    /// Picks the dormer's row at `index`: it folds back, and the row's widget gets its message,
+    /// or opens its popover.
+    fn run_dormer(&mut self, index: usize) -> Task<Message> {
+        let Some(entry) = self
+            .dormer
+            .as_ref()
+            .filter(|session| session.open)
+            .and_then(|session| session.row(index))
+            .cloned()
+        else {
+            return Task::none();
+        };
+        self.recent.push(&entry);
+        let mut hooks = self.close_popover();
+        let id = entry.instance;
+        match entry.source {
+            Source::Popover => {
+                hooks.extend(self.open_popover(id));
+                send(hooks)
+            }
+            Source::Action(index) => {
+                // Asked again for its message, which the list doesn't keep. One that changed
+                // meanwhile isn't the one that was picked.
+                let message = self
+                    .find(id)
+                    .and_then(|instance| instance.widget.actions().into_iter().nth(index))
+                    .map(Action::into_parts)
+                    .filter(|action| action.title == entry.title)
+                    .map(|action| action.message);
+                match message {
+                    Some(message) => {
+                        Task::batch([send(hooks), handle(self, Message::Widget(id, message))])
+                    }
+                    None => send(hooks),
+                }
+            }
+        }
     }
 
     /// Brings a collapsed item out for [`style::REVEAL_SHOWN`], or keeps it out that long again.
@@ -547,12 +658,18 @@ impl Bar {
             .as_ref()
             .filter(|_| self.toast_window() == Some(window))
             .and_then(|panel| panel.rect);
+        let dormer = self
+            .dormer
+            .as_ref()
+            .filter(|_| self.toast_window() == Some(window))
+            .and_then(|session| session.rect);
         let rects: Vec<Rectangle> = self
             .popovers
             .iter()
             .filter(|popover| popover.window == window)
             .filter_map(|popover| popover.rect)
             .chain(notices)
+            .chain(dormer)
             .collect();
         let height = rects
             .iter()
@@ -847,6 +964,7 @@ fn hand_keyboard(bar: &mut Bar) -> Vec<Task<Message>> {
         .iter()
         .find(|popover| popover.open)
         .map(|popover| popover.window)
+        .or_else(|| bar.dormer_open().then(|| bar.toast_window()).flatten())
         .or_else(|| bar.typing().then(|| bar.toast_window()).flatten());
     if wanted == bar.keyboard {
         return Vec::new();
@@ -884,6 +1002,7 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
                 bar.panel_wanted = Some((id, wanted));
             }
             bar.sync_notices(id);
+            bar.refresh_dormer();
             let mut reveal = Task::none();
             if let Some(nudge) = nudge {
                 bar.nudges += 1;
@@ -1058,6 +1177,7 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             }
         }
         Message::ToastTimer(timer) if timer == bar.timer => send(bar.expire(Instant::now())),
+        Message::Dormer(event) => handle_dormer(bar, event),
         Message::Unreveal(id, reveal) => {
             // Its popover is open: it stays out until that closes, and a while after.
             if bar.popover_of(id).is_some() {
@@ -1079,6 +1199,7 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         Message::WindowClosed(window) => {
             if bar.toast_window() == Some(window) {
                 bar.notices = None;
+                bar.dormer = None;
                 bar.toasts.retain(|toast| !toast.leaving);
             }
             bar.windows.retain(|open| *open != window);
@@ -1123,6 +1244,96 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         },
         // Clicks that aren't outside, and the layer-shell variants added by `to_layer_message`.
         _ => Task::none(),
+    }
+}
+
+fn handle_dormer(bar: &mut Bar, event: dormer::Event) -> Task<Message> {
+    use dormer::Event;
+    match event {
+        Event::Toggle if bar.dormer_open() => send(bar.close_popover()),
+        Event::Toggle if bar.toast_window().is_some() => {
+            let inset = bar.screen.inset[0];
+            Task::perform(dormer_top(inset), |top| Message::Dormer(Event::Opened(top)))
+        }
+        Event::Toggle => Task::none(),
+        Event::Opened(top) => {
+            if bar.dormer_open() || bar.toast_window().is_none() {
+                return Task::none();
+            }
+            let hooks = bar.close_popover();
+            // Never over the bar.
+            let top = top.max(bar.screen.surface_height() as f32);
+            // A keybind opened it, not a click: the pointer is wherever it was.
+            bar.pointer_inside = false;
+            match &mut bar.dormer {
+                // Still folding back: it turns around, and starts over empty.
+                Some(session) => {
+                    session.open = true;
+                    session.top = top;
+                    session.search(String::new(), &bar.recent);
+                }
+                None => bar.dormer = Some(Session::new(top)),
+            }
+            bar.refresh_dormer();
+            send(hooks)
+        }
+        Event::Query(query) => {
+            if let Some(session) = bar.dormer.as_mut().filter(|session| session.open) {
+                session.search(query, &bar.recent);
+            }
+            Task::none()
+        }
+        Event::Move(by) => {
+            if let Some(session) = bar.dormer.as_mut().filter(|session| session.open) {
+                session.step(by);
+            }
+            Task::none()
+        }
+        Event::Run(index) => bar.run_dormer(index),
+        Event::Placed(rect) => {
+            let window = bar.toast_window();
+            match (&mut bar.dormer, window) {
+                (Some(session), Some(window)) => {
+                    session.rect = Some(rect);
+                    bar.fit(window)
+                }
+                _ => Task::none(),
+            }
+        }
+        Event::Closed => {
+            if bar.dormer.as_ref().is_none_or(|session| session.open) {
+                return Task::none();
+            }
+            bar.dormer = None;
+            match bar.toast_window() {
+                Some(window) => bar.fit(window),
+                None => Task::none(),
+            }
+        }
+    }
+}
+
+/// Where the dormer's top goes, from the surface's: a fifth of the way down the focused screen,
+/// like a dialog's. `inset` is how far down the surface starts.
+async fn dormer_top(inset: f32) -> f32 {
+    let Some(monitor) = notch::focused().await else {
+        return DORMER_TOP;
+    };
+    // Turned a quarter, the screen's height is the mode's width.
+    let height = if monitor.transform % 2 == 1 {
+        monitor.width
+    } else {
+        monitor.height
+    };
+    (height as f32 / monitor.scale / 5.0 - inset).round()
+}
+
+/// `name` with a capital first letter: a widget's name as a title.
+fn capitalized(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
     }
 }
 
@@ -1193,7 +1404,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             // On the side facing the middle of the screen; a center island's on its right.
             let side = match island.zone {
                 Zone::Right => Horizontal::Left,
-                Zone::Left | Zone::Center => Horizontal::Right,
+                Zone::Left | Zone::Center | Zone::Dormer => Horizontal::Right,
             };
             // Hovering shows it; while the items are out, it stays to put them back.
             let toggle = collapsible.then(|| Toggle {
@@ -1288,14 +1499,137 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
 
     // No background of its own: the surface is transparent around and between the islands, and
     // below them, where a dragged island has room to move and popovers grow.
-    container(zones)
+    let islands = container(zones).padding(Padding {
+        top: f32::from(style::EDGE_GAP) + bar.screen.grow,
+        right: style::EDGE_GAP.into(),
+        bottom: style::DRAG_ROOM.into(),
+        left: style::EDGE_GAP.into(),
+    });
+    // Always a stack, so the islands' state stays put when the dormer comes and goes.
+    stack![islands, dormer_view(bar, window)].into()
+}
+
+/// The dormer's island, in the middle at the top: the notch, if there is one, or a dot under the
+/// top edge, which turns into the dormer. Only there while the dormer is, on the bar the
+/// notifications show on.
+fn dormer_view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
+    let Some(session) = bar
+        .dormer
+        .as_ref()
+        .filter(|_| bar.toast_window() == Some(window))
+    else {
+        return Space::new().into();
+    };
+    let padding = 2.0 * f32::from(style::ISLAND_PADDING);
+    let width = bar
+        .screen
+        .notch
+        .map_or(0.0, |notch| (notch.width - padding).max(0.0));
+    let top = config::Edges {
+        top: true,
+        ..config::Edges::default()
+    };
+    let island = Island::new([(DORMER, Space::new().width(width).into())])
+        .align(Horizontal::Center)
+        .popover(Some(dormer_popover(bar, session)))
+        .bleed(bleed(top))
+        .shows(shows(top))
+        .corners(bar.screen.island_corners(Place::default()))
+        .height(bar.screen.island_height());
+    container(island)
+        .center_x(Length::Fill)
         .padding(Padding {
             top: f32::from(style::EDGE_GAP) + bar.screen.grow,
-            right: style::EDGE_GAP.into(),
-            bottom: style::DRAG_ROOM.into(),
-            left: style::EDGE_GAP.into(),
+            ..Padding::ZERO
         })
         .into()
+}
+
+/// The pictures before the dormer's rows, in the order they show. Asked of the widgets again,
+/// since the list doesn't keep them.
+fn dormer_pictures(bar: &Bar, session: &Session) -> Vec<Option<ui::Node<AnyMessage>>> {
+    let mut asked: Vec<(u64, Vec<Option<ui::Node<AnyMessage>>>)> = Vec::new();
+    session
+        .shown
+        .iter()
+        .map(|&index| {
+            let entry = &session.entries[index];
+            let Source::Action(action) = entry.source else {
+                return None;
+            };
+            let at = match asked.iter().position(|(id, _)| *id == entry.instance) {
+                Some(at) => at,
+                None => {
+                    let pictures = bar
+                        .find(entry.instance)
+                        .map(|instance| {
+                            let actions = instance.widget.actions().into_iter();
+                            actions.map(|action| action.into_parts().leading).collect()
+                        })
+                        .unwrap_or_default();
+                    asked.push((entry.instance, pictures));
+                    asked.len() - 1
+                }
+            };
+            asked[at].1.get_mut(action)?.take()
+        })
+        .collect()
+}
+
+fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Message> {
+    use dormer::Event;
+    let field = ui::text_input("Search", session.query.clone(), |query| {
+        AnyMessage::new(Event::Query(query))
+    })
+    .on_submit(AnyMessage::new(Event::Run(session.selected)));
+    let rows: Vec<_> = session
+        .shown
+        .iter()
+        .zip(dormer_pictures(bar, session))
+        .enumerate()
+        .map(|(row, (&index, picture))| {
+            let entry = &session.entries[index];
+            let mut item = ui::list_item(entry.title.clone());
+            if let Some(subtitle) = &entry.subtitle {
+                item = item.subtitle(subtitle.clone());
+            }
+            if let Some(picture) = picture {
+                item = item.leading(picture);
+            }
+            item.selected(row == session.selected)
+                .on_press(AnyMessage::new(Event::Run(row)))
+        })
+        .collect();
+    let node = if !rows.is_empty() {
+        ui::column([field, ui::list(rows)])
+    } else if session.query.is_empty() {
+        field
+    } else {
+        ui::column([field, ui::label("Nothing found").tone(Tone::Dim)])
+    };
+    // Its rows hold pictures only, so every message in it is the dormer's own.
+    let content = kit::panel(node, &bar.icons)
+        .map(|message: AnyMessage| Message::Dormer(message.downcast().unwrap_or(Event::Move(0))));
+    island::Popover {
+        key: DORMER,
+        content,
+        open: session.open,
+        on_placed: Box::new(|rect| Message::Dormer(Event::Placed(rect))),
+        on_closed: Message::Dormer(Event::Closed),
+        on_hover: None,
+        width: style::PANEL_WIDE_WIDTH,
+        placement: Placement::Centered { top: session.top },
+        on_key: Some(Box::new(|key| {
+            use keyboard::key::Named;
+            match key {
+                keyboard::Key::Named(Named::ArrowDown | Named::Tab) => {
+                    Some(Message::Dormer(Event::Move(1)))
+                }
+                keyboard::Key::Named(Named::ArrowUp) => Some(Message::Dormer(Event::Move(-1))),
+                _ => None,
+            }
+        })),
+    }
 }
 
 /// A zone's islands, side by side.
@@ -1449,6 +1783,8 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         on_closed: Message::PopoverClosed(id),
         on_hover: None,
         width,
+        placement: Placement::Below,
+        on_key: None,
     }
 }
 
@@ -1483,6 +1819,8 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
         on_closed: Message::NoticesClosed,
         on_hover: Some(Box::new(Message::NoticesHovered)),
         width: style::PANEL_WIDTH,
+        placement: Placement::Below,
+        on_key: None,
     }
 }
 
@@ -1503,9 +1841,8 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
     if bar.is_open() || bar.typing() {
         subscriptions.push(iced::event::listen_with(popover_event));
     }
-    if bar.is_open() {
-        subscriptions.push(Subscription::run(hyprland_events).filter_map(clicked));
-    }
+    // Always: the dormer's keybind comes this way. Every other event stops in the filter.
+    subscriptions.push(Subscription::run(hyprland_events).filter_map(custom));
     Subscription::batch(subscriptions)
 }
 
@@ -1535,13 +1872,14 @@ fn hyprland_events() -> impl eave_hyprland::Stream<Item = eave_hyprland::Update<
     eave_hyprland::watch(|| async { Ok(()) })
 }
 
-fn clicked(update: eave_hyprland::Update<()>) -> Option<Message> {
-    match update {
-        eave_hyprland::Update::Event(eave_hyprland::Event::Custom(data))
-            if data == eave_hyprland::CLICK =>
-        {
-            Some(Message::Clicked)
-        }
+/// Our own events: the clicks Hyprland reports while a popover is open, and the dormer's keybind.
+fn custom(update: eave_hyprland::Update<()>) -> Option<Message> {
+    let eave_hyprland::Update::Event(eave_hyprland::Event::Custom(data)) = update else {
+        return None;
+    };
+    match data.as_str() {
+        eave_hyprland::CLICK => Some(Message::Clicked),
+        eave_hyprland::DORMER => Some(Message::Dormer(dormer::Event::Toggle)),
         _ => None,
     }
 }
@@ -2175,5 +2513,204 @@ mod tests {
             "the field stays, the keyboard goes back"
         );
         assert!(bar.toasts[0].notice.reply.is_some());
+    }
+
+    thread_local! {
+        /// How many times an `Acting` on this test's thread was asked for its actions.
+        static ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Act {
+        Mute,
+        Show,
+        Tick,
+    }
+
+    #[derive(Default)]
+    struct Acting {
+        muted: bool,
+    }
+
+    impl Widget for Acting {
+        type Config = toml::Table;
+        type Message = Act;
+
+        fn new(_: Self::Config) -> (Self, eave_api::Task<Act>) {
+            (Self::default(), eave_api::Task::none())
+        }
+
+        fn update(&mut self, message: Act) -> Effect<Act> {
+            match message {
+                Act::Mute => self.muted = !self.muted,
+                Act::Show => return Effect::none().open_popover(),
+                Act::Tick => {}
+            }
+            Effect::none()
+        }
+
+        fn item(&self) -> eave_api::ui::Item<Act> {
+            eave_api::ui::Item::new(label("acting"))
+        }
+
+        fn popover(&self) -> Option<eave_api::ui::Panel<Act>> {
+            Some(eave_api::ui::Panel::new(label("panel")))
+        }
+
+        fn actions(&self) -> Vec<Action<Act>> {
+            ASKED.set(ASKED.get() + 1);
+            let title = if self.muted { "Unmute" } else { "Mute" };
+            vec![
+                ui::action(title, Act::Mute).keywords(["sound"]),
+                ui::action("Show it", Act::Show),
+            ]
+        }
+    }
+
+    /// A bar with an `Acting` (0) on the left and a `Dummy` (1) on the right, on a surface.
+    fn acting_bar() -> (Bar, window::Id) {
+        let mut registry = Registry::new();
+        registry.widget::<Acting>("acting");
+        registry.widget::<Dummy>("d");
+        let (mut bar, _) = Bar::new(
+            registry,
+            config("[[left]]\nwidget = \"acting\"\n[[right]]\nwidget = \"d\""),
+        );
+        let window = window::Id::unique();
+        let _ = update(&mut bar, Message::WindowOpened(window));
+        (bar, window)
+    }
+
+    fn dormer(bar: &mut Bar, event: dormer::Event) {
+        let _ = update(bar, Message::Dormer(event));
+    }
+
+    fn rows(bar: &Bar) -> Vec<String> {
+        let session = bar.dormer.as_ref().unwrap();
+        (0..session.shown.len())
+            .map(|index| session.row(index).unwrap().title.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_dormer_opens_with_the_keyboard_and_closes_back() {
+        let (mut bar, window) = acting_bar();
+        dormer(&mut bar, dormer::Event::Opened(200.0));
+        assert!(bar.dormer_open() && bar.is_open());
+        assert_eq!(bar.keyboard, Some(window));
+        dormer(&mut bar, dormer::Event::Placed(placed()));
+        assert_eq!(bar.dormer.as_ref().unwrap().rect, Some(placed()));
+
+        // Any key it leaves alone closes it, like a popover; it stays until its island is back.
+        let _ = update(&mut bar, Message::KeyPressed);
+        assert!(!bar.is_open());
+        assert_eq!(bar.keyboard, None);
+        assert!(bar.dormer.is_some());
+        dormer(&mut bar, dormer::Event::Closed);
+        assert!(bar.dormer.is_none());
+    }
+
+    #[test]
+    fn the_dormer_never_covers_the_bar() {
+        let (mut bar, _) = acting_bar();
+        dormer(&mut bar, dormer::Event::Opened(-50.0));
+        let top = bar.dormer.as_ref().unwrap().top;
+        assert_eq!(top, bar.screen.surface_height() as f32);
+    }
+
+    #[test]
+    fn widgets_are_asked_for_actions_only_while_the_dormer_is_open() {
+        let (mut bar, _) = acting_bar();
+        ASKED.set(0);
+        tell_acting(&mut bar, Act::Tick);
+        let _ = update(&mut bar, Message::Pressed(window::Id::unique(), 0, None));
+        let _ = update(&mut bar, Message::BarPressed);
+        assert_eq!(ASKED.get(), 0);
+        dormer(&mut bar, dormer::Event::Opened(200.0));
+        assert!(ASKED.get() > 0);
+        assert!(rows(&bar).contains(&"Mute".to_string()));
+    }
+
+    fn tell_acting(bar: &mut Bar, message: Act) {
+        let _ = update(bar, Message::Widget(0, AnyMessage::new(message)));
+    }
+
+    #[test]
+    fn typing_narrows_the_list_and_arrows_pick_a_row() {
+        let (mut bar, _) = acting_bar();
+        dormer(&mut bar, dormer::Event::Opened(200.0));
+        // Its actions, and its popover by the widget's name.
+        assert_eq!(rows(&bar), ["Mute", "Show it", "Acting"]);
+        dormer(&mut bar, dormer::Event::Query("sound".into()));
+        assert_eq!(rows(&bar), ["Mute"]);
+        dormer(&mut bar, dormer::Event::Query("x".into()));
+        assert!(rows(&bar).is_empty());
+        dormer(&mut bar, dormer::Event::Query(String::new()));
+        dormer(&mut bar, dormer::Event::Move(-1));
+        assert_eq!(bar.dormer.as_ref().unwrap().selected, 2);
+    }
+
+    #[test]
+    fn picking_an_action_sends_it_to_its_widget_and_closes_the_dormer() {
+        let (mut bar, _) = acting_bar();
+        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Query("mute".into()));
+        dormer(&mut bar, dormer::Event::Run(0));
+        assert!(!bar.is_open());
+
+        // The widget got it: its action follows its state now, and comes first as a recent pick.
+        dormer(&mut bar, dormer::Event::Opened(200.0));
+        assert_eq!(rows(&bar)[0], "Unmute");
+        // The list follows the widget while it's open, too.
+        tell_acting(&mut bar, Act::Mute);
+        assert!(rows(&bar).contains(&"Mute".to_string()));
+    }
+
+    #[test]
+    fn an_action_or_a_row_can_open_a_popover() {
+        let (mut bar, _) = acting_bar();
+        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Query("show".into()));
+        dormer(&mut bar, dormer::Event::Run(0));
+        assert!(bar.popover_of(0).is_some());
+        assert!(!bar.dormer_open());
+
+        let _ = update(&mut bar, Message::BarPressed);
+        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Query("acting".into()));
+        dormer(&mut bar, dormer::Event::Run(0));
+        assert!(bar.popover_of(0).is_some());
+    }
+
+    #[test]
+    fn the_dormer_and_popovers_take_turns() {
+        let (mut bar, window) = acting_bar();
+        let _ = update(&mut bar, Message::Pressed(window, 0, None));
+        dormer(&mut bar, dormer::Event::Opened(200.0));
+        assert!(bar.popover_of(0).is_none() && bar.dormer_open());
+        let _ = update(&mut bar, Message::Pressed(window, 0, None));
+        assert!(bar.popover_of(0).is_some() && !bar.dormer_open());
+    }
+
+    #[test]
+    fn a_reload_takes_a_gone_widgets_rows_with_it() {
+        let (mut bar, _) = acting_bar();
+        dormer(&mut bar, dormer::Event::Opened(200.0));
+        let _ = bar.apply(config("[[right]]\nwidget = \"d\""));
+        assert!(rows(&bar).is_empty());
+        // A row picked from before goes nowhere.
+        dormer(&mut bar, dormer::Event::Run(0));
+    }
+
+    #[test]
+    fn a_widget_in_the_dormer_lists_its_actions_but_has_no_popover() {
+        let mut registry = Registry::new();
+        registry.widget::<Acting>("acting");
+        let (mut bar, _) = Bar::new(registry, config("[[dormer]]\nwidget = \"acting\""));
+        let _ = update(&mut bar, Message::WindowOpened(window::Id::unique()));
+        dormer(&mut bar, dormer::Event::Opened(200.0));
+        assert_eq!(rows(&bar), ["Mute", "Show it"]);
+        dormer(&mut bar, dormer::Event::Run(1));
+        assert!(!bar.is_open(), "no island to grow a popover out of");
     }
 }

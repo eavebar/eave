@@ -184,6 +184,10 @@ pub async fn dispatch(lua: &str, legacy: &str) -> io::Result<()> {
 /// The [`Event::Custom`] data sent on every primary click while [`report_clicks`] is on.
 pub const CLICK: &str = "eave-click";
 
+/// The [`Event::Custom`] data that opens eave's dormer: `bind = SUPER, SPACE, event, eave-dormer`
+/// in hyprland.conf, or `eave dormer` from anywhere.
+pub const DORMER: &str = "eave-dormer";
+
 /// Turns on or off a non-consuming bind on the left mouse button that sends
 /// `Event::Custom(CLICK)` on every click anywhere, which still reaches whatever was clicked.
 /// Calls may overlap: whichever was made last wins.

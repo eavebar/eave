@@ -104,6 +104,24 @@ pub struct Popover<'a, M> {
     pub on_hover: Option<Box<dyn Fn(bool) -> M + 'a>>,
     /// Its width, padding included: [`theme::PANEL_WIDTH`], or wider for reading.
     pub width: f32,
+    /// Where it goes: under the island, or across the middle of the surface.
+    pub placement: Placement,
+    /// Turns a key the panel's content left alone into a message, if given: the dormer's arrows
+    /// pick a row while its field keeps the rest.
+    pub on_key: Option<OnKey<'a, M>>,
+}
+
+/// Turns a key into a message, or leaves it alone.
+pub type OnKey<'a, M> = Box<dyn Fn(&keyboard::Key) -> Option<M> + 'a>;
+
+/// Where a popover goes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Placement {
+    /// Under its island, growing from its side ([`place`]).
+    Below,
+    /// Centered across the surface, its top this far down: the dormer, which drops out of an
+    /// island at the top into the middle of the screen (D-84).
+    Centered { top: f32 },
 }
 
 impl<'a, M> Island<'a, M> {
@@ -1079,6 +1097,18 @@ fn place(
     Rectangle::new(Point::new(x, island.y), Size::new(width, height))
 }
 
+/// Where a [`Placement::Centered`] popover goes: as tall as the panel, in the middle of the
+/// surface's width, with its top at `top`.
+fn centered(panel: Size, surface_width: f32, top: f32) -> Rectangle {
+    let padding = 2.0 * f32::from(theme::PANEL_PADDING);
+    let size = Size::new(
+        (panel.width + padding).ceil(),
+        (panel.height + padding).ceil(),
+    );
+    let x = ((surface_width - size.width) / 2.0).round();
+    Rectangle::new(Point::new(x, top.round()), size)
+}
+
 /// Tells the host the room the panel needs, when that changed.
 fn report<M>(motion: &mut Motion, popover: &Popover<'_, M>, shell: &mut Shell<'_, M>) {
     if let Some(reach) = motion.reach()
@@ -1761,13 +1791,16 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             .layout(panel, renderer, &limits);
 
         let island = own_bounds(state, self.layout) + self.translation;
-        let rect = place(
-            island,
-            content.size(),
-            self.island.align,
-            bounds.width,
-            self.island.notch,
-        );
+        let rect = match popover.placement {
+            Placement::Below => place(
+                island,
+                content.size(),
+                self.island.align,
+                bounds.width,
+                self.island.notch,
+            ),
+            Placement::Centered { top } => centered(content.size(), bounds.width, top),
+        };
         state
             .motion
             .place_panel(rect, rect.y + rect.height <= bounds.height);
@@ -1841,6 +1874,12 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             );
         }
         if let Some(key) = key
+            && popover.open
+            && let Some(message) = popover.on_key.as_ref().and_then(|on_key| on_key(key))
+        {
+            shell.publish(message);
+            shell.capture_event();
+        } else if let Some(key) = key
             && popover.open
         {
             let mut focused = AnyFocused::default();
@@ -2278,6 +2317,15 @@ mod tests {
         assert_eq!(after.x, 600.0);
         let far = place(rect(6.0, 100.0), panel, Horizontal::Left, 1000.0, notch);
         assert_eq!(far.x, 6.0);
+    }
+
+    #[test]
+    fn a_centered_popover_sits_across_the_middle_at_its_top() {
+        let pad = 2.0 * f32::from(theme::PANEL_PADDING);
+        let rect = centered(Size::new(400.0, 300.0), 1000.0, 180.0);
+        assert_eq!(rect.center_x(), 500.0);
+        assert_eq!(rect.y, 180.0);
+        assert_eq!(rect.size(), Size::new(400.0 + pad, 300.0 + pad));
     }
 
     #[test]

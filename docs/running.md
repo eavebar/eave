@@ -160,6 +160,28 @@ systemctl --user enable --now eave-rebuild.path   # eave-build init put the unit
 
 It starts from what config.toml says, or from the notch the hardware reports. Saving changes only `notch` and `screen`, keeps the notch's and the screen's `grow` as they were, keeps the rest of the file and its comments, and writes through a symlink. Run it with the binary the bar runs, `~/.local/bin/eave calibrate`, or `cargo run --release -- calibrate` in a checkout.
 
+## The dormer
+
+The dormer is a search dialog for what your widgets can do: mute, skip a track, switch to a window, or launch an app with the `apps` widget ([D-84](decisions.md)). Bind a key to it:
+
+```lua
+-- hyprland.lua (Hyprland 0.56+)
+hl.bind("SUPER + SPACE", hl.dsp.event("eave-dormer"))
+```
+
+```ini
+# hyprland.conf (older Hyprland)
+bind = SUPER, SPACE, event, eave-dormer
+```
+
+`eave dormer` does the same from a script or another tool. Type to narrow the list, ↑ ↓ (or Tab) to pick, Enter to run, Esc to close. To launch apps from it, add the `apps` widget in a `[[dormer]]` entry of config.toml:
+
+```toml
+[[dormer]]
+widget = "apps"
+terminal = "foot"   # optional: for apps that run in a terminal
+```
+
 ## Notifications
 
 With `widget = "eaveshell/eave-notifications"` in config.toml, eave is your notification daemon ([D-48](decisions.md), [D-50](decisions.md)). Only one program can be. If mako, dunst or swaync is already running, eave waits in line and takes over as soon as it quits. Until then, the bell is dimmed and the popover says which daemon has them. To switch, stop starting the other daemon (remove its `exec-once`, or `systemctl --user disable --now mako`), then quit it.

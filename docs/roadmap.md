@@ -27,6 +27,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **5.13 Brightness.** `plugins/brightness`: the display's backlight from `/sys/class/backlight`, re-read on its uevents and set through logind, on a perceptual curve; the keyboard's backlight in the popover ([D-80](decisions.md)).
 
 - [x] **6. Media.** `plugins/media` on `crates/eave-mpris`: any MPRIS player over the session bus. The track's cover in the bar, title and artist, right click to play or pause, scroll to skip; cover, seek bar, controls and players in the popover ([D-56](decisions.md)). Covers through a new `ui::cover`, from files or https ([D-57](decisions.md)).
+- [x] **6.6 The dormer.** A keybind drops a search dialog out of the top center: widgets' actions and popovers, found by typing. Installed apps come through the new `apps` plugin, and the built-in widgets list what they can do ([D-84](decisions.md)).
 - [x] **6.5 Style.** Black and white, with color only as a signal or from the content. A soft white fill marks what's current, the slider is a line that thickens under the pointer, and a media popover takes its cover's color ([D-61](decisions.md), [design.md](design.md)).
 
 ## Next
@@ -58,7 +59,7 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 - [x] Notch-aware layout on Asahi when `appledrm.show_notch=1` ([platform.md](platform.md#asahi-specifics), [D-69](decisions.md)), islands attached to the screen's edges ([D-70](decisions.md)), and `eave calibrate` to measure the notch and the screen's corners ([D-71](decisions.md), [D-72](decisions.md)). The islands' corners follow them ([D-73](decisions.md)), the bar draws the notch, grown if asked ([D-75](decisions.md)), and the top edge, thicker if asked ([D-81](decisions.md)), and islands end where it does ([D-76](decisions.md)).
 - [x] `PKGBUILD` for Asahi and CachyOS: the AUR package builds on aarch64 and x86_64 ([D-54](decisions.md)).
 - [ ] Maybe: external monitors' brightness over DDC/CI, as rows in the brightness popover ([D-80](decisions.md)).
-- [ ] Maybe: OSD for volume and brightness, launcher, each built on the same foundations. (Notifications are done: 5.11.)
+- [ ] Maybe: OSD for volume and brightness, built on the same foundations. (Notifications are done: 5.11, and the launcher is the dormer: 6.6.)
 - [x] Notification images from files (`image-path`, `app_icon` paths): `Notice::image(url)`, loaded like a cover, SVG included ([D-62](decisions.md)). Raw `image-data` pixels are still left out.
 - [x] Sprites: `ui::sprite(frames, order)`, a flipbook the host plays when it shows up or changes, then rests; `.looping()` keeps it going ([D-64](decisions.md)).
 - [x] Colored code, `ui::diff`, `ui::timeline`/`ui::step`, `ui::literal`, `ui::divider`: eave-claude's chat as a timeline ([D-65](decisions.md)).
