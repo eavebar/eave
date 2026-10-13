@@ -13,7 +13,7 @@ use iced::{Background, Border, Color, Element, Font, Length, Padding, Size, Them
 
 use crate::alternate::Alternate;
 use crate::apps::{FileKey, Icons, Wanted};
-use crate::clip::Clip;
+use crate::clip::{Clip, Fold};
 use crate::countdown::Countdown;
 use crate::counter::Counter;
 use crate::field::Field;
@@ -123,18 +123,18 @@ pub fn notice<'a, M: Clone + 'a>(
         Urgency::Normal | Urgency::Low => Tone::Dim,
     };
     let ctx = Ctx::new(Place::Panel);
-    let from = notice.app_icon.as_deref().or(notice.app.as_deref());
-    let app_id = from.map(|app_id| app_icon(app_id, Tone::Normal, icons));
-    // A picture of its own wins, once loaded; until then, the app's icon.
+    // A picture of its own goes beside its text, once loaded. The app's icon goes by its name:
+    // a letter in its place only when there's no picture either.
     let picture = notice
         .image
         .as_ref()
         .and_then(|url| icons.covers.get(url))
         .and_then(Option::as_ref)
-        .map(|cover| cover.view(false, 1.0));
-    let app = picture
-        .or(app_id)
-        .map(|icon| container(icon).center(theme::ICON_SIZE));
+        .map(|cover| cover.view_at(theme::NOTICE_PICTURE, 1.0));
+    let from = notice.app_icon.as_deref().or(notice.app.as_deref());
+    let app = from
+        .filter(|app_id| picture.is_none() || matches!(icons.apps.get(*app_id), Some(Some(_))))
+        .map(|app_id| container(app_icon(app_id, Tone::Normal, icons)).center(theme::ICON_SIZE));
     // Takes the free room, so the close button is at the far end. A `Clip` is only as wide as
     // its text, even when given more.
     let name: Element<'a, AnyMessage> = match notice.app {
@@ -192,9 +192,7 @@ pub fn notice<'a, M: Clone + 'a>(
                 .wrapping(text::Wrapping::WordOrGlyph)
                 .into()
         };
-        container(body)
-            .max_height(line * theme::NOTICE_BODY_LINES)
-            .clip(true)
+        Fold::new(body, theme::ISLAND_BG, line * theme::NOTICE_BODY_LINES)
     });
     let actions = (!notice.actions.is_empty()).then(|| {
         let buttons = notice
@@ -237,18 +235,28 @@ pub fn notice<'a, M: Clone + 'a>(
         let content = content.map(wrap.clone());
         Field::new(content, None).grows().on_focus(engaged)
     });
-    let top: Element<'a, M> = Element::from(top).map(wrap.clone());
-    let summary: Element<'a, M> = Element::from(summary).map(wrap.clone());
-    let body = body.map(|body| Element::from(body).map(wrap.clone()));
-    let actions = actions.map(|actions| Element::from(actions).map(wrap.clone()));
-    let card = column![]
-        .push(countdown)
-        .push(top)
-        .push(summary)
+    // The summary tight on its body, the picture beside them, top-aligned.
+    let text_column = column![summary]
         .push(body)
-        .push(reply)
-        .push(actions)
-        .spacing(4)
+        .spacing(theme::NOTICE_SUMMARY_GAP)
+        .width(Length::Fill);
+    let content = row![]
+        .push(picture)
+        .push(text_column)
+        .spacing(theme::NOTICE_PICTURE_GAP);
+    let top: Element<'a, M> = Element::from(top).map(wrap.clone());
+    let content: Element<'a, M> = Element::from(content).map(wrap.clone());
+    let actions = actions.map(|actions| Element::from(actions).map(wrap.clone()));
+    // Where it's from, then what it says, then what you can do about it, each a little apart.
+    let head = column![].push(countdown).push(top).spacing(4);
+    let has_answer = reply.is_some() || actions.is_some();
+    let answer = column![].push(reply).push(actions).spacing(theme::SPACING);
+    let card = column![head, content]
+        .spacing(theme::NOTICE_GAP)
+        .push(has_answer.then(|| {
+            container(answer)
+                .padding(Padding::ZERO.top(theme::NOTICE_REPLY_GAP - theme::NOTICE_GAP))
+        }))
         .width(Length::Fill);
     match notice.on_press {
         Some(message) => mouse_area(card)

@@ -39,6 +39,15 @@ impl Cover {
         self.color
     }
 
+    /// Its large drawing, `size` across, faded to `opacity`: for a notification's picture.
+    pub fn view_at<'a, M: 'a>(&self, size: f32, opacity: f32) -> Element<'a, M> {
+        Element::new(Picture {
+            handle: self.large.clone(),
+            opacity,
+            size,
+        })
+    }
+
     /// At icon size, or [`theme::COVER_SIZE`] when `large`, faded to `opacity`.
     pub fn view<'a, M: 'a>(&self, large: bool, opacity: f32) -> Element<'a, M> {
         let (handle, size) = if large {

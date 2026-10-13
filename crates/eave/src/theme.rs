@@ -176,8 +176,16 @@ pub const BLOCK_SPACING: u32 = 6;
 /// A notification card's close button: smaller than a popover's icon buttons, to sit beside the
 /// app's name.
 pub const NOTICE_CLOSE: f32 = 22.0;
-/// How many lines of a notification's body show before it's cut off.
+/// How many lines of a notification's body show before it's cut off, fading out.
 pub const NOTICE_BODY_LINES: f32 = 4.0;
+/// A notification's own picture, beside its summary and body.
+pub const NOTICE_PICTURE: f32 = 40.0;
+/// Within a card: below the line it's from, between its text and its picture, and above its
+/// reply field and actions. The summary sits tight on its body.
+pub const NOTICE_GAP: f32 = 8.0;
+pub const NOTICE_PICTURE_GAP: f32 = 12.0;
+pub const NOTICE_REPLY_GAP: f32 = 12.0;
+pub const NOTICE_SUMMARY_GAP: f32 = 2.0;
 /// The bar across the top of a notification that shows its time left on screen.
 pub const COUNTDOWN_HEIGHT: f32 = 2.0;
 pub const COUNTDOWN: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.35);
@@ -257,6 +265,8 @@ pub const TAB_FADE: Duration = Duration::from_millis(240);
 pub const TAB_SLIDE: f32 = 16.0;
 /// The width at the end of a long title that fades out instead of being cut.
 pub const TEXT_FADE: f32 = 16.0;
+/// How tall the fade is at the foot of text cut off below, like a notification's body.
+pub const FOLD_FADE: f32 = 24.0;
 
 /// How long an alternate takes to fade from one option to the next: out, then in.
 pub const ALTERNATE_FADE: Duration = Duration::from_millis(240);
