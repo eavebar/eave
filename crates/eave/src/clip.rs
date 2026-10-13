@@ -113,6 +113,118 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Clip<'_, M> {
     }
 }
 
+/// Text that may run longer than `max` high: laid out in full, cut at `max`, and its last lines
+/// fading into the background behind it, so a cut list or paragraph doesn't leave a hole.
+pub struct Fold<'a, M> {
+    content: Element<'a, M>,
+    background: Color,
+    max: f32,
+}
+
+impl<'a, M> Fold<'a, M> {
+    pub fn new(content: impl Into<Element<'a, M>>, background: Color, max: f32) -> Self {
+        Self {
+            content: content.into(),
+            background,
+            max,
+        }
+    }
+}
+
+impl<M> Widget<M, iced::Theme, iced::Renderer> for Fold<'_, M> {
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Shrink)
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let width = limits.max().width;
+        let natural = layout::Limits::new(Size::ZERO, Size::new(width, f32::INFINITY));
+        let content =
+            self.content
+                .as_widget_mut()
+                .layout(&mut tree.children[0], renderer, &natural);
+        let height = content.size().height.min(self.max);
+        layout::Node::with_children(Size::new(width, height), vec![content])
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut iced::Renderer,
+        theme: &iced::Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        use iced::advanced::Renderer as _;
+
+        let bounds = layout.bounds();
+        let Some(content) = layout.children().next() else {
+            return;
+        };
+        renderer.with_layer(bounds, |renderer| {
+            self.content.as_widget().draw(
+                &tree.children[0],
+                renderer,
+                theme,
+                style,
+                content,
+                cursor,
+                &bounds.intersection(viewport).unwrap_or(bounds),
+            );
+        });
+        if content.bounds().height > bounds.height + 0.5 {
+            let height = theme::FOLD_FADE.min(bounds.height);
+            let fade = Rectangle::new(
+                Point::new(bounds.x, bounds.y + bounds.height - height),
+                Size::new(bounds.width, height),
+            );
+            let gradient = Linear::new(Radians(std::f32::consts::PI))
+                .add_stop(
+                    0.0,
+                    Color {
+                        a: 0.0,
+                        ..self.background
+                    },
+                )
+                .add_stop(1.0, self.background);
+            renderer.with_layer(fade, |renderer| {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: fade,
+                        ..renderer::Quad::default()
+                    },
+                    Background::Gradient(gradient.into()),
+                );
+            });
+        }
+    }
+
+    fn children(&self) -> Vec<Tree> {
+        vec![Tree::new(&self.content)]
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        tree.diff_children(std::slice::from_ref(&self.content));
+    }
+
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::stateless()
+    }
+}
+
+impl<'a, M: 'a> From<Fold<'a, M>> for Element<'a, M> {
+    fn from(fold: Fold<'a, M>) -> Self {
+        Element::new(fold)
+    }
+}
+
 impl<'a, M: 'a> From<Clip<'a, M>> for Element<'a, M> {
     fn from(clip: Clip<'a, M>) -> Self {
         Element::new(clip)

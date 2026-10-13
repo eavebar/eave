@@ -9,11 +9,11 @@ use eave_api::erased::AnyMessage;
 use eave_api::ui::{Kind, Node, NoticeParts, Tone, Urgency};
 use iced::widget::scrollable::{self, Scrollbar};
 use iced::widget::{Space, button, column, container, mouse_area, row, rule, text, text_input};
-use iced::{Background, Border, Color, Element, Font, Length, Padding, Theme, alignment};
+use iced::{Background, Border, Color, Element, Font, Length, Padding, Size, Theme, alignment};
 
 use crate::alternate::Alternate;
 use crate::apps::{FileKey, Icons, Wanted};
-use crate::clip::Clip;
+use crate::clip::{Clip, Fold};
 use crate::countdown::Countdown;
 use crate::counter::Counter;
 use crate::field::Field;
@@ -23,6 +23,7 @@ use crate::label::Label;
 use crate::markdown;
 use crate::meter::Meter;
 use crate::slider::Slider;
+use crate::sprite::Sprite;
 use crate::switcher::Switcher;
 use crate::tabs::Tabs;
 use crate::text_area::TextArea;
@@ -122,18 +123,18 @@ pub fn notice<'a, M: Clone + 'a>(
         Urgency::Normal | Urgency::Low => Tone::Dim,
     };
     let ctx = Ctx::new(Place::Panel);
-    let from = notice.app_icon.as_deref().or(notice.app.as_deref());
-    let app_id = from.map(|app_id| app_icon(app_id, Tone::Normal, icons));
-    // A picture of its own wins, once loaded; until then, the app's icon.
+    // A picture of its own goes beside its text, once loaded. The app's icon goes by its name:
+    // a letter in its place only when there's no picture either.
     let picture = notice
         .image
         .as_ref()
         .and_then(|url| icons.covers.get(url))
         .and_then(Option::as_ref)
-        .map(|cover| cover.view(false, 1.0));
-    let app = picture
-        .or(app_id)
-        .map(|icon| container(icon).center(theme::ICON_SIZE));
+        .map(|cover| cover.view_at(theme::NOTICE_PICTURE, 1.0));
+    let from = notice.app_icon.as_deref().or(notice.app.as_deref());
+    let app = from
+        .filter(|app_id| picture.is_none() || matches!(icons.apps.get(*app_id), Some(Some(_))))
+        .map(|app_id| container(app_icon(app_id, Tone::Normal, icons)).center(theme::ICON_SIZE));
     // Takes the free room, so the close button is at the far end. A `Clip` is only as wide as
     // its text, even when given more.
     let name: Element<'a, AnyMessage> = match notice.app {
@@ -191,9 +192,7 @@ pub fn notice<'a, M: Clone + 'a>(
                 .wrapping(text::Wrapping::WordOrGlyph)
                 .into()
         };
-        container(body)
-            .max_height(line * theme::NOTICE_BODY_LINES)
-            .clip(true)
+        Fold::new(body, theme::ISLAND_BG, line * theme::NOTICE_BODY_LINES)
     });
     let actions = (!notice.actions.is_empty()).then(|| {
         let buttons = notice
@@ -236,18 +235,28 @@ pub fn notice<'a, M: Clone + 'a>(
         let content = content.map(wrap.clone());
         Field::new(content, None).grows().on_focus(engaged)
     });
-    let top: Element<'a, M> = Element::from(top).map(wrap.clone());
-    let summary: Element<'a, M> = Element::from(summary).map(wrap.clone());
-    let body = body.map(|body| Element::from(body).map(wrap.clone()));
-    let actions = actions.map(|actions| Element::from(actions).map(wrap.clone()));
-    let card = column![]
-        .push(countdown)
-        .push(top)
-        .push(summary)
+    // The summary tight on its body, the picture beside them, top-aligned.
+    let text_column = column![summary]
         .push(body)
-        .push(reply)
-        .push(actions)
-        .spacing(4)
+        .spacing(theme::NOTICE_SUMMARY_GAP)
+        .width(Length::Fill);
+    let content = row![]
+        .push(picture)
+        .push(text_column)
+        .spacing(theme::NOTICE_PICTURE_GAP);
+    let top: Element<'a, M> = Element::from(top).map(wrap.clone());
+    let content: Element<'a, M> = Element::from(content).map(wrap.clone());
+    let actions = actions.map(|actions| Element::from(actions).map(wrap.clone()));
+    // Where it's from, then what it says, then what you can do about it, each a little apart.
+    let head = column![].push(countdown).push(top).spacing(4);
+    let has_answer = reply.is_some() || actions.is_some();
+    let answer = column![].push(reply).push(actions).spacing(theme::SPACING);
+    let card = column![head, content]
+        .spacing(theme::NOTICE_GAP)
+        .push(has_answer.then(|| {
+            container(answer)
+                .padding(Padding::ZERO.top(theme::NOTICE_REPLY_GAP - theme::NOTICE_GAP))
+        }))
         .width(Length::Fill);
     match notice.on_press {
         Some(message) => mouse_area(card)
@@ -266,6 +275,7 @@ pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
     match node.into_kind() {
         Kind::AppIcon { app_id, .. } => out.apps.push(app_id),
         Kind::Image { file, .. } => out.files.push(file),
+        Kind::Sprite { frames, .. } => out.frames.extend(frames),
         Kind::Cover { url, fallback, .. } => {
             out.covers.push(url);
             wanted(*fallback, out);
@@ -435,6 +445,38 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 .height(theme::ICON_SIZE)
                 .into(),
         },
+        Kind::Sprite {
+            frames,
+            order,
+            looping,
+            tone,
+        } => {
+            let height = if ctx.panel() {
+                theme::SPRITE_HEIGHT_PANEL
+            } else {
+                theme::SPRITE_HEIGHT
+            };
+            let drawn: Option<Vec<_>> = frames
+                .iter()
+                .map(|file| icons.frames.get(&FileKey::of(file)).cloned().flatten())
+                .collect();
+            match drawn {
+                Some(drawn) if !drawn.is_empty() => {
+                    let size = drawn[0].size;
+                    Sprite {
+                        key: frames.as_ptr() as usize ^ (order.as_ptr() as usize).rotate_left(32),
+                        frames: drawn.into_iter().map(|frame| frame.handle).collect(),
+                        order,
+                        looping,
+                        opacity: dim_opacity(tone.unwrap_or(ctx.tone)),
+                        size: Size::new(height * size.width / size.height.max(1.0), height),
+                    }
+                    .into()
+                }
+                // Its height, until every frame is drawn.
+                _ => Space::new().width(height).height(height).into(),
+            }
+        }
         Kind::Cover {
             url,
             fallback,
@@ -882,9 +924,16 @@ fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMess
         .push(subtitle)
         .spacing(1)
         .width(Length::Fill);
-    let leading = item
-        .leading
-        .map(|node| container(render(*node, leading_ctx, icons)).center(theme::ICON_SIZE));
+    // Icons in a column of their own width; a sprite takes its own.
+    let leading = item.leading.map(|node| {
+        let sprite = matches!(node.kind(), Kind::Sprite { .. });
+        let leading = render(*node, leading_ctx, icons);
+        if sprite {
+            leading
+        } else {
+            container(leading).center(theme::ICON_SIZE).into()
+        }
+    });
     let trailing_ctx = Ctx {
         tone: if item.selected {
             Tone::Accent
@@ -1089,5 +1138,25 @@ fn scrollable_style(_: &Theme, status: scrollable::Status) -> scrollable::Style 
         horizontal_rail: rail,
         gap: None,
         ..default
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_sprite_wants_every_frame() {
+        static A: &[u8] = b"<svg/>";
+        static B: &[u8] = b"<svg></svg>";
+        static FRAMES: [&[u8]; 2] = [A, B];
+        let node: Node<()> = eave_api::ui::row([
+            eave_api::ui::sprite(&FRAMES, &[0, 1, 1]),
+            eave_api::ui::image(A),
+        ]);
+        let mut out = Wanted::default();
+        wanted(node, &mut out);
+        assert_eq!(out.frames, [A, B]);
+        assert_eq!(out.files, [A]);
     }
 }

@@ -21,6 +21,7 @@ mod markdown;
 mod meter;
 mod slider;
 mod slot;
+mod sprite;
 mod squircle;
 mod squish;
 mod switcher;

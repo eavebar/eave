@@ -54,3 +54,4 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 - [x] `PKGBUILD` for Asahi and CachyOS: the AUR package builds on aarch64 and x86_64 ([D-54](decisions.md)).
 - [ ] Maybe: OSD for volume and brightness, launcher, each built on the same foundations. (Notifications are done: 5.11.)
 - [x] Notification images from files (`image-path`, `app_icon` paths): `Notice::image(url)`, loaded like a cover, SVG included ([D-62](decisions.md)). Raw `image-data` pixels are still left out.
+- [x] Sprites: `ui::sprite(frames, order)`, a flipbook the host plays when it shows up or changes, then rests; `.looping()` keeps it going ([D-64](decisions.md)).

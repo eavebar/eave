@@ -98,6 +98,8 @@ pub struct Icons {
     pub apps: HashMap<String, Option<AppIcon>>,
     /// The files plugins ship: `None` for one that isn't an SVG or PNG it can draw.
     pub files: HashMap<FileKey, Option<FileIcon>>,
+    /// Sprites' frames, at their own size: `None` for one that can't be drawn.
+    pub frames: HashMap<FileKey, Option<Frame>>,
     /// Covers by URL: `None` for one that couldn't be had.
     pub covers: HashMap<String, Option<Cover>>,
 }
@@ -107,6 +109,7 @@ pub struct Icons {
 pub struct Wanted {
     pub apps: Vec<String>,
     pub files: Vec<&'static [u8]>,
+    pub frames: Vec<&'static [u8]>,
     pub covers: Vec<String>,
 }
 
@@ -166,6 +169,72 @@ impl FileIcon {
         };
         AppIcon(handle).view(1.0)
     }
+}
+
+/// A sprite's frame: the file at its own size, to be scaled up pixel by pixel.
+#[derive(Debug, Clone)]
+pub struct Frame {
+    pub handle: image::Handle,
+    pub size: Size,
+}
+
+/// The largest frame side taken, so a mistaken file can't take all the memory.
+const MAX_FRAME: u32 = 1024;
+
+/// Decodes a sprite's frame, off the UI thread.
+pub async fn load_frame(file: &'static [u8]) -> Option<Frame> {
+    tokio::task::spawn_blocking(move || draw_frame(file))
+        .await
+        .ok()
+        .flatten()
+}
+
+/// A PNG as it is, an SVG at its own size.
+fn draw_frame(file: &[u8]) -> Option<Frame> {
+    let pixmap = if file.starts_with(b"\x89PNG") {
+        Pixmap::decode_png(file).ok()?
+    } else {
+        let tree = usvg::Tree::from_data(file, &usvg::Options::default()).ok()?;
+        let size = tree.size().to_int_size();
+        let mut pixmap = Pixmap::new(size.width(), size.height())?;
+        resvg::render(&tree, Transform::identity(), &mut pixmap.as_mut());
+        pixmap
+    };
+    // At least as many pixels as the screen shows it with, so it's only ever scaled down: iced's
+    // tiny-skia renderer places an image at whole pixels of the image, and a small one scaled
+    // up would land a few screen pixels off, past what it repaints, leaving trails behind.
+    let rows = 2 * theme::SPRITE_HEIGHT_PANEL as u32;
+    let times = rows.div_ceil(pixmap.height().max(1));
+    let pixmap = enlarge(pixmap, times)?;
+    if pixmap.width().max(pixmap.height()) > MAX_FRAME {
+        return None;
+    }
+    Some(Frame {
+        handle: handle(&pixmap),
+        size: Size::new(pixmap.width() as f32, pixmap.height() as f32),
+    })
+}
+
+/// Every pixel of `pixmap` as a `times` × `times` block.
+fn enlarge(pixmap: Pixmap, times: u32) -> Option<Pixmap> {
+    if times <= 1 {
+        return Some(pixmap);
+    }
+    let mut large = Pixmap::new(pixmap.width() * times, pixmap.height() * times)?;
+    let paint = PixmapPaint {
+        quality: FilterQuality::Nearest,
+        ..PixmapPaint::default()
+    };
+    let scale = times as f32;
+    large.draw_pixmap(
+        0,
+        0,
+        pixmap.as_ref(),
+        &paint,
+        Transform::from_scale(scale, scale),
+        None,
+    );
+    Some(large)
 }
 
 /// Draws a shipped icon file, off the UI thread.
@@ -552,6 +621,23 @@ fn shrink(mut pixmap: Pixmap) -> Option<Pixmap> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_small_frame_is_enlarged_whole_pixels_at_a_time() {
+        // 16 × 10, its left half opaque.
+        let mut art = Pixmap::new(16, 10).unwrap();
+        art.fill_rect(
+            resvg::tiny_skia::Rect::from_xywh(0.0, 0.0, 8.0, 10.0).unwrap(),
+            &resvg::tiny_skia::Paint::default(),
+            Transform::identity(),
+            None,
+        );
+        let frame = draw_frame(&art.encode_png().unwrap()).unwrap();
+        assert_eq!(frame.size, Size::new(64.0, 40.0));
+        let drawn = enlarge(art, 4).unwrap();
+        let alpha = |x: u32| drawn.pixel(x, 20).unwrap().alpha();
+        assert_eq!((alpha(31), alpha(32)), (255, 0), "a sharp edge, no blur");
+    }
 
     #[test]
     fn a_shipped_file_is_drawn_once_and_its_shape_per_color() {
