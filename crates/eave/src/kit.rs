@@ -22,9 +22,11 @@ use crate::field::Field;
 use crate::gulp::Gulp;
 use crate::icon;
 use crate::label::Label;
+use crate::markdown;
 use crate::meter::Meter;
 use crate::switcher::Switcher;
 use crate::tabs::Tabs;
+use crate::text_area::TextArea;
 use crate::theme;
 use crate::toggle::Toggle;
 
@@ -81,20 +83,33 @@ const LINE_HEIGHT: f32 = 1.3;
 
 /// One notification, laid out at the panel's width: the time it has left on screen, if it
 /// expires, where it's from and a close button, the summary, the body cut off after a few lines,
-/// then its actions. A click anywhere else on it sends its `on_press`.
-pub fn notice<'a>(
+/// its reply field, then its actions. A click anywhere else on it sends its `on_press`. Its
+/// widget's messages are wrapped by `wrap`; `engaged` hears the reply field get the focus from a
+/// click, or lose it.
+pub fn notice<'a, M: Clone + 'a>(
     notice: NoticeParts<AnyMessage>,
     countdown: Option<Countdown>,
     icons: &Icons,
-) -> Element<'a, AnyMessage> {
+    wrap: impl Fn(AnyMessage) -> M + Clone + 'a,
+    engaged: impl Fn(bool) -> M + 'a,
+) -> Element<'a, M> {
     let tone = match notice.urgency {
         Urgency::Critical => Tone::Critical,
         Urgency::Normal | Urgency::Low => Tone::Dim,
     };
     let ctx = Ctx::new(Place::Panel);
     let from = notice.app_icon.as_deref().or(notice.app.as_deref());
-    let app = from
-        .map(|app_id| container(app_icon(app_id, Tone::Normal, icons)).center(theme::ICON_SIZE));
+    let app_id = from.map(|app_id| app_icon(app_id, Tone::Normal, icons));
+    // A picture of its own wins, once loaded; until then, the app's icon.
+    let picture = notice
+        .image
+        .as_ref()
+        .and_then(|url| icons.covers.get(url))
+        .and_then(Option::as_ref)
+        .map(|cover| cover.view(false, 1.0));
+    let app = picture
+        .or(app_id)
+        .map(|icon| container(icon).center(theme::ICON_SIZE));
     // Takes the free room, so the close button is at the far end. A `Clip` is only as wide as
     // its text, even when given more.
     let name: Element<'a, AnyMessage> = match notice.app {
@@ -139,17 +154,22 @@ pub fn notice<'a>(
         .font(theme::STRONG_FONT)
         .color(theme::tone(summary_tone))
         .wrapping(text::Wrapping::WordOrGlyph);
+    let markdown = notice.markdown;
     let body = notice.body.filter(|body| !body.is_empty()).map(|body| {
         let line = (theme::TEXT_SIZE * LINE_HEIGHT).ceil();
-        container(
+        let body: Element<'a, AnyMessage> = if markdown {
+            markdown::view(&body, theme::tone(Tone::Dim))
+        } else {
             text(body)
                 .size(theme::TEXT_SIZE)
                 .line_height(LINE_HEIGHT)
                 .color(theme::tone(Tone::Dim))
-                .wrapping(text::Wrapping::WordOrGlyph),
-        )
-        .max_height(line * theme::NOTICE_BODY_LINES)
-        .clip(true)
+                .wrapping(text::Wrapping::WordOrGlyph)
+                .into()
+        };
+        container(body)
+            .max_height(line * theme::NOTICE_BODY_LINES)
+            .clip(true)
     });
     let actions = (!notice.actions.is_empty()).then(|| {
         let buttons = notice
@@ -168,20 +188,34 @@ pub fn notice<'a>(
             });
         row![fill(ctx)].extend(buttons).spacing(theme::SPACING)
     });
-    // A reply field is a text input like a popover's, with a send button at its end.
+    // A reply field is a text area like a popover's, with a send button at its end. It waits
+    // for a click before it takes the focus, and the bar the keyboard (D-58).
     let reply = notice.reply.map(|reply| {
         let on_input = reply.on_input;
-        let mut field =
-            eave_api::ui::text_input(reply.placeholder, reply.value, move |text| on_input(text));
-        if let Some(message) = reply.on_submit {
-            let send = eave_api::ui::button(
-                eave_api::ui::icon(eave_api::ui::Icon::Forward),
-                message.clone(),
-            );
-            field = field.on_submit(message).trailing(send);
-        }
-        render(field, ctx, icons)
+        let area = TextArea::new(
+            reply.placeholder,
+            reply.value,
+            move |text| on_input(text),
+            reply.on_submit.clone(),
+        );
+        let send = reply.on_submit.map(|message| {
+            let send =
+                eave_api::ui::button(eave_api::ui::icon(eave_api::ui::Icon::Forward), message);
+            render(send, ctx, icons)
+        });
+        let content: Element<'a, AnyMessage> = row![area]
+            .push(send)
+            .spacing(4)
+            .padding(Padding::ZERO.right(3))
+            .align_y(alignment::Vertical::Bottom)
+            .into();
+        let content = content.map(wrap.clone());
+        Field::new(content, None).grows().on_focus(engaged)
     });
+    let top: Element<'a, M> = Element::from(top).map(wrap.clone());
+    let summary: Element<'a, M> = Element::from(summary).map(wrap.clone());
+    let body = body.map(|body| Element::from(body).map(wrap.clone()));
+    let actions = actions.map(|actions| Element::from(actions).map(wrap.clone()));
     let card = column![]
         .push(countdown)
         .push(top)
@@ -193,7 +227,7 @@ pub fn notice<'a>(
         .width(Length::Fill);
     match notice.on_press {
         Some(message) => mouse_area(card)
-            .on_press(message)
+            .on_press(wrap(message))
             .interaction(iced::mouse::Interaction::Pointer)
             .into(),
         None => card.into(),
@@ -231,8 +265,11 @@ pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
             .collect()),
         Kind::Section { trailing, .. }
         | Kind::Header { trailing, .. }
-        | Kind::TextInput { trailing, .. } => all(trailing.into_iter().map(|node| *node).collect()),
-        Kind::Label { .. }
+        | Kind::TextInput { trailing, .. }
+        | Kind::TextArea { trailing, .. } => all(trailing.into_iter().map(|node| *node).collect()),
+        Kind::Scroll { content, .. } => all(vec![*content]),
+        Kind::Markdown { .. }
+        | Kind::Label { .. }
         | Kind::Heading { .. }
         | Kind::Icon { .. }
         | Kind::Counter { .. }
@@ -606,6 +643,45 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
         Kind::Tabs(pages) => {
             let (_, first) = pages.into_iter().next().expect("not empty");
             render(first, ctx, icons)
+        }
+        Kind::Markdown { text: source, tone } => markdown::view(&source, ctx.color(tone)),
+        Kind::TextArea {
+            placeholder,
+            value,
+            on_input,
+            on_submit,
+            trailing,
+        } => {
+            let area = TextArea::new(placeholder, value, on_input, on_submit);
+            let trailing = trailing.map(|node| render(*node, ctx, icons));
+            let content = row![area]
+                .push(trailing)
+                .spacing(4)
+                .padding(Padding::ZERO.right(3))
+                .align_y(alignment::Vertical::Bottom);
+            Field::new(content, None).grows().into()
+        }
+        Kind::Scroll { content, bottom } => {
+            let content = render(*content, ctx, icons);
+            if !ctx.panel() {
+                return content;
+            }
+            // Room on the right for the scrollbar, so it never covers the text.
+            let content = container(content).padding(Padding::ZERO.right(8));
+            let scroll = scrollable::Scrollable::new(content)
+                .direction(scrollable::Direction::Vertical(
+                    Scrollbar::new().width(3).scroller_width(3).margin(1),
+                ))
+                .width(Length::Fill)
+                .style(scrollable_style);
+            let scroll = if bottom {
+                scroll.anchor_bottom()
+            } else {
+                scroll
+            };
+            container(scroll)
+                .max_height(theme::SCROLL_MAX_HEIGHT)
+                .into()
         }
         Kind::Badge {
             text: content,

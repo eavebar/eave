@@ -18,6 +18,9 @@ resvg = { version = "0.45", default-features = false }
 # iced's tokio backend.
 tokio = { version = "1", default-features = false, features = ["rt", "time"] }
 iced_layershell = "0.19"
+# Markdown (D-58): Claude's replies and plans. Just the parser, no HTML writer or SIMD; iced's own
+# markdown feature would add its widget and url parsing on top.
+pulldown-cmark = { version = "0.13", default-features = false }
 # Cover art (D-57): JPEG, the format most covers come in. PNG goes through tiny-skia, like icons.
 zune-jpeg = { version = "0.5", default-features = false, features = ["std", "neon", "x86"] }
 # Cover art over https (D-57), fetched on the blocking pool. Checked against the system's CA

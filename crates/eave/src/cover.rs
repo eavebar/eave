@@ -1,6 +1,7 @@
 //! The host side of [`eave_api::ui::cover`]: pictures a program hands over at runtime, like a
 //! track's cover art ([D-57](../../../docs/decisions.md)). A `file://` URL is read, an `https://`
-//! one is downloaded, both on tokio's blocking pool and with a size cap. PNG and JPEG are decoded,
+//! one is downloaded, both on tokio's blocking pool and with a size cap. PNG, JPEG and SVG (an
+//! icon file a notification names) are decoded,
 //! cropped to a square from the middle, shrunk by averaging and given rounded corners, twice: at
 //! icon size and at [`theme::COVER_SIZE`]. Only those small bitmaps are kept, by URL.
 
@@ -137,8 +138,16 @@ fn draw(bytes: &[u8]) -> Option<Cover> {
 }
 
 fn decode(bytes: &[u8]) -> Option<Rgba> {
-    let rgba = if bytes.starts_with(b"\x89PNG") {
-        let pixmap = Pixmap::decode_png(bytes).ok()?;
+    let svg = || {
+        let head = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]).to_lowercase();
+        head.contains("<svg") || head.starts_with("<?xml")
+    };
+    let rgba = if bytes.starts_with(b"\x89PNG") || svg() {
+        let pixmap = if svg() {
+            render_svg(bytes)?
+        } else {
+            Pixmap::decode_png(bytes).ok()?
+        };
         let pixels = pixmap
             .pixels()
             .iter()
@@ -174,6 +183,23 @@ fn decode(bytes: &[u8]) -> Option<Rgba> {
     };
     let size_ok = rgba.width > 0 && rgba.height > 0 && rgba.width.max(rgba.height) <= MAX_SIDE;
     (size_ok && rgba.pixels.len() == rgba.width * rgba.height * 4).then_some(rgba)
+}
+
+/// An SVG, an app's icon handed over as a file, drawn at the large size.
+fn render_svg(bytes: &[u8]) -> Option<Pixmap> {
+    use resvg::tiny_skia::Transform;
+    use resvg::usvg;
+
+    let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).ok()?;
+    let size = tree.size();
+    let side = 2 * theme::COVER_SIZE as u32;
+    let scale = side as f32 / size.width().max(size.height());
+    let x = (side as f32 - size.width() * scale) / 2.0;
+    let y = (side as f32 - size.height() * scale) / 2.0;
+    let mut pixmap = Pixmap::new(side, side)?;
+    let transform = Transform::from_scale(scale, scale).post_translate(x, y);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    Some(pixmap)
 }
 
 /// The middle square of `rgba`, at most `size` pixels across (smaller pictures aren't blown up

@@ -202,6 +202,22 @@ pub enum Kind<M> {
     },
     /// Pages and their names. The host shows one at a time and owns which.
     Tabs(Vec<(String, Node<M>)>),
+    Markdown {
+        text: String,
+        tone: Option<Tone>,
+    },
+    TextArea {
+        placeholder: String,
+        value: String,
+        on_input: Box<dyn Fn(String) -> M>,
+        on_submit: Option<M>,
+        trailing: Option<Box<Node<M>>>,
+    },
+    Scroll {
+        content: Box<Node<M>>,
+        /// Keeps the end in view as content arrives there, like a chat.
+        bottom: bool,
+    },
 }
 
 pub fn label<M>(text: impl Into<String>) -> Node<M> {
@@ -474,6 +490,45 @@ pub fn text_input<M: 'static>(
     })
 }
 
+/// A field to type several lines into, showing `value`: a message. It grows with its text up
+/// to a few lines, then scrolls. Sends `on_input` with the new text on every change, and
+/// [`on_submit`](Node::on_submit) on Enter; Shift+Enter starts a new line. In a popover it takes
+/// the focus when it appears, like a [`text_input`]. One per popover page.
+pub fn text_area<M: 'static>(
+    placeholder: impl Into<String>,
+    value: impl Into<String>,
+    on_input: impl Fn(String) -> M + 'static,
+) -> Node<M> {
+    Node(Kind::TextArea {
+        placeholder: placeholder.into(),
+        value: value.into(),
+        on_input: Box::new(on_input),
+        on_submit: None,
+        trailing: None,
+    })
+}
+
+/// Text written in Markdown, as people and programs write messages: paragraphs, emphasis,
+/// `code`, lists, quotes, headings, code blocks and tables. The host sets it in its own type and
+/// colors, wrapped to the width it has. Links show as links but don't open: the bar starts no
+/// programs.
+pub fn markdown<M>(text: impl Into<String>) -> Node<M> {
+    Node(Kind::Markdown {
+        text: text.into(),
+        tone: None,
+    })
+}
+
+/// Its content, scrolling in a popover once it's taller than the host allows a page to grow: a
+/// conversation, a long document. With [`Node::bottom`] it keeps its end in view. In the bar it's
+/// just its content.
+pub fn scroll<M>(content: Node<M>) -> Node<M> {
+    Node(Kind::Scroll {
+        content: Box::new(content),
+        bottom: false,
+    })
+}
+
 /// Its text, large: the one number a popover is about, like a battery's charge.
 pub fn display<M>(content: Node<M>) -> Node<M> {
     Node(Kind::Display(Box::new(content)))
@@ -563,13 +618,14 @@ impl<M> Node<M> {
         self
     }
 
-    /// For a [`list_item`], [`section`], [`header`] or [`text_input`]: a node at the far end, like
-    /// a lock or an info button. Other nodes ignore it.
+    /// For a [`list_item`], [`section`], [`header`], [`text_input`] or [`text_area`]: a node at the
+    /// far end, like a lock or an info button. Other nodes ignore it.
     pub fn trailing(mut self, node: Node<M>) -> Self {
         if let Kind::ListItem { trailing, .. }
         | Kind::Section { trailing, .. }
         | Kind::Header { trailing, .. }
-        | Kind::TextInput { trailing, .. } = &mut self.0
+        | Kind::TextInput { trailing, .. }
+        | Kind::TextArea { trailing, .. } = &mut self.0
         {
             *trailing = Some(Box::new(node));
         }
@@ -608,9 +664,9 @@ impl<M> Node<M> {
         self
     }
 
-    /// For a [`text_input`]: sent on Enter. Other nodes ignore it.
+    /// For a [`text_input`] or [`text_area`]: sent on Enter. Other nodes ignore it.
     pub fn on_submit(mut self, message: M) -> Self {
-        if let Kind::TextInput { on_submit, .. } = &mut self.0 {
+        if let Kind::TextInput { on_submit, .. } | Kind::TextArea { on_submit, .. } = &mut self.0 {
             *on_submit = Some(message);
         }
         self
@@ -633,6 +689,15 @@ impl<M> Node<M> {
         self
     }
 
+    /// For a [`scroll`]: keeps its end in view as content arrives there, unless you've scrolled
+    /// up to read. Other nodes ignore it.
+    pub fn bottom(mut self) -> Self {
+        if let Kind::Scroll { bottom, .. } = &mut self.0 {
+            *bottom = true;
+        }
+        self
+    }
+
     /// For a [`meter`]: marks a limit along it (0.0 to 1.0). Other nodes ignore it.
     pub fn limit(mut self, at: f32) -> Self {
         if let Kind::Meter { limit, .. } = &mut self.0 {
@@ -651,6 +716,7 @@ impl<M> Node<M> {
             | Kind::Counter { tone, .. }
             | Kind::Meter { tone, .. }
             | Kind::TextInput { tone, .. }
+            | Kind::Markdown { tone, .. }
             | Kind::Badge { tone, .. } => {
                 tone.get_or_insert(new);
             }
@@ -673,6 +739,7 @@ impl<M> Node<M> {
             | Kind::Gulp(content)
             | Kind::Display(content)
             | Kind::Mark(content)
+            | Kind::Scroll { content, .. }
             | Kind::Detail { value: content, .. } => content.set_tone(new),
             Kind::ListItem {
                 leading, trailing, ..
@@ -698,6 +765,7 @@ impl<M> Node<M> {
             | Kind::Header { .. }
             | Kind::Fill
             | Kind::Slider { .. }
+            | Kind::TextArea { .. }
             | Kind::Toggle { .. } => {}
         }
     }
@@ -872,6 +940,27 @@ impl<M> Node<M> {
                     .map(|(name, page)| (name, page.map(f)))
                     .collect(),
             ),
+            Kind::Markdown { text, tone } => Kind::Markdown { text, tone },
+            Kind::TextArea {
+                placeholder,
+                value,
+                on_input,
+                on_submit,
+                trailing,
+            } => {
+                let g = f.clone();
+                Kind::TextArea {
+                    placeholder,
+                    value,
+                    on_input: Box::new(move |text| g(on_input(text))),
+                    on_submit: on_submit.map(f),
+                    trailing: map_box(trailing),
+                }
+            }
+            Kind::Scroll { content, bottom } => Kind::Scroll {
+                content: Box::new(content.map(f)),
+                bottom,
+            },
         })
     }
 
@@ -966,11 +1055,12 @@ pub struct ItemParts<M> {
 }
 
 /// The contents of a popover. The host draws the surface, its background and its edges, and lays
-/// every popover out at the same width.
+/// every popover out at the same width, or at a wider one if it asks ([`Panel::wide`]).
 pub struct Panel<M> {
     content: Node<M>,
     on_open: Option<M>,
     on_close: Option<M>,
+    wide: bool,
 }
 
 impl<M> Panel<M> {
@@ -979,7 +1069,20 @@ impl<M> Panel<M> {
             content,
             on_open: None,
             on_close: None,
+            wide: false,
         }
+    }
+
+    /// Laid out wider than other popovers, for a page that's mostly reading: a conversation, a
+    /// document. The host decides how wide.
+    pub fn wide(mut self) -> Self {
+        self.wide = true;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn is_wide(&self) -> bool {
+        self.wide
     }
 
     /// Sent each time the popover opens: start a scan, show the first page.
@@ -1002,6 +1105,7 @@ impl<M> Panel<M> {
             content: self.content.map(f),
             on_open: self.on_open.map(f),
             on_close: self.on_close.map(f),
+            wide: self.wide,
         }
     }
 
@@ -1043,7 +1147,9 @@ pub struct Notice<M> {
     summary: String,
     app: Option<String>,
     app_icon: Option<String>,
+    image: Option<String>,
     body: Option<String>,
+    markdown: bool,
     urgency: Urgency,
     actions: Vec<(String, M)>,
     on_press: Option<M>,
@@ -1052,11 +1158,12 @@ pub struct Notice<M> {
     reply: Option<Reply<M>>,
 }
 
-/// A field on a [`Notice`] to type an answer into, like a reply to a message.
+/// A field on a [`Notice`] to type an answer into, like a reply to a message: several lines,
+/// Enter sends and Shift+Enter starts a new line.
 ///
-/// While a notice shows one, the host takes the keyboard, so show it only once asked to (after
-/// a click on a Reply button, say), and drop it once the answer is sent or cancelled. The
-/// notice doesn't expire meanwhile.
+/// It shows with the notice, but the host takes the keyboard only once it's clicked, and gives it
+/// back on Esc, on sending, or on a click elsewhere. The notice doesn't expire while it has the
+/// keyboard.
 pub struct Reply<M> {
     placeholder: String,
     value: String,
@@ -1137,7 +1244,9 @@ impl<M> Notice<M> {
             summary: summary.into(),
             app: None,
             app_icon: None,
+            image: None,
             body: None,
+            markdown: false,
             urgency: Urgency::Normal,
             actions: Vec::new(),
             on_press: None,
@@ -1159,9 +1268,22 @@ impl<M> Notice<M> {
         self
     }
 
+    /// A picture to show instead of the app's icon, by URL, like a [`cover`]: an icon file the
+    /// app gave as a path.
+    pub fn image(mut self, url: impl Into<String>) -> Self {
+        self.image = Some(url.into());
+        self
+    }
+
     /// Plain text under the summary. The host wraps it and cuts it off after a few lines.
     pub fn body(mut self, text: impl Into<String>) -> Self {
         self.body = Some(text.into());
+        self
+    }
+
+    /// The body is Markdown, like a [`markdown`] node.
+    pub fn markdown(mut self) -> Self {
+        self.markdown = true;
         self
     }
 
@@ -1211,7 +1333,9 @@ impl<M> Notice<M> {
             summary: self.summary,
             app: self.app,
             app_icon: self.app_icon,
+            image: self.image,
             body: self.body,
+            markdown: self.markdown,
             urgency: self.urgency,
             actions: self
                 .actions
@@ -1236,7 +1360,9 @@ impl<M> Notice<M> {
             summary: self.summary,
             app: self.app,
             app_icon: self.app_icon,
+            image: self.image,
             body: self.body,
+            markdown: self.markdown,
             urgency: self.urgency,
             actions: self.actions,
             on_press: self.on_press,
@@ -1254,7 +1380,9 @@ pub struct NoticeParts<M> {
     pub summary: String,
     pub app: Option<String>,
     pub app_icon: Option<String>,
+    pub image: Option<String>,
     pub body: Option<String>,
+    pub markdown: bool,
     pub urgency: Urgency,
     pub actions: Vec<(String, M)>,
     pub on_press: Option<M>,
@@ -1348,6 +1476,7 @@ mod tests {
                 .trailing(button(icon(Icon::Info), 5))]),
             slider(0.5, 0.0..=1.0, |v| (v * 10.0) as i32).on_release(6),
             text_input("p", "v", |text: String| text.len() as i32).on_submit(7),
+            scroll(text_area("p", "v", |text: String| text.len() as i32 + 1).on_submit(8)).bottom(),
         ]);
         let Kind::Column(children) = node.map(&|n: i32| n * 10).into_kind() else {
             panic!("column became something else");
@@ -1399,6 +1528,22 @@ mod tests {
             panic!("text input lost");
         };
         assert_eq!(on_input("abcd".into()), 40);
+        let Some(Kind::Scroll {
+            content,
+            bottom: true,
+        }) = children.next()
+        else {
+            panic!("scroll lost");
+        };
+        let Kind::TextArea {
+            on_input,
+            on_submit: Some(80),
+            ..
+        } = content.into_kind()
+        else {
+            panic!("text area lost");
+        };
+        assert_eq!(on_input("abcd".into()), 50);
     }
 
     #[test]

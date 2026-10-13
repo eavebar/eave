@@ -52,4 +52,4 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 - [ ] Notch-aware layout on Asahi when `apple_dcp.show_notch=1` ([platform.md](platform.md#asahi-specifics)).
 - [x] `PKGBUILD` for Asahi and CachyOS: the AUR package builds on aarch64 and x86_64 ([D-54](decisions.md)).
 - [ ] Maybe: OSD for volume and brightness, launcher, each built on the same foundations. (Notifications are done: 5.11.)
-- [ ] Notification images (`image-data`, `image-path`): a new primitive for a picture sent by the app, not found in the icon theme.
+- [x] Notification images from files (`image-path`, `app_icon` paths): `Notice::image(url)`, loaded like a cover, SVG included ([D-58](decisions.md)). Raw `image-data` pixels are still left out.

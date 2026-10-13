@@ -1,6 +1,8 @@
-//! The host side of [`eave_api::ui::text_input`]: iced's text input, in a box of our own that
-//! shows whether it has the focus. It takes the focus when it first appears, so a password page
-//! is ready to type into.
+//! The host side of [`eave_api::ui::text_input`] and [`eave_api::ui::text_area`]: iced's text
+//! input or the [`TextArea`](crate::text_area::TextArea), in a box of our own that shows whether
+//! it has the focus. In a popover it takes the focus when it first appears, so a password page is
+//! ready to type into. On a notification it waits for a click, and says when it gets or loses the
+//! focus, so the bar takes the keyboard only then.
 //!
 //! Also the two widget operations the popover needs around it: focusing the first field, and
 //! asking whether any field has the focus, so the popover keeps the keys while one does
@@ -17,6 +19,12 @@ pub struct Field<'a, M> {
     content: Element<'a, M>,
     /// The edge's color when it isn't focused, if it should stand out (a wrong password).
     alert: Option<Color>,
+    /// As tall as its content, at least a line: a text area.
+    grows: bool,
+    /// Takes the focus as it appears.
+    eager: bool,
+    /// Told when it gets the focus, or loses it.
+    on_focus: Option<Box<dyn Fn(bool) -> M + 'a>>,
 }
 
 impl<'a, M> Field<'a, M> {
@@ -24,7 +32,24 @@ impl<'a, M> Field<'a, M> {
         Self {
             content: content.into(),
             alert,
+            grows: false,
+            eager: true,
+            on_focus: None,
         }
+    }
+
+    /// As tall as what it holds, for a text area.
+    pub fn grows(mut self) -> Self {
+        self.grows = true;
+        self
+    }
+
+    /// Waits for a click instead of taking the focus as it appears, and sends `on_focus` when
+    /// it gets the focus or loses it.
+    pub fn on_focus(mut self, on_focus: impl Fn(bool) -> M + 'a) -> Self {
+        self.eager = false;
+        self.on_focus = Some(Box::new(on_focus));
+        self
     }
 }
 
@@ -83,7 +108,12 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Field<'_, M> {
     }
 
     fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Fixed(theme::FIELD_HEIGHT))
+        let height = if self.grows {
+            Length::Shrink
+        } else {
+            Length::Fixed(theme::FIELD_HEIGHT)
+        };
+        Size::new(Length::Fill, height)
     }
 
     fn layout(
@@ -92,6 +122,22 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Field<'_, M> {
         renderer: &iced::Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
+        if self.grows {
+            let width = limits
+                .resolve(Length::Fill, Length::Shrink, Size::ZERO)
+                .width;
+            let inner = layout::Limits::new(Size::ZERO, Size::new(width, limits.max().height));
+            let content =
+                self.content
+                    .as_widget_mut()
+                    .layout(&mut tree.children[0], renderer, &inner);
+            let height = content.size().height.max(theme::FIELD_HEIGHT);
+            let offset = Vector::new(0.0, ((height - content.size().height) / 2.0).round());
+            return layout::Node::with_children(
+                Size::new(width, height),
+                vec![content.translate(offset)],
+            );
+        }
         let size = limits.resolve(Length::Fill, Length::Fixed(theme::FIELD_HEIGHT), Size::ZERO);
         let inner = layout::Limits::new(Size::ZERO, size);
         let content = self
@@ -185,7 +231,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Field<'_, M> {
             return;
         };
         let (state, children) = (tree.state.downcast_mut::<State>(), &mut tree.children);
-        if !state.focused_once {
+        if self.eager && !state.focused_once {
             state.focused_once = true;
             let mut focus = FocusFirst { done: false };
             self.content
@@ -209,6 +255,9 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Field<'_, M> {
             .operate(&mut children[0], content, renderer, &mut focused);
         if state.focused != focused.found {
             state.focused = focused.found;
+            if let Some(on_focus) = &self.on_focus {
+                shell.publish(on_focus(focused.found));
+            }
             shell.request_redraw();
         }
     }
