@@ -6,7 +6,12 @@
 //! app id; the host caches the result. Every icon is drawn there, once, into a small bitmap
 //! ([`TARGET`] pixels square), so drawing the bar only copies pixels and big icons don't stay in
 //! memory.
+//!
+//! Icon files a plugin ships ([`eave_api::ui::image`], [`eave_api::ui::symbol`]) go the same way,
+//! minus the lookup: the bytes are compiled into the plugin, so they're drawn once and kept by
+//! their address.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,7 +22,7 @@ use resvg::usvg;
 
 use iced::advanced::widget::Tree;
 use iced::advanced::{Layout, Widget, layout, mouse, renderer};
-use iced::{Element, Length, Rectangle, Size};
+use iced::{Color, Element, Length, Rectangle, Size};
 
 use crate::{squish, theme};
 
@@ -86,8 +91,97 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Picture {
     }
 }
 
-/// What the host knows so far: `None` for an app with no icon to be found.
-pub type Icons = HashMap<String, Option<AppIcon>>;
+/// The icons the host knows so far, for every widget to share.
+#[derive(Debug, Default)]
+pub struct Icons {
+    /// By app id: `None` for an app with no icon to be found.
+    pub apps: HashMap<String, Option<AppIcon>>,
+    /// The files plugins ship: `None` for one that isn't an SVG or PNG it can draw.
+    pub files: HashMap<FileKey, Option<FileIcon>>,
+}
+
+/// The icons a view shows, so the host can load the ones it doesn't have.
+#[derive(Debug, Default)]
+pub struct Wanted {
+    pub apps: Vec<String>,
+    pub files: Vec<&'static [u8]>,
+}
+
+/// Which shipped file: its address and length. The bytes are `'static`, compiled into a plugin,
+/// so the address stays theirs and comparing it saves hashing the file on every view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileKey(usize, usize);
+
+impl FileKey {
+    pub fn of(file: &'static [u8]) -> Self {
+        Self(file.as_ptr() as usize, file.len())
+    }
+}
+
+/// How many colors a symbol keeps drawn: the tones it shows in, plus a hover or two.
+const TINTS: usize = 6;
+
+/// A shipped icon file, drawn: in its own colors, and its shape for drawing it in any color.
+#[derive(Debug, Clone)]
+pub struct FileIcon {
+    image: image::Handle,
+    /// Each pixel's coverage, row by row.
+    mask: Vec<u8>,
+    /// The shape drawn in the colors it was asked for so far, the latest last. The same color
+    /// gets the same handle, so the renderer uploads it once.
+    tinted: RefCell<Vec<(Color, image::Handle)>>,
+}
+
+impl FileIcon {
+    /// The file in its own colors, faded to `opacity`.
+    pub fn view<'a, M: 'a>(&self, opacity: f32) -> Element<'a, M> {
+        AppIcon(self.image.clone()).view(opacity)
+    }
+
+    /// The file's shape, filled with `color`.
+    pub fn symbol<'a, M: 'a>(&self, color: Color) -> Element<'a, M> {
+        let mut tinted = self.tinted.borrow_mut();
+        let handle = match tinted.iter().position(|(drawn, _)| *drawn == color) {
+            Some(at) => tinted[at].1.clone(),
+            None => {
+                let [red, green, blue, alpha] = color.into_rgba8();
+                let rgba = self
+                    .mask
+                    .iter()
+                    .flat_map(|coverage| {
+                        let alpha = (u16::from(*coverage) * u16::from(alpha) / 255) as u8;
+                        [red, green, blue, alpha]
+                    })
+                    .collect::<Vec<_>>();
+                let handle = image::Handle::from_rgba(TARGET, TARGET, rgba);
+                if tinted.len() == TINTS {
+                    tinted.remove(0);
+                }
+                tinted.push((color, handle.clone()));
+                handle
+            }
+        };
+        AppIcon(handle).view(1.0)
+    }
+}
+
+/// Draws a shipped icon file, off the UI thread.
+pub async fn load_file(file: &'static [u8]) -> Option<FileIcon> {
+    tokio::task::spawn_blocking(move || draw_file(file))
+        .await
+        .ok()
+        .flatten()
+}
+
+/// A PNG by its signature, anything else as an SVG.
+fn draw_file(file: &[u8]) -> Option<FileIcon> {
+    let pixmap = decode(file, !file.starts_with(b"\x89PNG"))?;
+    Some(FileIcon {
+        image: handle(&pixmap),
+        mask: pixmap.pixels().iter().map(|pixel| pixel.alpha()).collect(),
+        tinted: RefCell::default(),
+    })
+}
 
 /// Finds and loads the icon for `app_id`, off the UI thread.
 pub async fn load(app_id: String) -> Option<AppIcon> {
@@ -370,12 +464,25 @@ fn best(indexes: &[Index], name: &str) -> Option<PathBuf> {
 }
 
 fn read(path: &Path) -> Option<AppIcon> {
-    let bytes = fs::read(path).ok()?;
-    let pixmap = match path.extension()?.to_str()? {
-        "svg" | "svgz" => render_svg(&bytes)?,
-        "png" => shrink(Pixmap::decode_png(&bytes).ok()?)?,
+    let svg = match path.extension()?.to_str()? {
+        "svg" | "svgz" => true,
+        "png" => false,
         _ => return None,
     };
+    let pixmap = decode(&fs::read(path).ok()?, svg)?;
+    Some(AppIcon(handle(&pixmap)))
+}
+
+/// An SVG or PNG file drawn into a [`TARGET`] square.
+fn decode(bytes: &[u8], svg: bool) -> Option<Pixmap> {
+    if svg {
+        render_svg(bytes)
+    } else {
+        shrink(Pixmap::decode_png(bytes).ok()?)
+    }
+}
+
+fn handle(pixmap: &Pixmap) -> image::Handle {
     let rgba = pixmap
         .pixels()
         .iter()
@@ -384,11 +491,7 @@ fn read(path: &Path) -> Option<AppIcon> {
             [color.red(), color.green(), color.blue(), color.alpha()]
         })
         .collect::<Vec<_>>();
-    Some(AppIcon(image::Handle::from_rgba(
-        pixmap.width(),
-        pixmap.height(),
-        rgba,
-    )))
+    image::Handle::from_rgba(pixmap.width(), pixmap.height(), rgba)
 }
 
 /// The transform that fits `width` × `height` into a [`TARGET`] square, centered.
@@ -446,6 +549,33 @@ fn shrink(mut pixmap: Pixmap) -> Option<Pixmap> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shipped_file_is_drawn_once_and_its_shape_per_color() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect x="0" y="0" width="5" height="10" fill="red"/></svg>"#;
+        let icon = draw_file(svg).unwrap();
+        assert_eq!(icon.mask.len(), (TARGET * TARGET) as usize);
+        assert_eq!(icon.mask[0], 255, "the left half is covered");
+        assert_eq!(icon.mask[TARGET as usize - 1], 0, "the right half isn't");
+
+        let tinted = |icon: &FileIcon, color| {
+            let _: Element<'_, ()> = icon.symbol(color);
+            icon.tinted.borrow().last().unwrap().1.id()
+        };
+        let white = tinted(&icon, Color::WHITE);
+        assert_eq!(tinted(&icon, Color::WHITE), white, "drawn once per color");
+        assert_ne!(tinted(&icon, Color::BLACK), white);
+        for shade in 0..TINTS {
+            tinted(&icon, Color::from_rgb(shade as f32 / 10.0, 0.0, 0.0));
+        }
+        assert_eq!(
+            icon.tinted.borrow().len(),
+            TINTS,
+            "only the latest are kept"
+        );
+
+        assert!(draw_file(b"not an icon").is_none());
+    }
 
     /// A scratch directory tree, removed when dropped.
     struct Tree(PathBuf);

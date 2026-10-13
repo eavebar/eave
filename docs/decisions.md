@@ -682,7 +682,7 @@ The workspaces widget is its first user. Each workspace shows its name and the i
 
 **Alternatives:**
 - An icon font: it can't hold arbitrary apps' icons.
-- Plugins passing image bytes: that breaks D-13, and every plugin would repeat the lookup.
+- Plugins passing image bytes: that breaks D-13, and every plugin would repeat the lookup. (A plugin's own icon file, compiled in, is allowed since [D-53](#d-53-plugins-ship-icon-files-uiimage-and-uisymbol). That's not a lookup.)
 - `freedesktop-icons` or `linicon` crates: they're thin wrappers over the same lookup, without our size choice, and one more dependency for ~150 lines.
 - Following the full icon theme spec (`MinSize`/`MaxSize`/`Threshold` matching): we only ever want 32 px, so "smallest at or above 32, else the biggest" is enough.
 
@@ -999,3 +999,28 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 **Why:** one path. A plugin's notification behaves like every other app's, whichever daemon the user picked, and the bar shows it only because it's the daemon.
 
 **Cost:** no code changes. A plugin that sends notifications opens a session bus connection (`zbus::Connection::session()`; `eave-dbus` re-exports zbus). If no daemon runs, its notifications are lost.
+
+---
+
+## D-53: Plugins ship icon files: `ui::image` and `ui::symbol`
+
+**Status:** accepted (2026-10-13). Narrows D-38's rejection of plugins passing image bytes.
+
+**What:** a plugin can show an SVG or PNG file it ships, compiled in with `include_bytes!`. It does this when the vocabulary has no symbol for it and the user's icon theme can't be counted on, e.g. a product's logo.
+- `ui::image(file)` draws the file in its own colors. As with `app_icon`, a tone only dims it.
+- `ui::symbol(file)` keeps only the file's shape and draws it in the text's tone, like an `icon`.
+- **The plugin still only describes.** The file is `&'static [u8]`, with no size or color: the host draws it at `ICON_SIZE`, and its alpha, tone and squish are the host's. It's still not a canvas (D-13).
+- **The same pipeline as app icons** (D-38). A PNG is told apart by its signature, and anything else is read as an SVG. Each file is drawn once, on the blocking pool, into a 32 px bitmap, and kept by its address. The address is stable because the bytes are `'static`. Until the file is drawn, its room is kept empty, so nothing moves.
+- **A symbol keeps its coverage, one byte per pixel.** It's drawn in a color the first time that color is asked for, and the six latest colors are kept, so a handle stays the same and the renderer uploads it once.
+- An icon-only button holding one is drawn as a square icon button, like one holding an `icon`.
+- The icon theme is looked up again on a config reload, but files stay, since they're compiled in.
+
+**Alternatives:**
+- **A path to a file installed beside the binary:** the bar is one binary (D-12), and a missing file would be a new way to fail.
+- **Asking users to install the icon in their theme** (what eave-claude's README said): most never do, and the bar showed a C.
+- **iced's `svg` feature:** rejected in D-38 for its size and for drawing on the UI thread.
+- **Bytes taken at runtime (`Vec<u8>`), e.g. notification images:** the host would have to hash or compare them on every view to know them again. That's for later, with its own decision, if notification images come.
+
+**Measured** (Asahi, release, two clocks, 8 s after start then 10 s windows, three alternating runs each): binary 9,465,184 → 9,530,720 bytes (+64 KiB). RSS 14.6–14.7 MB with it, 14.8 MB without, and 1–2 ticks per 10 s on both. No new dependencies: resvg, tiny-skia's PNG decoding and iced's `image-without-codecs` were already in for D-38.
+
+**Cost:** each file a plugin shows is about 4 KB in memory (its bitmap), and a symbol up to 6 × 4 KB more for its colors. Plugins compiled with a file grow by its size.

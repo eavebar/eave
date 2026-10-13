@@ -86,6 +86,11 @@ pub enum Kind<M> {
         app_id: String,
         tone: Option<Tone>,
     },
+    Image {
+        file: &'static [u8],
+        tint: bool,
+        tone: Option<Tone>,
+    },
     Counter {
         value: i64,
         range: RangeInclusive<i64>,
@@ -206,6 +211,28 @@ pub fn icon<M>(icon: Icon) -> Node<M> {
 pub fn app_icon<M>(app_id: impl Into<String>) -> Node<M> {
     Node(Kind::AppIcon {
         app_id: app_id.into(),
+        tone: None,
+    })
+}
+
+/// An icon the plugin ships: an SVG or PNG file compiled into it with `include_bytes!`, told
+/// apart by its first bytes. Sized like an [`icon`], in the file's own colors: a tone only dims
+/// it, as with [`app_icon`]. The host draws it once, off the UI thread, and shows nothing in its
+/// place until then.
+pub fn image<M>(file: &'static [u8]) -> Node<M> {
+    Node(Kind::Image {
+        file,
+        tint: false,
+        tone: None,
+    })
+}
+
+/// Like [`image`], but only the file's shape counts: it's drawn in the text's tone, like an
+/// [`icon`]. For a monochrome symbol the vocabulary doesn't have.
+pub fn symbol<M>(file: &'static [u8]) -> Node<M> {
+    Node(Kind::Image {
+        file,
+        tint: true,
         tone: None,
     })
 }
@@ -579,6 +606,7 @@ impl<M> Node<M> {
             | Kind::Heading { tone, .. }
             | Kind::Icon { tone, .. }
             | Kind::AppIcon { tone, .. }
+            | Kind::Image { tone, .. }
             | Kind::Counter { tone, .. }
             | Kind::Meter { tone, .. }
             | Kind::TextInput { tone, .. }
@@ -644,6 +672,7 @@ impl<M> Node<M> {
             Kind::Heading { text, tone } => Kind::Heading { text, tone },
             Kind::Icon { icon, tone } => Kind::Icon { icon, tone },
             Kind::AppIcon { app_id, tone } => Kind::AppIcon { app_id, tone },
+            Kind::Image { file, tint, tone } => Kind::Image { file, tint, tone },
             Kind::Counter {
                 value,
                 range,

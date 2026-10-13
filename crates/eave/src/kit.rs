@@ -14,7 +14,7 @@ use iced::widget::{
 use iced::{Background, Border, Color, Element, Font, Length, Padding, Theme, alignment};
 
 use crate::alternate::Alternate;
-use crate::apps::Icons;
+use crate::apps::{FileKey, Icons, Wanted};
 use crate::clip::Clip;
 use crate::countdown::Countdown;
 use crate::counter::Counter;
@@ -187,12 +187,14 @@ pub fn notice<'a>(
     }
 }
 
-/// Every app id `node` shows an icon for, so the host can load the ones it doesn't have.
-pub fn app_ids<M: 'static>(node: Node<M>, out: &mut Vec<String>) {
+/// Every app and icon file `node` shows an icon for, so the host can load the ones it doesn't
+/// have.
+pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
     let mut all =
-        |children: Vec<Node<M>>| children.into_iter().for_each(|child| app_ids(child, out));
+        |children: Vec<Node<M>>| children.into_iter().for_each(|child| wanted(child, out));
     match node.into_kind() {
-        Kind::AppIcon { app_id, .. } => out.push(app_id),
+        Kind::AppIcon { app_id, .. } => out.apps.push(app_id),
+        Kind::Image { file, .. } => out.files.push(file),
         Kind::Alternate { options, .. } => all(options),
         Kind::Row(children) | Kind::Column(children) | Kind::List(children) => all(children),
         Kind::Grid { cells, .. } => all(cells),
@@ -308,6 +310,15 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             .into(),
         Kind::Icon { icon, tone } => icon::view(icon, ctx.color(tone)),
         Kind::AppIcon { app_id, tone } => app_icon(&app_id, tone.unwrap_or(ctx.tone), icons),
+        Kind::Image { file, tint, tone } => match icons.files.get(&FileKey::of(file)) {
+            Some(Some(icon)) if tint => icon.symbol(ctx.color(tone)),
+            Some(Some(icon)) => icon.view(dim_opacity(tone.unwrap_or(ctx.tone))),
+            // Its room, so nothing moves when it arrives.
+            _ => Space::new()
+                .width(theme::ICON_SIZE)
+                .height(theme::ICON_SIZE)
+                .into(),
+        },
         Kind::Counter {
             value,
             range,
@@ -339,7 +350,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             on_secondary,
             prominent,
         } => {
-            let only_icon = matches!(content.kind(), Kind::Icon { .. });
+            let only_icon = matches!(content.kind(), Kind::Icon { .. } | Kind::Image { .. });
             let button = if !ctx.panel() {
                 button(render(*content, ctx, icons))
                     .on_press(on_press)
@@ -747,17 +758,21 @@ fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMess
     }
 }
 
+/// How opaque a picture in its own colors is: a tone only dims it.
+fn dim_opacity(tone: Tone) -> f32 {
+    if tone == Tone::Dim {
+        theme::DIM_APP_ICON
+    } else {
+        1.0
+    }
+}
+
 /// The app's icon at the size of a status icon, dimmed for `Tone::Dim`. Until it has loaded, or
 /// if it has none, the app id's first letter in a box of the same size, so nothing moves when it
 /// arrives.
 fn app_icon<'a>(app_id: &str, tone: Tone, icons: &Icons) -> Element<'a, AnyMessage> {
-    let opacity = if tone == Tone::Dim {
-        theme::DIM_APP_ICON
-    } else {
-        1.0
-    };
-    match icons.get(app_id) {
-        Some(Some(icon)) => icon.view(opacity),
+    match icons.apps.get(app_id) {
+        Some(Some(icon)) => icon.view(dim_opacity(tone)),
         _ => {
             let letter: String = app_id
                 .chars()
