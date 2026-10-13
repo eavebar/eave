@@ -86,21 +86,28 @@ pub fn notices<'a, M: 'a>(
     cards: impl IntoIterator<Item = ((u64, u64), Element<'a, M>)>,
     footer: Option<Element<'a, M>>,
 ) -> Element<'a, M> {
-    // A card's key, a line's (after the card above it) and the footer's.
+    // A keyed column diffs a kept child without checking it's the same kind of widget, and its
+    // guess at which child is which can be off when several change at once. So every child is
+    // a container, which diffs what's in it the checking way, and a card carries the line
+    // above it.
+    let entry = |line: bool, content: Element<'a, M>| -> Element<'a, M> {
+        let line = line.then(separator);
+        container(
+            column![]
+                .push(line)
+                .push(content)
+                .spacing(theme::NOTICE_SPACING),
+        )
+        .into()
+    };
     let mut column = keyed_column(std::iter::empty()).spacing(theme::NOTICE_SPACING);
     let mut first = true;
-    for ((instance, key), card) in cards {
-        if !first {
-            column = column.push((instance, key, 1), separator());
-        }
+    for (key, card) in cards {
+        column = column.push((key.0, key.1), entry(!first, card));
         first = false;
-        column = column.push((instance, key, 0), card);
     }
     if let Some(footer) = footer {
-        if !first {
-            column = column.push((u64::MAX, u64::MAX, 1), separator());
-        }
-        column = column.push((u64::MAX, u64::MAX, 2), footer);
+        column = column.push((u64::MAX, u64::MAX), entry(!first, footer));
     }
     column.into()
 }
