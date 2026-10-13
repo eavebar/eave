@@ -510,7 +510,7 @@ Both new watchers publish through a `tokio::sync::watch` channel, so every widge
 **Status:** accepted (2026-10-12)
 
 **What:**
-- Git sources are cloned once into `$XDG_DATA_HOME/eave/src` and then left alone. Without a `@rev` a checkout stays at the commit it has. A `@rev` that isn't there yet (a pin just edited) is fetched. Only `eave-build update` fetches everything, moves each source to the newest commit of its `@rev` or default branch, and prints `old → new (N new commits)`. When eave itself moved, it also runs `cargo install --locked --path <eave>/crates/eave-build`, after the bar is in place.
+- Git sources are cloned once into `$XDG_DATA_HOME/eave/src` and then left alone. Without a `@rev` a checkout stays at the commit it has. A `@rev` that isn't there yet (a pin just edited) is fetched. Only `eave-build update` fetches everything, moves each source to the newest commit of its `@rev` or default branch, and prints `old → new (N new commits)`. When eave itself moved, it also runs `cargo install --locked --path <eave>/crates/eave-build`, after the bar is in place. *Since [D-54](#d-54-eave-on-the-aur-shipping-eave-build-from-release-tags):* only when eave-build runs from cargo's bin directory and isn't a packaged build. A package manager updates it otherwise.
 - `eave-build` (which replaces `--install` and `--restart`) always builds, then compares the result with `~/.local/bin/eave` byte for byte. It installs and restarts the bar only when they differ.
 - `eave-build init` writes a starter config.toml (`dist/config.toml`, kept if one exists) and the three systemd units. `install.sh` is a thin POSIX script around it: check for `cargo` and `git`, `cargo install --git … eave-build`, `init`, build, enable the units. Re-running it never updates.
 - The rebuild unit runs eave-build by its full path, which `init` writes in (2026-10-12). *Superseded:* `ExecStart=eave-build` with `Environment=PATH=%h/.cargo/bin:…`. systemd 262 resolves a bare name only in its compiled-in search path, never through the unit's `PATH`, so every rebuild failed with status 203/EXEC. Since the units can change, `eave-build update` runs the new eave-build's `init` after reinstalling it, then `systemctl --user daemon-reload`.
@@ -519,7 +519,7 @@ Both new watchers publish through a `tokio::sync::watch` channel, so every widge
 - fetch on every build (as before): saving config.toml could upgrade eave and every plugin behind your back, through the path unit.
 - a lockfile recording each source's commit: reproducible across machines, but one more file. The checkouts already are the lock on one machine, and pins cover the rest.
 - compare a hash of the generated crate instead of the binary: misses changes in local-path sources, which is how plugins are developed.
-- a distribution package (AUR): later. It doesn't fit compiled-in plugins without a toolchain anyway.
+- a distribution package (AUR): later. It doesn't fit compiled-in plugins without a toolchain anyway. *Superseded by [D-54](#d-54-eave-on-the-aur-shipping-eave-build-from-release-tags):* the package ships eave-build and keeps the toolchain as a runtime dependency.
 
 **Why:** the path unit now fires on every config save, so a build has to be cheap and inert when nothing changed. Explicit updates keep the bar from changing unless you asked. Sources moved out of the cache because clearing a cache must never change versions.
 
@@ -1024,3 +1024,27 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 **Measured** (Asahi, release, two clocks, 8 s after start then 10 s windows, three alternating runs each): binary 9,465,184 → 9,530,720 bytes (+64 KiB). RSS 14.6–14.7 MB with it, 14.8 MB without, and 1–2 ticks per 10 s on both. No new dependencies: resvg, tiny-skia's PNG decoding and iced's `image-without-codecs` were already in for D-38.
 
 **Cost:** each file a plugin shows is about 4 KB in memory (its bitmap), and a symbol up to 6 × 4 KB more for its colors. Plugins compiled with a file grow by its size.
+
+---
+
+## D-54: eave on the AUR, shipping eave-build from release tags
+
+**Status:** accepted (2026-10-13). Amends [D-31](#d-31-updates-are-explicit-installs-only-when-the-binary-changed).
+
+**What:** an AUR package named `eave` ([dist/aur](../dist/aur/README.md)), built from the GitHub tarball of a `vX.Y.Z` tag. Releases start with `v0.1.0`.
+- **It ships `eave-build` only**, in `/usr/bin`, plus the license and docs. The bar is still built per user into `~/.local/bin/eave` with the plugins config.toml uses (D-12, D-30). So `cargo`, `git`, `pkgconf` and `libxkbcommon` are runtime dependencies, not just build ones.
+- **A packaged eave-build builds its own release.** The PKGBUILD sets `EAVE_PACKAGE` at build time. A config.toml without `eave = …` then builds `eaveshell/eave@v<version>` instead of whatever main was at the first clone. When the package is upgraded, the new pin isn't in the checkout yet, so the next build fetches it (D-31) and the bar moves with the package. An explicit `eave = …` still wins.
+- **It never updates itself.** `eave-build update` runs `cargo install` on itself only when it isn't a packaged build and runs from cargo's bin directory (`$CARGO_INSTALL_ROOT/bin`, otherwise `$CARGO_HOME/bin`). Otherwise it says the package manager updates it. It still runs `init` to rewrite the units.
+- **The units stay in `~/.config/systemd/user`**, written by `eave-build init` as before. Their `ExecStart` is eave-build's own path, `/usr/bin/eave-build` here. The package's install script prints the three commands to run as the user, and a reminder to run `eave-build init` after an upgrade.
+- CI builds the package from every commit in an Arch container and runs namcap ([.github/workflows/ci.yml](../.github/workflows/ci.yml)).
+
+**Alternatives:**
+- **`eave-git`, built from main:** no releases to cut, but `eave-build update` and the package would both move eave, and every package build would be a different commit.
+- **Ship the bar in the package:** it would be a bar with a fixed set of plugins. config.toml naming any other plugin would need a user build anyway.
+- **Ship the units in `/usr/lib/systemd/user`:** a pacman upgrade would refresh them by itself. But `PathChanged=` has to follow `XDG_CONFIG_HOME`, which only `init` knows, and a user copy in `~/.config` would shadow the packaged one for everyone who used install.sh before. One place, written by one program.
+- **Leave the default eave unpinned under a package:** the package would build eave from main while being called 0.1.0, and could build an eave newer than its own eave-build understands.
+- **`depends=(rust)`:** rustup users would have to swap toolchains. Both `rust` and `rustup` provide `cargo`.
+
+**Why:** `paru -S eave` is how Arch users expect to install a bar, and pacman should own what it installed. Pinning eave to the package's release makes the version you see in pacman the version you run.
+
+**Cost:** someone has to cut releases: tag, `updpkgsums`, `.SRCINFO`, push to the AUR. A user who installs `rust` only for eave gets a toolchain of roughly a gigabyte. Plugins are still not updated by pacman; `eave-build update` does that. eave-build's binary is unchanged in size, since the packaged default is one more string.

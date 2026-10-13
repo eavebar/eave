@@ -8,7 +8,13 @@ Everything in it is a plugin, compiled in rather than loaded at runtime. Plugins
 
 ## Install
 
-You need Hyprland, Rust (`cargo`), `git` and `pkg-config` (Arch and CachyOS have it already):
+On Arch or CachyOS, from the [AUR](https://aur.archlinux.org/packages/eave):
+
+```sh
+paru -S eave
+```
+
+It installs `eave-build` and prints the three commands that build the bar and start it. Anywhere else, you need Hyprland, Rust (`cargo`), `git` and `pkg-config` (Arch and CachyOS have it already):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/eaveshell/eave/main/install.sh | sh
@@ -44,7 +50,7 @@ Built-in widgets are `workspaces`, `window`, `clock`, `keyboard`, `volume`, `net
 eave-build update
 ```
 
-Nothing changes version on its own. This fetches eave and every plugin, rebuilds and restarts the bar. Pin a version with `@tag` to stay on it.
+Nothing changes version on its own. This fetches eave and every plugin, rebuilds and restarts the bar. Pin a version with `@tag` to stay on it. With the AUR package, eave itself follows the package: `paru -Syu` updates it, and the next rebuild moves the bar to the new release.
 
 ## Uninstall
 
@@ -52,7 +58,7 @@ Nothing changes version on its own. This fetches eave and every plugin, rebuilds
 systemctl --user disable --now eave.service eave-rebuild.path
 rm ~/.config/systemd/user/eave{,-rebuild}.* ~/.local/bin/eave
 rm -r ~/.local/share/eave ~/.cache/eave
-cargo uninstall eave-build
+cargo uninstall eave-build   # or: pacman -R eave
 ```
 
 ## More

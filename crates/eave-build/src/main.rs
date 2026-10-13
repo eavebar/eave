@@ -29,6 +29,9 @@ use serde::Deserialize;
 
 /// Where eave comes from when config.toml has no `eave = "…"`.
 const DEFAULT_EAVE: &str = "eaveshell/eave";
+/// Set when a distribution package builds eave-build ([D-54](../../docs/decisions.md)). The bar
+/// then defaults to the eave release the package is, and the package manager updates eave-build.
+const PACKAGED: bool = option_env!("EAVE_PACKAGE").is_some();
 const SERVICE: &str = "eave.service";
 /// One plugin's manifest, beside its Cargo.toml.
 const PLUGIN_FILE: &str = "eave-plugin.toml";
@@ -41,8 +44,8 @@ usage: eave-build [update | init] [--config <config.toml>]
   eave-build update    fetch newer eave and plugins first, then the same
   eave-build init      write a starter config.toml and the systemd user units";
 
-// What `init` writes. Taken from the repository, so `cargo install --path` or `--git` is needed:
-// this crate can't be packaged on its own.
+// What `init` writes. Taken from the repository, so `cargo install --path` or `--git` is needed,
+// or a package built from the repository's tarball: this crate can't be published on its own.
 const STARTER_CONFIG: &str = include_str!("../../../dist/config.toml");
 const UNITS: [(&str, &str); 3] = [
     (
@@ -171,7 +174,7 @@ fn build(config_path: &Path, update: bool) -> Result<()> {
         moved: false,
     };
 
-    let eave = parse_reference(eave.as_deref().unwrap_or(DEFAULT_EAVE))
+    let eave = parse_reference(eave.as_deref().unwrap_or(default_eave(PACKAGED)))
         .map_err(|e| format!("`eave = …`: {e}"))?;
     if let Location::Builtin(_) = eave.location {
         return Err(format!(
@@ -250,15 +253,20 @@ fn build(config_path: &Path, update: bool) -> Result<()> {
     if eave_moved {
         // Before the install replaces this binary: Linux then reports its path as "… (deleted)".
         let exe = std::env::current_exe().map_err(|e| format!("finding eave-build itself: {e}"))?;
-        let status = Command::new("cargo")
-            .args(["install", "--locked", "--quiet", "--path"])
-            .arg(eave_dir.join("crates/eave-build"))
-            .status()
-            .map_err(|e| format!("running cargo: {e}"))?;
-        if !status.success() {
-            return Err("updating eave-build itself failed".into());
+        if PACKAGED || !exe.starts_with(cargo_bin()?) {
+            // A package manager owns it: a cargo copy would shadow it (D-54).
+            eprintln!("eave-build: eave-build itself is updated by your package manager");
+        } else {
+            let status = Command::new("cargo")
+                .args(["install", "--locked", "--quiet", "--path"])
+                .arg(eave_dir.join("crates/eave-build"))
+                .status()
+                .map_err(|e| format!("running cargo: {e}"))?;
+            if !status.success() {
+                return Err("updating eave-build itself failed".into());
+            }
+            eprintln!("eave-build: updated eave-build");
         }
-        eprintln!("eave-build: updated eave-build");
         // The new eave-build may ship new units. It keeps config.toml and rewrites only the units.
         let status = Command::new(exe)
             .arg("init")
@@ -1001,6 +1009,25 @@ fn slug(url: &str) -> String {
     slug.trim_start_matches('-').to_owned()
 }
 
+/// The eave a config.toml without `eave = "…"` builds. A packaged eave-build builds its own
+/// release, so upgrading the package moves the bar too.
+fn default_eave(packaged: bool) -> &'static str {
+    if packaged {
+        concat!("eaveshell/eave@v", env!("CARGO_PKG_VERSION"))
+    } else {
+        DEFAULT_EAVE
+    }
+}
+
+/// Where `cargo install` puts binaries, as install.sh finds it.
+fn cargo_bin() -> Result<PathBuf> {
+    let root = match std::env::var_os("CARGO_INSTALL_ROOT").filter(|v| !v.is_empty()) {
+        Some(root) => PathBuf::from(root),
+        None => xdg("CARGO_HOME", ".cargo")?,
+    };
+    Ok(root.join("bin"))
+}
+
 fn home() -> Result<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -1062,6 +1089,20 @@ mod tests {
         assert!(!api_compatible("1.5", "1.4.0"));
         assert!(!api_compatible("2.0", "1.4.0"));
         assert!(!api_compatible("banana", "0.1.0"));
+    }
+
+    #[test]
+    fn packages_build_their_own_release() {
+        assert_eq!(default_eave(false), "eaveshell/eave");
+        let packaged = parse_reference(default_eave(true)).unwrap();
+        assert_eq!(
+            packaged.rev.as_deref(),
+            Some(concat!("v", env!("CARGO_PKG_VERSION")))
+        );
+        assert_eq!(
+            packaged.location,
+            parse_reference("eaveshell/eave").unwrap().location
+        );
     }
 
     #[test]

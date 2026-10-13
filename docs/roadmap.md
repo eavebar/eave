@@ -39,7 +39,7 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 - [x] Popover open/close animation, owned by the host: the island morphs into its popover and back ([D-28](decisions.md)).
 - [x] Shared services crate (with step 1), so widgets on the same source share one connection. Hyprland is done ([D-17](decisions.md)); D-Bus is done too (`eave-dbus`, [D-18](decisions.md)), and so is the kernel's network state (`eave-net`, [D-23](decisions.md)).
 - [x] Publish `eave-api` on crates.io, so plugins build standalone without a `[patch]`. The service crates too ([D-50](decisions.md)).
-- [ ] Packages (AUR first), once the install flow has settled.
+- [x] Packages (AUR first): `eave` on the AUR, from release tags, shipping `eave-build` ([D-54](decisions.md), [dist/aur](../dist/aur/README.md)).
 - [x] Kit primitives as widgets need them: meter, slider, toggle, lists, sections, details, text fields ([D-40](decisions.md), [D-41](decisions.md)). Switcher and item scroll are done ([D-16](decisions.md)), and so are status icons ([D-29](decisions.md)).
 - [x] Real popovers: Wi-Fi networks to join through iwd ([D-42](decisions.md)), sound devices, inputs and apps, battery health, a six-week calendar, workspace windows, keyboard layouts.
 - [ ] Per-monitor workspaces once there's one bar per monitor (the widget shows every monitor's workspaces today).
@@ -48,6 +48,6 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 
 - [ ] One bar per monitor, following monitor hotplug. The host already runs as an `iced_layershell::daemon` (0.5), so this needs `StartMode::AllScreens` plus per-output state.
 - [ ] Notch-aware layout on Asahi when `apple_dcp.show_notch=1` ([platform.md](platform.md#asahi-specifics)).
-- [ ] `PKGBUILD` for Asahi and CachyOS.
+- [x] `PKGBUILD` for Asahi and CachyOS: the AUR package builds on aarch64 and x86_64 ([D-54](decisions.md)).
 - [ ] Maybe: OSD for volume and brightness, launcher, each built on the same foundations. (Notifications are done: 5.11.)
 - [ ] Notification images (`image-data`, `image-path`): a new primitive for a picture sent by the app, not found in the icon theme.

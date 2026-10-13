@@ -1,0 +1,29 @@
+post_install() {
+	cat <<'MSG'
+eave installs eave-build, which builds the bar with the plugins your config uses.
+As your user, not root:
+
+  eave-build init      # starter ~/.config/eave/config.toml and the systemd user units
+  eave-build           # builds ~/.local/bin/eave; the first build takes a few minutes
+  systemctl --user enable --now eave-rebuild.path eave.service
+
+eave.service needs graphical-session.target (uwsm does that). Without uwsm, start
+~/.local/bin/eave from your Hyprland config instead: /usr/share/doc/eave/running.md
+MSG
+}
+
+post_upgrade() {
+	cat <<'MSG'
+eave: as your user, run `eave-build init` to refresh the systemd units, then
+`eave-build` to move the bar to this release.
+MSG
+}
+
+post_remove() {
+	cat <<'MSG'
+eave: your bar and its files stay in your home. To remove them:
+  systemctl --user disable --now eave.service eave-rebuild.path
+  rm ~/.config/systemd/user/eave{,-rebuild}.* ~/.local/bin/eave
+  rm -r ~/.local/share/eave ~/.cache/eave
+MSG
+}

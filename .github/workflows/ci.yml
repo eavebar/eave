@@ -1,5 +1,6 @@
 # Builds, tests and lints on both targets (AGENTS.md: keep aarch64 and x86_64 building), and runs
-# install.sh for real. No releases: eave compiles plugins in, so it is always built locally (D-12).
+# install.sh for real, and the AUR package from this commit. The package ships only eave-build:
+# eave compiles plugins in, so the bar is always built locally (D-12, D-54).
 # The step installing libxkbcommon-dev appears in both jobs below.
 name: CI
 
@@ -62,3 +63,29 @@ jobs:
           test -f ~/.config/systemd/user/eave-rebuild.path
           ~/.cargo/bin/eave-build 2>&1 | tee build.log
           grep -q 'is up to date' build.log
+
+  aur:
+    # dist/aur/eave, built from this commit instead of the release tarball it names.
+    needs: check
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    steps:
+      - run: pacman -Syu --noconfirm --needed git rust pkgconf libxkbcommon namcap
+      - uses: actions/checkout@v4
+      - name: makepkg
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          pkgver=$(sed -n 's/^pkgver=//p' dist/aur/eave/PKGBUILD)
+          useradd -m builder
+          dir=/home/builder/eave
+          mkdir "$dir"
+          cp dist/aur/eave/PKGBUILD dist/aur/eave/eave.install dist/aur/eave/.SRCINFO "$dir"
+          git archive --prefix="eave-$pkgver/" -o "$dir/eave-$pkgver.tar.gz" HEAD
+          chown -R builder "$dir"
+          cd "$dir"
+          su builder -c 'makepkg --printsrcinfo' | diff -u .SRCINFO -
+          # Hyprland isn't installed here: it's a runtime dependency only.
+          su builder -c 'makepkg --nodeps --skipchecksums --noconfirm'
+          namcap PKGBUILD eave-*.pkg.tar.zst
+          # EAVE_PACKAGE took effect: the bar defaults to this release.
+          bsdtar -xOf eave-*.pkg.tar.zst usr/bin/eave-build | grep -aq "eaveshell/eave@v$pkgver"

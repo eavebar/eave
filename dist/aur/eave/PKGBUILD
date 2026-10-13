@@ -1,0 +1,47 @@
+# Maintainer: Francesco Mengarelli <francesco@mengarelli.eu>
+#
+# Ships eave-build only. The bar is compiled per user with the plugins config.toml uses, so
+# cargo stays a runtime dependency (D-54). Release steps: dist/aur/README.md in eave's repository.
+
+pkgname=eave
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='A smooth, reactive and lightweight status bar for Hyprland'
+arch=(x86_64 aarch64)
+url='https://github.com/eaveshell/eave'
+license=(MIT)
+# eave-build runs cargo and git to build the bar; smithay's build script needs
+# pkg-config and xkbcommon.
+depends=(cargo git pkgconf libxkbcommon hyprland gcc-libs glibc)
+makedepends=(cargo)
+optdepends=('libnotify: notify-send when a rebuild fails')
+install=eave.install
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+	cd "$pkgname-$pkgver"
+	export RUSTUP_TOOLCHAIN=stable
+	cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+	cd "$pkgname-$pkgver"
+	export RUSTUP_TOOLCHAIN=stable
+	export CARGO_TARGET_DIR=target
+	# The bar defaults to this release, and updates come from the package manager.
+	EAVE_PACKAGE=1 cargo build --frozen --release -p eave-build
+}
+
+check() {
+	cd "$pkgname-$pkgver"
+	export RUSTUP_TOOLCHAIN=stable
+	EAVE_PACKAGE=1 cargo test --frozen -p eave-build
+}
+
+package() {
+	cd "$pkgname-$pkgver"
+	install -Dm755 target/release/eave-build -t "$pkgdir/usr/bin"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm644 README.md docs/running.md -t "$pkgdir/usr/share/doc/$pkgname"
+}
