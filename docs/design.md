@@ -72,7 +72,7 @@ All motion is driven by the compositor's frame callbacks, and stops asking for f
 
 | Motion | Where | How |
 |---|---|---|
-| Morph | an island's shape and items, a popover opening | `MORPH`, close to critical: settles without wobbling |
+| Morph | an island's shape and items, a popover opening, the dormer dropping into the middle | `MORPH`, close to critical: settles without wobbling |
 | Press, drag | an island under the hand | `HAND`: overshoots a little when let go |
 | Squish, splat | a popover setting off, landing back | `REACT`, on top of the morph: `SQUISH_OPEN`, `SPLAT_*` |
 | Nudge, push, jelly | a volume change, a workspace switch, a pushed neighbor | `REACT`: `NUDGE_*`, `PUSH_*`, `JELLY_*`; the outline is jelly, poked and settling |

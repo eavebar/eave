@@ -4,9 +4,9 @@
 //! little, dragging pulls it along with growing resistance, and letting go springs it back.
 //!
 //! An island can also become a popover. Given one, it morphs into the panel's shape, growing from
-//! where it sits, while its items fade out and the panel's content fades in. It squishes as it
-//! sets off, squeezed in from the sides, and eases back as it grows. Closing runs the morph
-//! backwards, lands like it hit the top (it splats into it, flatter and wider, then eases back),
+//! where it sits (the dormer's drops from it into the middle of the screen), while its items fade
+//! out and the panel's content fades in. It squishes as it sets off, squeezed in from the sides,
+//! and eases back as it grows. Closing runs the morph backwards, lands like it hit the top (it splats into it, flatter and wider, then eases back),
 //! and reports when it's done. The panel lives in an overlay, so it's laid out against the whole
 //! surface, drawn over the other islands, and sees events first.
 //!
@@ -2279,6 +2279,48 @@ mod tests {
         assert!(splat, "lands flatter and wider");
         assert!(spread, "the items spread and squish with it");
         assert_eq!(motion.squish(), Squish::NONE);
+        assert_eq!(motion.shape(), island);
+        assert!(motion.closing_done());
+    }
+
+    #[test]
+    fn the_dormer_drops_from_the_top_and_splats_back_into_it() {
+        // A dot at the top center, and the dormer well down the screen.
+        let island = rect(490.0, 20.0);
+        let panel = centered(Size::new(480.0, 360.0), 1000.0, 200.0);
+        let mut motion = settled(island, &[1]);
+
+        // Every edge rides MORPH, so the shape glides down whole and never passes where it goes.
+        popover(&mut motion, true, panel, true);
+        let mut squeezed = false;
+        let frames = run(&mut motion, Instant::now(), |motion| {
+            let (shape, edges) = (motion.shape(), motion.edges.rect());
+            squeezed |= shape.width < edges.width - 4.0;
+            assert!(
+                edges.y >= island.y - 0.5 && edges.y <= panel.y + 0.5,
+                "the top glides"
+            );
+            assert!(edges.y + edges.height <= panel.y + panel.height + 0.5);
+            assert!(edges.width <= panel.width + 0.5);
+        });
+        assert!(squeezed, "squished on the way, like any popover");
+        assert!(frames < 90, "settles in {frames} frames");
+        assert_eq!(motion.shape(), panel);
+
+        // Back up: it lands flatter and wider, against the top, and nowhere on the way.
+        popover(&mut motion, false, panel, true);
+        let mut splat_at = None;
+        run(&mut motion, Instant::now(), |motion| {
+            let (shape, edges) = (motion.shape(), motion.edges.rect());
+            if splat_at.is_none() && shape.height < edges.height - 0.5 {
+                splat_at = Some(edges);
+            }
+        });
+        let landing = splat_at.expect("splats");
+        assert!(
+            landing.y - island.y < 2.0 && landing.height < island.height * 1.5,
+            "splats as it lands, not on the way: {landing:?}"
+        );
         assert_eq!(motion.shape(), island);
         assert!(motion.closing_done());
     }
