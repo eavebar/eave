@@ -264,7 +264,16 @@ fn source<'a, M: Clone + 'a>(
         .as_deref()
         .or(notice.app.as_deref())
         .map(|app_id| {
-            container(app_icon(app_id, Tone::Normal, icons).map(wrap)).center(theme::ICON_SIZE)
+            // A file the app gave for its icon is drawn like a cover, at icon size.
+            let icon = match icons.covers.get(app_id) {
+                Some(Some(cover)) if is_file(app_id) => cover.view(false, 1.0),
+                _ if is_file(app_id) => Space::new()
+                    .width(theme::ICON_SIZE)
+                    .height(theme::ICON_SIZE)
+                    .into(),
+                _ => app_icon(app_id, Tone::Normal, icons).map(wrap),
+            };
+            container(icon).center(theme::ICON_SIZE)
         });
     let dot = critical.then(|| {
         text("●")
@@ -359,6 +368,11 @@ fn source<'a, M: Clone + 'a>(
         .height(Length::Fixed(theme::NOTICE_CLOSE))
         .align_y(alignment::Vertical::Center)
         .into()
+}
+
+/// Whether a notice's app icon is a file's URL rather than an app id.
+pub fn is_file(app_icon: &str) -> bool {
+    app_icon.starts_with("file://")
 }
 
 /// How long ago `then` was, short: now, 5 min, 2 h, 3 d.

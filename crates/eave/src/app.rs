@@ -405,11 +405,17 @@ impl Bar {
             }
         }
         let notices = self.toasts.iter().map(|toast| &toast.notice);
-        wanted.apps.extend(
-            notices
-                .clone()
-                .filter_map(|notice| notice.app_icon.as_ref().or(notice.app.as_ref()).cloned()),
-        );
+        // An app's icon by its id, or a file it gave for it, drawn like a cover.
+        for app in notices
+            .clone()
+            .filter_map(|notice| notice.app_icon.as_ref().or(notice.app.as_ref()))
+        {
+            if kit::is_file(app) {
+                wanted.covers.push(app.clone());
+            } else {
+                wanted.apps.push(app.clone());
+            }
+        }
         // A notification's own picture: by URL, or by where its pixels are.
         let mut pixels: HashMap<String, Pixels> = HashMap::new();
         for notice in notices {

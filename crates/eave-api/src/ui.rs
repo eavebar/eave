@@ -1656,7 +1656,7 @@ impl<M> Notice<M> {
         self
     }
 
-    /// The app's icon, by app id, like [`app_icon`].
+    /// The app's icon, by app id, like [`app_icon`], or a `file://` URL to a picture of it.
     pub fn app_icon(mut self, app_id: impl Into<String>) -> Self {
         self.app_icon = Some(app_id.into());
         self
