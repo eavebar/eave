@@ -944,6 +944,12 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
         "softbuffer = {{ path = {} }}\n",
         quote(&eave_dir.join("vendor/softbuffer"))
     );
+    // And its patched iced_tiny_skia, which redraws less (D-66). Only if it has one: an older eave,
+    // pinned to a tag, predates it.
+    let tiny_skia = eave_dir.join("vendor/iced_tiny_skia");
+    if tiny_skia.is_dir() {
+        manifest += &format!("iced_tiny_skia = {{ path = {} }}\n", quote(&tiny_skia));
+    }
     // Same profile as eave's own release builds (D-10).
     manifest += "\n[profile.release]\nlto = \"thin\"\ncodegen-units = 1\nstrip = true\npanic = \"abort\"\n\n\
                  # Standalone: never part of an enclosing workspace.\n[workspace]\n";
