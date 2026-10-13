@@ -1630,3 +1630,22 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 
 **Cost:** nothing at run time. The easing from round into the panel's corners is gone.
 
+
+---
+
+## D-79: Fingers landing on the touchpad stop a fling
+
+**Status:** accepted (2026-10-13).
+
+**Problem:** with D-77, putting two fingers back on the touchpad didn't stop a fling until they moved. Fingers that land without moving send no scroll at all. libinput reports them as a hold gesture, which clients like GTK use to stop flings, but layershellev didn't listen for it and iced has no event for it.
+
+**What:** `vendor/layershellev` is layershellev 0.19.1 with one change, marked `eave patch`. It binds `zwp_pointer_gestures_v1` version 3, if the compositor has it (Hyprland does), and asks for a hold gesture on each pointer. When a hold begins, it adds one to a counter, `layershellev::holds()`, and sends a scroll of zero pixels so the bar wakes. On any zero scroll, `Glide` compares the counter with the last value it saw. If it changed, whatever is moving stops where it is, wherever the pointer is. The workspace uses the crate through `[patch.crates-io]`, and `eave-build` writes the same patch when the eave checkout has it.
+
+**Why a counter, not an event:** iced's `Event` is closed, so a hold would have to be dressed as something else on its way through iced_layershell. That means a second vendored crate. A touch event would start a touch-scroll and press buttons. A zero scroll already means "look at the touchpad" to `Glide` and nothing to anyone else (D-77), so the counter just says what kind of zero it was.
+
+**Alternatives:**
+- **Patch iced_layershell too, for a proper event:** two vendored crates, and the event still has to become an existing iced one.
+- **Stop only when the fingers move again:** what D-77 did. A touch that doesn't move went unnoticed.
+- **Upstream first:** worth doing. Drop `vendor/layershellev` once a release has hold gestures.
+
+**Cost:** one more global and one gesture object per pointer, and no new dependency (wayland-protocols already has the protocol). A hold only wakes the bar when fingers land.

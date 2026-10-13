@@ -6,6 +6,10 @@
 //! The compositor doesn't fling: lifting the fingers only sends `axis_stop`, which reaches iced
 //! as a scroll of zero pixels. So does `axis_source`, before each scroll a touchpad sends, so a
 //! zero only counts as the lift if no scroll comes after it.
+//!
+//! Fingers that land on the touchpad catch the content where it is, before they move. The
+//! compositor says so with a hold gesture, which our patched layershellev counts, and wakes the
+//! bar with another zero (D-79).
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -57,6 +61,8 @@ struct State {
     shift: bool,
     /// Whether this compositor says when the fingers lift. Until it has, a pause counts as one.
     lifts: bool,
+    /// The touchpad holds there have been, as last seen.
+    holds: u64,
 }
 
 /// What moves the content, in pixels of content toward its end: positive is down or right.
@@ -332,6 +338,18 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Glide<'_, M> {
         viewport: &Rectangle,
     ) {
         let now = Instant::now();
+        // Fingers landing on the touchpad catch what's moving, wherever the pointer is.
+        if let Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Pixels { x: 0.0, y: 0.0 },
+        }) = event
+        {
+            let state = tree.state.downcast_mut::<State>();
+            let holds = layershellev::holds();
+            if state.holds != holds {
+                state.holds = holds;
+                state.motion.stop();
+            }
+        }
         match event {
             Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
                 tree.state.downcast_mut::<State>().shift = modifiers.shift();

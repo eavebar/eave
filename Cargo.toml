@@ -53,6 +53,7 @@ toml = { version = "0.9", default-features = false, features = ["std", "parse", 
 [patch.crates-io]
 softbuffer = { path = "vendor/softbuffer" }
 iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
+layershellev = { path = "vendor/layershellev" }
 
 [profile.release]
 lto = "thin"

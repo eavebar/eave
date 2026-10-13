@@ -951,6 +951,11 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
     if tiny_skia.is_dir() {
         manifest += &format!("iced_tiny_skia = {{ path = {} }}\n", quote(&tiny_skia));
     }
+    // And its patched layershellev, which hears touchpad holds (D-79). Only if it has one.
+    let layershellev = eave_dir.join("vendor/layershellev");
+    if layershellev.is_dir() {
+        manifest += &format!("layershellev = {{ path = {} }}\n", quote(&layershellev));
+    }
     // Same profile as eave's own release builds (D-10).
     manifest += "\n[profile.release]\nlto = \"thin\"\ncodegen-units = 1\nstrip = true\npanic = \"abort\"\n\n\
                  # Standalone: never part of an enclosing workspace.\n[workspace]\n";
