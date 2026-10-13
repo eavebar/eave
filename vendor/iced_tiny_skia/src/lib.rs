@@ -67,7 +67,7 @@ impl Renderer {
     pub fn draw(
         &mut self,
         pixels: &mut tiny_skia::PixmapMut<'_>,
-        clip_mask: &mut tiny_skia::Mask,
+        clip_mask: &mut engine::ClipMask,
         viewport: &Viewport,
         damage: &[Rectangle],
         background_color: Color,
@@ -111,7 +111,7 @@ impl Renderer {
                     continue;
                 };
 
-                engine::adjust_clip_mask(clip_mask, layer_bounds);
+                clip_mask.set(layer_bounds);
 
                 if !layer.quads.is_empty() {
                     let render_span = debug::render(debug::Primitive::Quad);
@@ -139,7 +139,7 @@ impl Renderer {
                             continue;
                         };
 
-                        engine::adjust_clip_mask(clip_mask, group_bounds);
+                        clip_mask.set(group_bounds);
 
                         for primitive in group.as_slice() {
                             self.engine.draw_primitive(
@@ -152,7 +152,7 @@ impl Renderer {
                             );
                         }
 
-                        engine::adjust_clip_mask(clip_mask, layer_bounds);
+                        clip_mask.set(layer_bounds);
                     }
 
                     render_span.finish();
