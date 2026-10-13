@@ -8,6 +8,8 @@ repository.workspace = true
 
 [dependencies]
 eave-api.workspace = true
+# Low battery and charged notifications go over the session bus, like any app's (D-52, D-63).
+eave-dbus.workspace = true
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # The uevent socket; already in the tree (D-21). `fs` only because rustix 1.1 fails to build
 # `net` alone (its socket timeouts need `timespec`).

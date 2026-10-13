@@ -2,11 +2,14 @@
 //! empty. Hovering it shows the percentage instead, gulping while it charges. Read from the kernel's
 //! `/sys/class/power_supply`, with every system battery combined into one. Hidden when there's no
 //! battery (a desktop). The popover has the state, the time left and the power draw.
+//!
+//! It sends a notification when the battery runs low and when it's done charging ([`notify`]).
 
 use eave_api::ui::{self, Icon, Item, Panel, Tone};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
 use serde::Deserialize;
 
+mod notify;
 mod sysfs;
 
 pub fn register(registry: &mut Registry) {
@@ -18,8 +21,10 @@ pub fn register(registry: &mut Registry) {
 pub struct Config {
     /// Percentage at or below which a discharging battery shows as a warning.
     warning: u8,
-    /// Percentage at or below which it shows as critical.
+    /// Percentage at or below which it shows as critical, and a notification says so.
     critical: u8,
+    /// Whether to send notifications: battery low, and charged.
+    notify: bool,
 }
 
 impl Default for Config {
@@ -27,6 +32,7 @@ impl Default for Config {
         Self {
             warning: 20,
             critical: 10,
+            notify: true,
         }
     }
 }
@@ -85,11 +91,28 @@ impl State {
 pub struct Battery {
     config: Config,
     reading: Reading,
+    /// Warned that the battery is low, since the charger was last plugged in.
+    warned: bool,
+    /// The low battery notification's id, once the server gave it.
+    warning: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
     Read(Reading),
+    /// The low battery notification went up, with this id.
+    Warned(u32),
+}
+
+/// A notification to send or take away.
+#[derive(Debug, Clone, PartialEq)]
+enum Alert {
+    /// Running low, at this percent.
+    Low(u8),
+    /// The charger is in: the low battery notification can go.
+    Plugged,
+    /// Done charging, at this percent.
+    Charged(u8),
 }
 
 impl Widget for Battery {
@@ -100,14 +123,28 @@ impl Widget for Battery {
         let battery = Self {
             config,
             reading: Reading::default(),
+            warned: false,
+            warning: None,
         };
         (battery, Task::none())
     }
 
     fn update(&mut self, message: Message) -> Effect<Message> {
-        let Message::Read(reading) = message;
-        self.reading = reading;
-        Effect::none()
+        match message {
+            Message::Read(reading) => {
+                let before = std::mem::replace(&mut self.reading, reading);
+                match self.alert(&before) {
+                    Some(alert) => Effect::task(self.send(alert)),
+                    None => Effect::none(),
+                }
+            }
+            // Plugged in before the server answered: it can go right away.
+            Message::Warned(id) if !self.warned => Effect::task(close(id)),
+            Message::Warned(id) => {
+                self.warning = Some(id);
+                Effect::none()
+            }
+        }
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -238,6 +275,79 @@ fn of(value: String, whole: String) -> ui::Node<Message> {
 }
 
 impl Battery {
+    /// What to tell the user now that the reading went from `before` to the current one.
+    fn alert(&mut self, before: &Reading) -> Option<Alert> {
+        let reading = &self.reading;
+        if !self.config.notify || !reading.present {
+            return None;
+        }
+        let percent = self.percent();
+        match reading.state {
+            // Once per discharge, also when the bar starts on a low battery.
+            State::Discharging if percent <= self.config.critical && !self.warned => {
+                self.warned = true;
+                Some(Alert::Low(percent))
+            }
+            State::Charging | State::Full | State::NotCharging if self.warned => {
+                self.warned = false;
+                Some(Alert::Plugged)
+            }
+            // Only right after charging: plugging in a full battery isn't news.
+            _ if before.state == State::Charging && self.charged() => Some(Alert::Charged(percent)),
+            _ => None,
+        }
+    }
+
+    /// Full, or held at its charge limit.
+    fn charged(&self) -> bool {
+        match self.reading.state {
+            State::Full => true,
+            State::NotCharging => self
+                .reading
+                .charge_limit
+                .is_some_and(|limit| self.percent() >= limit),
+            _ => false,
+        }
+    }
+
+    fn send(&mut self, alert: Alert) -> Task<Message> {
+        let note = match alert {
+            Alert::Plugged => return self.warning.take().map_or_else(Task::none, close),
+            Alert::Low(percent) => {
+                let left = match self.reading.time_to_empty {
+                    0 => String::new(),
+                    seconds => format!(", about {}", duration(seconds)),
+                };
+                notify::Note {
+                    icon: "battery-caution",
+                    summary: "Battery low".into(),
+                    body: format!("{percent}% left{left}. Plug in the charger."),
+                    critical: true,
+                }
+            }
+            Alert::Charged(percent) => notify::Note {
+                icon: "battery-full-charged",
+                summary: "Battery charged".into(),
+                body: match self.reading.charge_limit {
+                    Some(limit) if limit < 100 => format!("Charged to the {limit}% limit."),
+                    _ => format!("{percent}%. You can unplug the charger."),
+                },
+                critical: false,
+            },
+        };
+        let low = matches!(alert, Alert::Low(_));
+        Task::future(async move {
+            match notify::send(note).await {
+                Ok(id) => low.then_some(Message::Warned(id)),
+                Err(error) => {
+                    eprintln!("eave-battery: notification not sent: {error}");
+                    None
+                }
+            }
+        })
+        .and_then(Task::done)
+    }
+
     fn charging(&self) -> bool {
         self.reading.state == State::Charging
     }
@@ -256,6 +366,15 @@ impl Battery {
             _ => Tone::Normal,
         }
     }
+}
+
+fn close(id: u32) -> Task<Message> {
+    Task::future(async move {
+        if let Err(error) = notify::close(id).await {
+            eprintln!("eave-battery: notification not closed: {error}");
+        }
+    })
+    .discard()
 }
 
 /// `2 h 05 min`, or `14 min` under an hour.
@@ -330,6 +449,83 @@ mod tests {
         let (battery, _) = Battery::new(Config::default());
         assert!(battery.item().into_parts().content.is_none());
         assert!(battery.popover().is_none());
+    }
+
+    fn read(battery: &mut Battery, percentage: f64, state: State) -> Option<Alert> {
+        let before = std::mem::replace(
+            &mut battery.reading,
+            Reading {
+                present: true,
+                percentage,
+                state,
+                ..Reading::default()
+            },
+        );
+        battery.alert(&before)
+    }
+
+    #[test]
+    fn warns_once_when_low() {
+        let mut widget = battery(12.0, State::Discharging);
+        assert_eq!(read(&mut widget, 11.0, State::Discharging), None);
+        assert_eq!(
+            read(&mut widget, 10.0, State::Discharging),
+            Some(Alert::Low(10))
+        );
+        assert_eq!(read(&mut widget, 9.0, State::Discharging), None);
+        assert_eq!(read(&mut widget, 9.0, State::Unknown), None);
+        assert_eq!(
+            read(&mut widget, 9.0, State::Charging),
+            Some(Alert::Plugged)
+        );
+        assert_eq!(read(&mut widget, 30.0, State::Charging), None);
+    }
+
+    #[test]
+    fn warns_when_starting_low() {
+        let (mut widget, _) = Battery::new(Config::default());
+        assert_eq!(
+            read(&mut widget, 6.0, State::Discharging),
+            Some(Alert::Low(6))
+        );
+    }
+
+    #[test]
+    fn says_when_charged() {
+        let mut widget = battery(99.0, State::Charging);
+        assert_eq!(
+            read(&mut widget, 100.0, State::Full),
+            Some(Alert::Charged(100))
+        );
+        assert_eq!(read(&mut widget, 100.0, State::Full), None);
+        // Plugging in a battery that's already full isn't news.
+        let mut full = battery(100.0, State::Discharging);
+        assert_eq!(read(&mut full, 100.0, State::Full), None);
+    }
+
+    #[test]
+    fn says_when_held_at_the_limit() {
+        let mut widget = battery(79.0, State::Charging);
+        let before = std::mem::replace(
+            &mut widget.reading,
+            Reading {
+                present: true,
+                percentage: 80.0,
+                state: State::NotCharging,
+                charge_limit: Some(80),
+                ..Reading::default()
+            },
+        );
+        assert_eq!(widget.alert(&before), Some(Alert::Charged(80)));
+    }
+
+    #[test]
+    fn stays_quiet_when_told() {
+        let (mut widget, _) = Battery::new(Config {
+            notify: false,
+            ..Config::default()
+        });
+        assert_eq!(read(&mut widget, 5.0, State::Discharging), None);
     }
 
     #[test]

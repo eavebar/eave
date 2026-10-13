@@ -1282,3 +1282,24 @@ A marker before the zone's first item sets the first island, so no island has to
 **Measured** (aarch64, release, the user's config, 10 s windows after 8 s, run beside the user's own bar): binary 11,693,568 → 12,152,320 bytes (+448 KiB: pulldown-cmark, iced's text editor and the new widgets). RSS 18.8 → 19.3 MB on a quiet run, the code pages. Idle CPU unchanged: 1 and 3 ticks per 10 s. A first, noisier run of each measured 20.1 and 21.0 MB, with 105 and 91 ticks.
 
 **Cost:** +448 KiB of binary for every bar, whether or not a plugin shows Markdown or a text area. One more dependency (pulldown-cmark, pure Rust).
+
+---
+
+## D-63: The battery sends its own notifications
+
+**Status:** accepted (2026-10-13).
+
+**What:** `battery` sends two notifications over the session bus, as D-52 says plugins do:
+- **Battery low**, critical urgency, once the discharging battery is at or under `critical` (10%), with the time left. Once per discharge, also when the bar starts on a low battery. It never expires, and it's taken away (`CloseNotification`) as soon as the charger is in.
+- **Battery charged**, normal urgency, when it goes from charging to full, or to held at its charge limit. Plugging in a battery that's already full isn't news, so it says nothing.
+
+The icons are theme names (`battery-caution`, `battery-full-charged`). `notify = false` turns both off. The threshold is the one that turns the icon red, so what the bar shows and what it says agree.
+
+**Alternatives:**
+- a separate warning threshold for notifications: another knob for what's already `critical`.
+- a notice of its own (`notices()`): ruled out by D-52.
+- a notification at `warning` (20%) too: the icon already turns orange there. One interruption is enough.
+
+**Why:** a bar that knows the battery is about to die should say so where you'll see it, without needing a separate daemon (D-23 rules out UPower's).
+
+**Cost:** `eave-dbus` (zbus) in the battery plugin. It was already in the default build through media, but a config with `battery` and no D-Bus plugin now links zbus. The session bus connection is only opened when a notification goes out. *Measured* (release, built-in plugins): binary 12,217,856 → 12,611,072 bytes (+384 KiB, the serialization of the `Notify` call). Idle CPU and RSS unchanged, since nothing runs until a notification is sent. With no notification daemon, they're lost, as any app's would be.
