@@ -1,0 +1,5 @@
+# Plugin manifest, beside the crate's Cargo.toml.
+[plugin]
+name = "brightness"
+description = "Screen brightness: scroll to change, the display and keyboard backlight in the popover"
+api = "0.1"

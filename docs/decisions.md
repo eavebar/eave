@@ -1649,3 +1649,18 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 - **Upstream first:** worth doing. Drop `vendor/layershellev` once a release has hold gestures.
 
 **Cost:** one more global and one gesture object per pointer, and no new dependency (wayland-protocols already has the protocol). A hold only wakes the bar when fingers land.
+
+## D-80: Brightness through logind and uevents
+
+**Status:** accepted (2026-10-13).
+
+**What:** `plugins/brightness` reads the display's backlight from `/sys/class/backlight` (firmware ones first, then platform, then raw, or the `device` named) and the keyboard's from the first `*kbd_backlight` in `/sys/class/leds`. One thread listens for the kernel's `backlight` and `leds` uevents, as battery does for `power_supply` (D-23), and re-reads when one comes. Levels are set with logind's `Session.SetBrightness(subsystem, name, raw)` on the system bus, through `eave-dbus`. The percent shown is perceptual: raw = max × (percent / 100)², and a reading of the raw level we set keeps the percent we set it to, so a coarse backlight doesn't jump between percents that share a raw level. Scrolling never goes below `min` (default 1), since 0 turns some panels off. Right click does nothing. Two icons join `Icon`: `Brightness { level }`, a sun whose eight rays light up clockwise, and `KeyboardLight`.
+
+**Why:**
+- **logind** may write the backlights of the user's own session without root, a udev rule or a group, and it's on every systemd machine. Writing sysfs directly needs one of those set up, and `brightnessctl` is a binary to run (D-23).
+- **uevents:** a backlight's core sends one on every write, whoever writes it (checked on the MacBook: a `change` with `SOURCE=sysfs` per `SetBrightness`). So brightness keys bound to anything show and nudge at once, with no polling. LEDs send none, so the keyboard's level is re-read every 2 s, and only while the popover is open.
+- **Perceptual:** a backlight is linear in light, so linear steps rush through the dark end and crawl through the bright one. Squaring gives steps that look even. Showing the perceptual percent keeps the number and the slider in step with what the eye sees.
+
+**Alternative:** sysfs writes with a shipped udev rule (one more thing to install); `brightnessctl` (a binary); linear percents (matches sysfs, looks uneven); polling the backlight (wakes up for nothing).
+
+**Cost:** one thread blocked on a netlink socket, one small dependency set already in the tree (rustix, zbus through eave-dbus). External monitors (DDC/CI over `/dev/i2c-*`, which needs `i2c-dev` and group access) are left for later; night light is the compositor's job and out of scope.

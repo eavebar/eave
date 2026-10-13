@@ -43,6 +43,16 @@ fn volume_waves(level: f32) -> u8 {
     }
 }
 
+/// How many of the sun's eight rays light up for a brightness level: at least one while there's
+/// any light at all.
+fn sun_rays(level: f32) -> u8 {
+    if level <= 0.0 {
+        0
+    } else {
+        (level * 8.0).round().clamp(1.0, 8.0) as u8
+    }
+}
+
 /// How many arcs of the Wi-Fi fan light up for a signal strength.
 fn wifi_bars(strength: f32) -> u8 {
     match strength {
@@ -249,6 +259,8 @@ impl Glyph {
             Icon::Headphones => pen.headphones(),
             Icon::Display => pen.display(),
             Icon::Bell { muted } => pen.bell(muted),
+            Icon::Brightness { level } => pen.brightness(level),
+            Icon::KeyboardLight => pen.keyboard_light(),
             Icon::Media { playing: true } => pen.bars(BARS_PLAYING),
             Icon::Media { playing: false } => pen.bars(BARS_PAUSED),
             Icon::Play => pen
@@ -452,6 +464,31 @@ impl Pen<'_> {
         self.polyline(&[(5.5, 13.75), (10.5, 13.75)]);
     }
 
+    /// A disc with eight rays round it, lit clockwise from the top as the level rises.
+    fn brightness(&mut self, level: f32) {
+        let center = Point::new(8.0, 8.0);
+        self.frame.fill(&Path::circle(center, 2.6), self.on);
+        let rays = sun_rays(level);
+        for index in 0..8u8 {
+            let angle = -0.5 * PI + f32::from(index) * 0.25 * PI;
+            let (sin, cos) = angle.sin_cos();
+            let ray = Path::line(
+                Point::new(center.x + cos * 4.9, center.y + sin * 4.9),
+                Point::new(center.x + cos * 7.0, center.y + sin * 7.0),
+            );
+            self.line(&ray, self.shade(index < rays));
+        }
+    }
+
+    /// A keyboard: a row of keys over a space bar.
+    fn keyboard_light(&mut self) {
+        self.outline(1.25, 3.5, 13.5, 9.0, 2.0);
+        for x in [4.25, 6.75, 9.25, 11.75] {
+            self.dot(x, 6.5, 0.8);
+        }
+        self.polyline(&[(5.25, 9.75), (10.75, 9.75)]);
+    }
+
     /// A slash with a gap of island background on either side, so it reads as cut through
     /// whatever is under it.
     fn slash(&mut self, from: Point, to: Point) {
@@ -629,6 +666,16 @@ mod tests {
         assert_eq!(volume_waves(0.8), 3);
         assert_eq!(volume_waves(1.0), 3);
         assert_eq!(volume_waves(1.3), 3);
+    }
+
+    #[test]
+    fn sun_rays_follow_the_level() {
+        assert_eq!(sun_rays(0.0), 0);
+        assert_eq!(sun_rays(0.01), 1, "any light shows a ray");
+        assert_eq!(sun_rays(0.5), 4);
+        assert_eq!(sun_rays(0.94), 8);
+        assert_eq!(sun_rays(1.0), 8);
+        assert_eq!(sun_rays(1.5), 8);
     }
 
     #[test]

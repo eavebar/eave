@@ -1,0 +1,21 @@
+[package]
+name = "eave-brightness"
+version = "0.1.0"
+description = "Screen and keyboard backlight: scroll to change, sliders in the popover, for eave"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+# Levels are set through logind's SetBrightness on the system bus: no root, no udev rule (D-80).
+eave-dbus.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# The uevent socket; already in the tree (D-21). `fs` only because rustix 1.1 fails to build
+# `net` alone (its socket timeouts need `timespec`).
+rustix = { version = "1", default-features = false, features = ["std", "net", "fs"] }
+tokio = { version = "1", default-features = false, features = ["sync"] }
+serde.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

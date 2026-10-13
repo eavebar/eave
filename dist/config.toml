@@ -26,6 +26,10 @@ widget = "clock"
 [[right]]
 widget = "volume"
 
+# On a laptop:
+# [[right]]
+# widget = "brightness"
+
 [[right]]
 widget = "network"
 
