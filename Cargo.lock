@@ -759,6 +759,7 @@ dependencies = [
  "eave-hyprland",
  "eave-keyboard",
  "eave-network",
+ "eave-notifications",
  "eave-volume",
  "eave-window",
  "eave-workspaces",
@@ -873,6 +874,26 @@ dependencies = [
  "eave-net",
  "serde",
  "toml",
+]
+
+[[package]]
+name = "eave-notifications"
+version = "0.1.0"
+dependencies = [
+ "eave-api",
+ "eave-notify",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "eave-notify"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "serde",
+ "tokio",
+ "zbus",
 ]
 
 [[package]]

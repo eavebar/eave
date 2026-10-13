@@ -855,3 +855,79 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 **Why:** one name means one crate means one widget. That makes every reference checkable at build time, and the errors can say what to write instead. Each crate's manifest sits beside its Cargo.toml, so the manifest doesn't need to say where the crate is.
 
 **Cost:** existing manifests have to drop `crate` and `path`. Only eave's own plugins existed. A crate can no longer offer several widgets under one plugin: split it, or put the shared code in a library crate of the collection. Pinning `eave = "…@rev"` to a commit before this change no longer builds with the new eave-build, since that checkout has no collection. The bar itself is unchanged: `config::widget_name` already gave the name, and the bar still reports a widget a plugin didn't register.
+
+---
+
+## D-47: Notices: plugins list notifications, the right island turns into them
+
+**Status:** accepted (2026-10-13)
+
+**What:** a widget can list notifications to show on screen: `Widget::notices() -> Vec<Notice<Message>>`, newest first, next to `item()` and `popover()`. While there are any, the right island morphs into a panel of them, like a popover.
+- **A notice is structured, not a node:** a `key`, a summary, and optionally the app's name and icon, a plain-text body, an `Urgency` (`Low`, `Normal`, `Critical`), actions (label and message), `on_press` (a click on the card), `on_dismiss` (its close button) and `expires(after, message)`. The host lays out each one (`kit::notice`): a thin bar across the top for the time it has left on screen (`countdown.rs`, only if it expires, standing still while its clock is stopped), app icon and name with a close button, the summary, the body cut off after four lines, and the actions, with the first one prominent. Critical names the app in the critical tone, and Low dims the summary.
+- **Declarative, diffed by key:** after each of a widget's messages, the host compares its notices with the ones it keeps. A new key comes in on top, a changed one updates in place (its time starts over if its text changed), and a missing key leaves the panel, which springs to its new size.
+- **The host owns time:** a notice's clock runs only while the panel is on screen and not pointed at. When it runs out, the widget gets the `expires` message, and dropping the notice is up to the widget. Pointing at the panel stops every clock, and leaving it gives each at least a second back. One timer is set, for the next notice to expire. Nothing ticks.
+- **Where:** the right zone's island morphs into a panel of every notice, newest first, with a line between each and the next (`kit::notices`). It's the popover morph (D-28, D-44): placed like a popover, the island's items fade out, the panel's content fades in, and it squishes as it sets off. The panel springs to its new size as notices come and go. When the last one leaves, it folds back into the island, fading out the last ones it showed. The host keeps it as a `NoticePanel`, not a popover: nobody opens it, it doesn't take the keyboard, and a click elsewhere doesn't close it.
+- **One thing at a time:** an open popover on the right island takes the island over. The island morphs straight from the notices to the popover, and the notices wait with their clocks stopped. When the popover closes, the island morphs straight back to the notices, without going back to itself first. For that, an island's popover has a key (`island::Popover::key`): when the key changes while the island is a popover, the shape springs on from where it is, and the new content fades in once it's halfway.
+  - *Superseded, same branch:* each notice was a card of its own, growing out of the island's underside and stacked down from it, while the island stayed itself (`island::Toast`, an overlay next to the items'). The user wanted the island itself to morph, like a popover, with dividers between notices.
+- **Which bar:** the focused monitor's. The bar only opens on the active output for now (`StartMode` default), so that's the first bar surface. With a bar per output it will follow Hyprland's `focusedmonv2`.
+
+**Alternatives:**
+- commands on `Effect` (`notify`, `withdraw`): the host would hold state the widget also holds, and the two could drift apart. Declaring them, like `popover()`, keeps one source of truth.
+- a `Node` as the card's content: plugins would lay out notification cards each their own way, which breaks "plugins describe, the host draws".
+- leaving notifications to an external daemon (mako, dunst, swaync): its popups would look nothing like eave and couldn't grow out of an island. With notices, eave works with any engine: eave's own (D-48), or a bridge plugin for another engine that can run without drawing.
+- notices waiting below an open popover: both at once, for an island that would be doing two things.
+- a card per notice, apart from the island: superseded above.
+
+**Why:** it keeps eave engine-agnostic: whatever receives notifications, the host shows them, in eave's style, with eave's motion. And the plugin only says what a notification is.
+
+**Cost:** no dependencies. Tokio's `time` feature in the host, already in the build through eave-api. With no notices, nothing runs: no timer, no panel. The countdown bar redraws the surface while it runs, a pixel at a time but at most 30 times a second, like the battery's gulp. *Measured* (Asahi, release, the user's config, 5 s with one notification): 3 ticks idle, 31 with a notification that doesn't expire (the morph in and out), 68–69 with one that does. At 60 fps it was 114, so 30 fps halves the countdown's cost. A slower bar would be cheaper still, but would move in visible steps. While notices show, the right island's items are under the panel, as under a popover: to reach them, wait for the notices to go, or dismiss them.
+
+---
+
+## D-48: eave-notify: eave's own notification server
+
+**Status:** accepted (2026-10-13)
+
+**What:** `crates/eave-notify` serves the freedesktop notification spec (`org.freedesktop.Notifications`, 1.2) on the session bus, inside the bar. `plugins/notifications` shows what it receives as notices (D-47), with a bell in the bar and the latest notifications in its popover.
+- **The server only receives and reports.** `watch()` starts it on first use and yields whether it's serving, then every notification and every `CloseNotification`. `close(id, reason)` and `invoke(id, key)` send `NotificationClosed` and `ActionInvoked`. Ids count up from 1, and `replaces_id` keeps the id. It advertises `actions`, `body`, `body-markup` and `inline-reply` (D-49). What to show and for how long is the plugin's business.
+- **Made plain on arrival:** body markup is stripped to text, `<br>` becomes a line break, and entities are decoded (`markup.rs`). A `<` that doesn't open a tag stays. The icon is an app id: the `desktop-entry` hint, or `app_icon` when it names an icon rather than a file. The host looks it up in the icon theme like every app icon. Images (`image-data`, `image-path`, icon files) are left out for now: the vocabulary has no picture primitive yet.
+- **Timeouts:** `-1` is the plugin's default (`timeout`, 5 s), `0` is never, and critical notifications never expire, as the spec suggests.
+- **Never pushes another daemon out.** It asks for the name with no flags. If mako, dunst or swaync has it, the bus puts eave in line, the bell is dimmed, and the popover names the daemon (its pid's `/proc/<pid>/comm`). When that daemon quits, the name passes to eave, and it says so. And since it doesn't allow replacement, a daemon started later can't take the name from it. The bus calls are made directly, not through zbus's `request_name`, which takes its flags as a type zbus doesn't export, and which would start watching for the name only after asking.
+- **The plugin:** a notice per notification, with its actions as buttons. The default action is a click on it. A notification leaves the island after its time (and stays in the list), on its close button, or when an action is picked (which also closes it). The bell counts the notifications that arrived since the popover was last opened and that you didn't deal with yourself: one you closed, clicked or picked an action of doesn't count, and one that expired does. The popover has two tabs. New lists the ones still waiting for you. History logs every one that arrived, newest first, whatever became of it, without its actions, since the app was told it closed. Both keep the latest `history` (100), with how long ago each arrived. 100 because it's in memory only and starts empty with the bar: about a day's worth for most people, a few tens of KB at most, and still short enough to scroll. A click on one there shows all of its body and a button per action, the default one first (labelled `Open` if it has no label of its own), and a click again hides them: it doesn't act on it or take it away. The list's times are re-counted every 30 s, only while it's open. The popover also has a Clear button and a do not disturb toggle. Right click on the bell toggles it too. With do not disturb, notifications only go to the list, and the island gets a nudge instead. Critical ones still show.
+
+**Alternatives:**
+- an external daemon, with a plugin reading its state: mako, dunst and swaync each draw their own popups and each have their own control interface, so eave would show a count and nothing in its own style. D-47 keeps that door open: a plugin for another engine can feed the same panel, if that engine can run without drawing.
+- a separate eave notification daemon process: one more process (each iced and layer-shell process costs ~10 MB RSS), and its popups couldn't grow out of the bar's islands.
+- replacing the current owner (`ReplaceExisting`): eave would steal notifications from a daemon the user still runs on purpose.
+- keeping history on disk: notifications sent while the bar restarts would still be lost, and storing what notifications say is a privacy question on its own.
+
+**Why:** the bar owns the screen edge the notifications come out of, and their look. Serving the spec in-process costs one more D-Bus connection and no new dependencies.
+
+**Measured** (Asahi, release, the user's config, ~18 s after start, several alternating runs): binary 9,465,184 → 10,186,160 bytes (+704 KiB). The host's half (D-47) adds nothing measurable. Of the rest, about 130 KB is this code, and the rest is zbus and zvariant code instantiated for serving an interface: the session connection, the object server, and decoding the hints map. RSS 17.0–17.1 MB before, 17.1–17.4 MB with the same config, and 17.7–17.9 MB with the notifications widget (its session bus connection). Idle CPU unchanged: 2–3 ticks per 10 s in every case. *Gotcha:* some runs of each build, including the old one without the widget, jumped to 24–47 MB and up to 294 ticks while the desktop was in use. No notification arrived during them (dbus-monitor), so compare several quiet runs.
+
+**Cost:**
+- the bar is now also the notification daemon. If it crashes or restarts, notifications sent meanwhile are lost, and the list starts empty after a restart.
+- users switching from mako, dunst or swaync have to stop starting it.
+- +704 KiB of binary when the widget is used. eave-build compiles it in only then.
+
+---
+
+## D-49: Answering a notification: a field, and the keyboard only once asked
+
+**Status:** accepted (2026-10-13)
+
+**What:** a notification can take a typed answer, like a reply to a message.
+- **The spec has no such thing, so we follow KDE's extension**, which messengers (Telegram, KDE Connect and others) use. The server advertises `inline-reply`. An app that wants an answer adds an `inline-reply` action, and may say what the field shows while empty (`x-kde-reply-placeholder-text`) and what the send button says (`x-kde-reply-submit-button-text`). The answer goes back as a `NotificationReplied(id, text)` signal. `eave-notify` takes that action out of the actions (`Notification::reply`), and `reply(id, text)` sends the signal.
+- **In the API:** `Notice::reply(Reply::new(placeholder, value, on_input).on_submit(..).on_cancel(..))`. The host draws a text field with a send button on the notice, in its tone, below the body. A `Reply` keeps `on_input` behind an `Rc`, because the host keeps notices it can clone.
+- **The keyboard only once asked.** While a notice on screen has a field, the bar takes the keyboard for the notifications' surface, as for a popover (D-36), and the field takes the focus as it appears (D-41). Then no notice expires, and Esc sends `on_cancel`. So a notification with a reply never takes the focus by itself: the plugin shows a Reply button first, and the field only after a click on it. Sending takes the notification away, after telling the app it closed. An empty answer isn't sent.
+- **In the popover's list too:** the expanded notification has the Reply button, then a field, which works like any popover's.
+
+**Alternatives:**
+- the field always there, and the bar taking the keyboard whenever a notification can be answered: every message would take the focus from what you're typing in.
+- `KeyboardInteractivity::OnDemand` while a field shows, so the compositor gives the bar the keyboard on a click: with `follow_mouse`, the focus would leave the field as soon as the pointer left the bar (D-36).
+- answering only in the popover: one more click, for the thing a message notification is most often for.
+
+**Why:** answering a message from where it appears is the point of a notification that offers it, and asking first keeps the bar from ever taking the keyboard unasked.
+
+**Cost:** no dependencies. While a field shows, the bar has the keyboard, as while a popover is open.
+

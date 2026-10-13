@@ -5,6 +5,7 @@ mod app;
 mod apps;
 mod clip;
 mod config;
+mod countdown;
 mod counter;
 mod ease;
 mod field;

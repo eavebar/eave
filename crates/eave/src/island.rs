@@ -48,12 +48,17 @@ pub struct Island<'a, M> {
 
 /// What an island turns into while it's a popover.
 pub struct Popover<'a, M> {
+    /// Which popover it is. When it changes while the island is one, the island morphs straight
+    /// to the new one, and the new content fades in.
+    pub key: u64,
     pub content: Element<'a, M>,
     /// False while closing: the island morphs back, then sends `on_closed`.
     pub open: bool,
     /// Where the panel goes, in surface coordinates, whenever that changes.
     pub on_placed: Box<dyn Fn(Rectangle) -> M + 'a>,
     pub on_closed: M,
+    /// Sent when the pointer comes onto the popover (true) or leaves it (false), if given.
+    pub on_hover: Option<Box<dyn Fn(bool) -> M + 'a>>,
 }
 
 impl<'a, M> Island<'a, M> {
@@ -295,6 +300,10 @@ struct PopoverMotion {
     items: Spring,
     /// How much the panel's content shows.
     panel: Spring,
+    /// Which popover it is.
+    key: Option<u64>,
+    /// Whether the pointer is on it, as last reported.
+    hovered: bool,
 }
 
 impl Default for PopoverMotion {
@@ -309,6 +318,8 @@ impl Default for PopoverMotion {
             squished: false,
             items: Spring::new(1.0, FADE),
             panel: Spring::new(0.0, FADE),
+            key: None,
+            hovered: false,
         }
     }
 }
@@ -485,6 +496,22 @@ impl Motion {
             None => {}
         }
         self.aim();
+    }
+
+    /// Notes which popover the island has. Another one than before, while it's still a popover,
+    /// takes over the morph: the shape springs on from where it is to the new panel, with a
+    /// squish, and the new content fades in once the shape is halfway.
+    fn swap(&mut self, key: Option<u64>) {
+        let popover = &mut self.popover;
+        if let (Some(new), Some(old)) = (key, popover.key)
+            && new != old
+            && popover.present
+        {
+            popover.panel = Spring::new(0.0, FADE);
+            popover.squished = false;
+            popover.closed = false;
+        }
+        popover.key = key;
     }
 
     /// Points the shape and the fades where they should go now. During a popover's morph, each
@@ -1173,6 +1200,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         }
 
         let motion = &mut tree.state.downcast_mut::<State>().motion;
+        motion.swap(self.popover.as_ref().map(|popover| popover.key));
         let positions = self
             .keys
             .iter()
@@ -1423,6 +1451,14 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
                 shell.request_redraw();
             }
             _ => {}
+        }
+        if let Some(on_hover) = &popover.on_hover {
+            let hovered = !matches!(event, Event::Mouse(mouse::Event::CursorLeft))
+                && cursor.is_over(motion.edges.rect());
+            if hovered != motion.popover.hovered {
+                motion.popover.hovered = hovered;
+                shell.publish(on_hover(hovered));
+            }
         }
         // A press anywhere on the shape is the popover's, handled or not: it isn't a click on the
         // bar, which would close it.
@@ -1994,5 +2030,35 @@ mod tests {
             [30.0, 50.0, 30.0, 10.0]
         );
         assert_eq!(slots(&[30.0, 20.0], &[]), [30.0, 20.0]);
+    }
+
+    #[test]
+    fn another_popover_takes_over_the_morph_and_fades_its_content_in() {
+        let island = rect(100.0, 120.0);
+        let first = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 200.0));
+        let second = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 120.0));
+        let mut motion = settled(island, &[1]);
+        motion.swap(Some(1));
+        popover(&mut motion, true, first, true);
+        run(&mut motion, Instant::now(), |_| {});
+        assert_eq!(motion.popover.panel.value, 1.0);
+
+        // The same popover again changes nothing.
+        motion.swap(Some(1));
+        assert_eq!(motion.popover.panel.value, 1.0);
+
+        motion.swap(Some(2));
+        popover(&mut motion, true, second, true);
+        assert_eq!(
+            motion.popover.panel.value, 0.0,
+            "the new content starts hidden"
+        );
+        let mut items_shown = false;
+        run(&mut motion, Instant::now(), |motion| {
+            items_shown |= motion.popover.items.value > REST_DISTANCE;
+        });
+        assert!(!items_shown, "never back to the island on the way");
+        assert_eq!(motion.edges.rect(), second);
+        assert_eq!(motion.popover.panel.value, 1.0);
     }
 }

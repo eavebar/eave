@@ -28,7 +28,7 @@ eave keeps these apart. The **host** does the first job and owns everything visu
 
 - **Host** ([D-11](decisions.md)): owns every surface, the layout, the look and the motion. It is not pluggable.
 - **Widgets** implement `eave_api::Widget`. They can't pick colors or sizes, can't build raw iced elements, and can't move other items or the bar ([D-13](decisions.md)).
-- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-net` holds one netlink listener for links, addresses, routes and Wi-Fi ([D-23](decisions.md)). `crates/eave-dbus` shares one system bus connection ([D-18](decisions.md)). `crates/eave-pulse` holds the one audio event subscription ([D-19](decisions.md)). `crates/eave-iwd` controls Wi-Fi through iwd, watched only while the network popover is open ([D-42](decisions.md)).
+- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-net` holds one netlink listener for links, addresses, routes and Wi-Fi ([D-23](decisions.md)). `crates/eave-dbus` shares one system bus connection ([D-18](decisions.md)). `crates/eave-pulse` holds the one audio event subscription ([D-19](decisions.md)). `crates/eave-iwd` controls Wi-Fi through iwd, watched only while the network popover is open ([D-42](decisions.md)). `crates/eave-notify` is eave's notification server, on its own session bus connection ([D-48](decisions.md)).
 
 Core plugins depend only on Hyprland and the kernel, plus an audio server for volume. They don't need UPower, NetworkManager or any other daemon or binary to be installed ([D-23](decisions.md)).
 
@@ -60,6 +60,16 @@ A popover isn't a surface of its own: the island holding the item turns into it 
 4. Once the surface is tall enough, the island morphs into the panel: its edges spring to the panel's, its items fade out, and the panel's content fades in once the shape is halfway there. It squishes as it sets off, squeezed in from the sides, and eases back as it grows ([D-44](decisions.md)).
 5. It closes on a second click on the item, when the widget returns `close_popover()` or stops offering a popover, on a click anywhere else, or on any key press: the bar takes the keyboard only while a popover is open ([D-36](decisions.md)). While a popover is open, a non-consuming Hyprland bind reports every left click on socket2, and the host ignores the ones that land on the bar. Clicks on the bar are handled by the bar itself, and the island captures presses on its panel ([D-14](decisions.md)). Closing runs the morph backwards, and the island splats against the top as it lands ([D-44](decisions.md)). When the island is back, it reports `PopoverClosed` and the host shrinks the surface again.
 
+## Notifications
+
+While widgets list notices, the right island turns into a panel of them, the same way it turns into a popover ([D-47](decisions.md)):
+
+1. After each of a widget's messages, the host compares its notices with the ones it keeps (`Bar::toasts`), by key. New ones go on top, changed ones are updated in place, and missing ones go.
+2. While there are any, and no popover is open on the right island, the host keeps a `NoticePanel`, and `view` hands it to the right island of the toast bar (the first bar surface, for now the only one) as its popover, with the key `NOTICES`. A popover still turning back there gives way. Placing, growing the surface, the input region and the morph are a popover's (`NoticesPlaced`). Unlike a popover's, nobody opens it, it doesn't take the keyboard, and clicks elsewhere don't close it.
+3. As notices come and go, the panel springs to its new size. When the last one goes, it folds back into the island, still showing them while they fade, and reports `NoticesClosed`.
+4. The host runs each notice's clock while the panel is on screen and not pointed at (`NoticesHovered`), with one timer set for the next to expire (`ToastTimer`). When it runs out, the widget gets the notice's `expires` message.
+5. An open popover on the right island takes the island over, and the notices wait with their clocks stopped. The island's popover key changes, so it morphs straight from one to the other, both ways.
+
 ## Data sources by widget
 
 | Widget | Source | Mechanism |
@@ -72,9 +82,10 @@ A popover isn't a surface of its own: the island holding the item turns into it 
 | Network | kernel (rtnetlink, nl80211) | link/address/route multicast events, plus a 10 s signal re-read while on Wi-Fi ([D-23](decisions.md)) |
 | Bluetooth | BlueZ | D-Bus (`zbus`) |
 | Tray | StatusNotifierItem | D-Bus. We must act as the watcher/host. The hardest widget. |
+| Notifications | apps, through the freedesktop notification spec | D-Bus: eave serves `org.freedesktop.Notifications` on the session bus ([D-48](decisions.md)) |
 | CPU / RAM / temps | `/proc`, `/sys` | timer (the only legitimate polling) |
 
-So far: clock, workspaces, active window, keyboard layout, battery, network and volume. Media is next. See [roadmap.md](roadmap.md).
+So far: clock, workspaces, active window, keyboard layout, battery, network, volume and notifications. Media is next. See [roadmap.md](roadmap.md).
 
 ## Code layout
 
@@ -82,21 +93,21 @@ So far: clock, workspaces, active window, keyboard layout, battery, network and 
 Cargo.toml                 workspace, release profile
 crates/eave-api/           the plugin SDK: what plugin authors depend on
   src/widget.rs            the Widget trait
-  src/ui.rs                the closed vocabulary: Node, Item, Panel, Tone
+  src/ui.rs                the closed vocabulary: Node, Item, Panel, Notice, Tone
   src/effect.rs            Effect: a Task plus popover requests
   src/registry.rs          Registry: widget name → constructor
   src/erased.rs            type erasure for the host (doc-hidden)
 crates/eave/               the host, as a library (`eave::run`) plus the default binary
   src/main.rs              default binary: host + built-in plugins
   src/lib.rs               run(): registry, layer-shell settings, daemon
-  src/app.rs               state, Message, update/view/subscription, popover lifecycle, surface fit, reload
+  src/app.rs               state, Message, update/view/subscription, popover lifecycle, the notifications panel and its clocks, surface fit, reload
   src/config.rs            config.toml → zone entries
   src/watch.rs             inotify watch on the config directory
   src/kit.rs               ui nodes → iced elements, styled
   src/icon.rs              status icons (volume, Wi-Fi, wired, battery) as vector paths
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
   src/theme.rs             every color, size and font
-  src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay
+  src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay, switching popovers mid-morph
   src/squish.rs            how squished the items being drawn are, set by their island
   src/label.rs             a label that can squish (outlines while squished)
   src/squircle.rs          the squircle path
@@ -114,6 +125,7 @@ crates/eave-build/         builds the widgets config.toml uses, installs and res
 crates/eave-dbus/          service: shared system bus, snapshot-on-PropertiesChanged watcher
 crates/eave-iwd/           service: Wi-Fi networks and controls through iwd's D-Bus API, and a passphrase agent
 crates/eave-net/           service: network state from the kernel over netlink (one event thread)
+crates/eave-notify/        service: the notification server (org.freedesktop.Notifications on the session bus)
 crates/eave-pulse/         service: audio over the PulseAudio protocol (one event thread)
 crates/eave-hyprland/      service: shared socket2 events, socket1 queries and dispatches
 eave-collection.toml       lists plugins/*: the built-ins, as one collection (D-46)
@@ -124,6 +136,7 @@ plugins/keyboard/          keyboard layout (eave-keyboard)
 plugins/battery/           battery from sysfs (eave-battery)
 plugins/network/           primary connection, via eave-net; Wi-Fi to join via eave-iwd (eave-network)
 plugins/volume/            output volume and switching (eave-volume)
+plugins/notifications/     notifications in the island, bell and history, via eave-notify (eave-notifications)
 vendor/softbuffer/         softbuffer 0.4.8 with an alpha-carrying Wayland buffer (D-25)
 dist/systemd/              user units: the bar, and the rebuild-on-config.toml pair
 dist/config.toml           the starter config `eave-build init` writes

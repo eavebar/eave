@@ -925,6 +925,7 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
         "eave-hyprland",
         "eave-iwd",
         "eave-net",
+        "eave-notify",
         "eave-pulse",
     ] {
         let dir = eave_dir.join("crates").join(service);

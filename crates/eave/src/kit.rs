@@ -6,7 +6,7 @@
 //! things to the end. The bar has no width to give, so those collapse to their content.
 
 use eave_api::erased::AnyMessage;
-use eave_api::ui::{Kind, Node, Tone};
+use eave_api::ui::{Kind, Node, NoticeParts, Tone, Urgency};
 use iced::widget::scrollable::{self, Scrollbar};
 use iced::widget::{
     Space, button, column, container, mouse_area, row, rule, slider, text, text_input,
@@ -16,6 +16,7 @@ use iced::{Background, Border, Color, Element, Font, Length, Padding, Theme, ali
 use crate::alternate::Alternate;
 use crate::apps::Icons;
 use crate::clip::Clip;
+use crate::countdown::Countdown;
 use crate::counter::Counter;
 use crate::field::Field;
 use crate::gulp::Gulp;
@@ -35,6 +36,155 @@ pub fn node<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage
 /// A popover's content, laid out at the panel's width.
 pub fn panel<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage> {
     render(node, Ctx::new(Place::Panel), icons)
+}
+
+/// Notifications' cards, newest first, as one popover's content, with a line between each and
+/// the next.
+pub fn notices<'a, M: 'a>(cards: impl IntoIterator<Item = Element<'a, M>>) -> Element<'a, M> {
+    let mut column = column![].spacing(theme::NOTICE_SPACING);
+    for (index, card) in cards.into_iter().enumerate() {
+        if index > 0 {
+            column = column.push(separator());
+        }
+        column = column.push(card);
+    }
+    column.into()
+}
+
+/// A thin horizontal line between groups.
+fn separator<'a, M: 'a>() -> Element<'a, M> {
+    rule::horizontal(1)
+        .style(|_| rule::Style {
+            color: theme::SEPARATOR,
+            radius: 0.0.into(),
+            fill_mode: rule::FillMode::Full,
+            snap: true,
+        })
+        .into()
+}
+
+/// The line height of a notification's body, relative to its size: iced's default.
+const LINE_HEIGHT: f32 = 1.3;
+
+/// One notification, laid out at the panel's width: the time it has left on screen, if it
+/// expires, where it's from and a close button, the summary, the body cut off after a few lines,
+/// then its actions. A click anywhere else on it sends its `on_press`.
+pub fn notice<'a>(
+    notice: NoticeParts<AnyMessage>,
+    countdown: Option<Countdown>,
+    icons: &Icons,
+) -> Element<'a, AnyMessage> {
+    let tone = match notice.urgency {
+        Urgency::Critical => Tone::Critical,
+        Urgency::Normal | Urgency::Low => Tone::Dim,
+    };
+    let ctx = Ctx::new(Place::Panel);
+    let from = notice.app_icon.as_deref().or(notice.app.as_deref());
+    let app = from
+        .map(|app_id| container(app_icon(app_id, Tone::Normal, icons)).center(theme::ICON_SIZE));
+    // Takes the free room, so the close button is at the far end. A `Clip` is only as wide as
+    // its text, even when given more.
+    let name: Element<'a, AnyMessage> = match notice.app {
+        Some(name) => container(Clip::new(
+            text(name)
+                .size(theme::SMALL_SIZE)
+                .font(theme::STRONG_FONT)
+                .color(theme::tone(tone))
+                .wrapping(text::Wrapping::None),
+            theme::ISLAND_BG,
+        ))
+        .width(Length::Fill)
+        .into(),
+        None => fill(ctx),
+    };
+    let close = notice.on_dismiss.map(|message| {
+        button(
+            container(icon::view(
+                eave_api::ui::Icon::Close,
+                theme::tone(Tone::Dim),
+            ))
+            .center(Length::Fixed(theme::NOTICE_CLOSE)),
+        )
+        .on_press(message)
+        .padding(0)
+        .style(icon_button_style)
+    });
+    let top = row![]
+        .push(app)
+        .push(name)
+        .push(close)
+        .spacing(theme::SPACING)
+        .align_y(alignment::Vertical::Center);
+
+    let summary_tone = if notice.urgency == Urgency::Low {
+        Tone::Dim
+    } else {
+        Tone::Normal
+    };
+    let summary = text(notice.summary)
+        .size(theme::TEXT_SIZE)
+        .font(theme::STRONG_FONT)
+        .color(theme::tone(summary_tone))
+        .wrapping(text::Wrapping::WordOrGlyph);
+    let body = notice.body.filter(|body| !body.is_empty()).map(|body| {
+        let line = (theme::TEXT_SIZE * LINE_HEIGHT).ceil();
+        container(
+            text(body)
+                .size(theme::TEXT_SIZE)
+                .line_height(LINE_HEIGHT)
+                .color(theme::tone(Tone::Dim))
+                .wrapping(text::Wrapping::WordOrGlyph),
+        )
+        .max_height(line * theme::NOTICE_BODY_LINES)
+        .clip(true)
+    });
+    let actions = (!notice.actions.is_empty()).then(|| {
+        let buttons = notice
+            .actions
+            .into_iter()
+            .enumerate()
+            .map(|(index, (label, message))| {
+                let button = eave_api::ui::button(eave_api::ui::label(label), message);
+                // The first is the main action.
+                let button = if index == 0 {
+                    button.prominent()
+                } else {
+                    button
+                };
+                render(button, ctx, icons)
+            });
+        row![fill(ctx)].extend(buttons).spacing(theme::SPACING)
+    });
+    // A reply field is a text input like a popover's, with a send button at its end.
+    let reply = notice.reply.map(|reply| {
+        let on_input = reply.on_input;
+        let mut field =
+            eave_api::ui::text_input(reply.placeholder, reply.value, move |text| on_input(text));
+        if let Some(message) = reply.on_submit {
+            let send = eave_api::ui::button(
+                eave_api::ui::icon(eave_api::ui::Icon::Forward),
+                message.clone(),
+            );
+            field = field.on_submit(message).trailing(send);
+        }
+        render(field, ctx, icons)
+    });
+    let card = column![]
+        .push(countdown)
+        .push(top)
+        .push(summary)
+        .push(body)
+        .push(reply)
+        .push(actions)
+        .spacing(4)
+        .width(Length::Fill);
+    match notice.on_press {
+        Some(message) => mouse_area(card)
+            .on_press(message)
+            .interaction(iced::mouse::Interaction::Pointer)
+            .into(),
+        None => card.into(),
+    }
 }
 
 /// Every app id `node` shows an icon for, so the host can load the ones it doesn't have.
@@ -230,14 +380,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             });
             Switcher::new(row(options).spacing(theme::SPACING / 2), current).into()
         }
-        Kind::Separator => rule::horizontal(1)
-            .style(|_| rule::Style {
-                color: theme::SEPARATOR,
-                radius: 0.0.into(),
-                fill_mode: rule::FillMode::Full,
-                snap: true,
-            })
-            .into(),
+        Kind::Separator => separator(),
         Kind::Empty => text("").into(),
         Kind::Fill if ctx.panel() => Space::new().width(Length::Fill).into(),
         Kind::Fill => Space::new().into(),

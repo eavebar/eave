@@ -8,7 +8,7 @@ use std::fmt;
 use std::sync::Arc;
 
 pub use crate::effect::PopoverRequest;
-use crate::ui::{Item, Panel};
+use crate::ui::{Item, Notice, Panel};
 use crate::{Effect, NudgeRequest, Subscription, Task, Widget};
 
 /// A message of some widget's own type. Cloning is cheap: the value sits behind an `Arc`.
@@ -43,6 +43,7 @@ pub trait ErasedWidget {
     fn subscription(&self) -> Subscription<AnyMessage>;
     fn item(&self) -> Item<AnyMessage>;
     fn popover(&self) -> Option<Panel<AnyMessage>>;
+    fn notices(&self) -> Vec<Notice<AnyMessage>>;
 }
 
 impl<W: Widget> ErasedWidget for W {
@@ -79,6 +80,13 @@ impl<W: Widget> ErasedWidget for W {
 
     fn popover(&self) -> Option<Panel<AnyMessage>> {
         Widget::popover(self).map(|panel| panel.map(&AnyMessage::new))
+    }
+
+    fn notices(&self) -> Vec<Notice<AnyMessage>> {
+        Widget::notices(self)
+            .into_iter()
+            .map(|notice| notice.map(&AnyMessage::new))
+            .collect()
     }
 }
 

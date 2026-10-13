@@ -21,6 +21,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **4. Battery.** `plugins/battery`: `/sys/class/power_supply`, re-read on the kernel's `power_supply` uevents and every 30 s while there's a battery. No UPower ([D-23](decisions.md), first done over UPower in [D-18](decisions.md)).
 - [x] **4.5 Network.** `plugins/network` on `crates/eave-net`: the interface with the default route, from rtnetlink, with SSID, signal and band from nl80211, and address and gateway in the popover. It works with any network manager (NetworkManager, iwd, systemd-networkd, dhcpcd) ([D-23](decisions.md)).
 - [x] **5.8 Install and update.** `install.sh` (curl | sh), `eave-build init`, plugins named in config.toml as `owner/repo[@rev]` instead of a separate plugins.toml, only used widgets compiled in, and updates only through `eave-build update` ([D-30](decisions.md), [D-31](decisions.md), [running.md](running.md)).
+- [x] **5.11 Notifications.** Plugins list notices and the right island morphs into a panel of them ([D-47](decisions.md)). `plugins/notifications` on `crates/eave-notify`, eave's own notification server, with the latest ones in its popover and do not disturb ([D-48](decisions.md)).
 - [x] **5. Volume.** `plugins/volume` on `crates/eave-pulse`: the PulseAudio protocol served by pipewire-pulse ([D-19](decisions.md)). Scroll changes it, right click mutes, and the popover has −/+, mute and output switching.
 
 ## Next
@@ -48,4 +49,5 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 - [ ] One bar per monitor, following monitor hotplug. The host already runs as an `iced_layershell::daemon` (0.5), so this needs `StartMode::AllScreens` plus per-output state.
 - [ ] Notch-aware layout on Asahi when `apple_dcp.show_notch=1` ([platform.md](platform.md#asahi-specifics)).
 - [ ] `PKGBUILD` for Asahi and CachyOS.
-- [ ] Maybe: OSD for volume and brightness, notification daemon, launcher, each as its own layer surface built on the same foundations.
+- [ ] Maybe: OSD for volume and brightness, launcher, each built on the same foundations. (Notifications are done: 5.11.)
+- [ ] Notification images (`image-data`, `image-path`): a new primitive for a picture sent by the app, not found in the icon theme.

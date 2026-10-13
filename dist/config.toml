@@ -22,3 +22,6 @@ widget = "network"
 
 [[right]]
 widget = "battery"
+
+[[right]]
+widget = "notifications"
