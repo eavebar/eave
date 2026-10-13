@@ -63,6 +63,19 @@ fn separator<'a, M: 'a>() -> Element<'a, M> {
         .into()
 }
 
+/// A short vertical line between items in an island, as `divider = true` in config.toml asks.
+pub fn divider<'a, M: 'a>() -> Element<'a, M> {
+    let line = rule::vertical(theme::DIVIDER_WIDTH).style(|_| rule::Style {
+        color: theme::DIVIDER,
+        radius: 0.0.into(),
+        fill_mode: rule::FillMode::Full,
+        snap: true,
+    });
+    container(container(line).height(theme::DIVIDER_HEIGHT))
+        .center_y(Length::Fill)
+        .into()
+}
+
 /// The line height of a notification's body, relative to its size: iced's default.
 const LINE_HEIGHT: f32 = 1.3;
 

@@ -10,6 +10,9 @@
 //! and reports when it's done. The panel lives in an overlay, so it's laid out against the whole
 //! surface, drawn over the other islands, and sees events first.
 //!
+//! An island can have a toggle, a control of the host's at one end, there only while the pointer
+//! is over the island: hovering grows the island to make room for it, and it fades in.
+//!
 //! It only watches pointer events on the items and never captures them, so the items work exactly
 //! as they would without it. Like the switcher, it steps one frame at a time when the compositor
 //! asks, and stops asking once everything is at rest.
@@ -44,7 +47,12 @@ pub struct Island<'a, M> {
     nudges: Vec<(u64, (u64, NudgeRequest))>,
     /// Each item's width group: items in the same one are as wide as the widest of them.
     groups: Vec<Option<&'a str>>,
+    /// Where the toggle is among the items, if there is one.
+    toggle: Option<usize>,
 }
+
+/// The toggle's key among the items' keys: no item has it.
+const TOGGLE: u64 = u64::MAX;
 
 /// What an island turns into while it's a popover.
 pub struct Popover<'a, M> {
@@ -73,6 +81,7 @@ impl<'a, M> Island<'a, M> {
             popover: None,
             nudges: Vec::new(),
             groups: Vec::new(),
+            toggle: None,
         }
     }
 
@@ -96,6 +105,29 @@ impl<'a, M> Island<'a, M> {
     /// Each item's width group, in the order of the items.
     pub fn width_groups(mut self, groups: Vec<Option<&'a str>>) -> Self {
         self.groups = groups;
+        if self.toggle == Some(0) {
+            self.groups.insert(0, None);
+        }
+        self
+    }
+
+    /// A control shown at one end, before the first item (`Left`) or after the last, only while
+    /// the pointer is over the island and it isn't a popover.
+    pub fn toggle(mut self, toggle: Option<(Element<'a, M>, Horizontal)>) -> Self {
+        let Some((element, side)) = toggle else {
+            return self;
+        };
+        let index = if side == Horizontal::Left {
+            if !self.groups.is_empty() {
+                self.groups.insert(0, None);
+            }
+            0
+        } else {
+            self.items.len()
+        };
+        self.keys.insert(index, TOGGLE);
+        self.items.insert(index, element);
+        self.toggle = Some(index);
         self
     }
 }
@@ -109,6 +141,8 @@ struct State {
     shape_bent: Cell<bool>,
     /// The popover panel's widget state, while there is one.
     panel: Option<Tree>,
+    /// Whether the pointer is over the island, which shows the toggle.
+    hovered: bool,
 }
 
 /// How a spring moves: how hard it pulls toward its target, and its damping ratio (below 1 it
@@ -806,6 +840,11 @@ impl Motion {
 /// any variant it doesn't name, like this one, into the default arrow.
 const ARROW: mouse::Interaction = mouse::Interaction::ContextMenu;
 
+/// Whether the item at `index` is the toggle, laid out hidden.
+fn is_hidden(toggle: Option<usize>, index: usize, layout: Layout<'_>) -> bool {
+    toggle == Some(index) && layout.bounds().width == 0.0
+}
+
 /// How wide each item's slot is: its own width, or its width group's widest.
 fn slots(widths: &[f32], groups: &[Option<&str>]) -> Vec<f32> {
     let group = |index: usize| groups.get(index).copied().flatten();
@@ -1125,6 +1164,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             shape: Cache::new(),
             shape_bent: Cell::new(false),
             panel: None,
+            hovered: false,
         })
     }
 
@@ -1144,19 +1184,37 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         let padding = f32::from(theme::ISLAND_PADDING);
         let spacing = theme::ITEM_SPACING as f32;
         let limits = layout::Limits::new(Size::new(0.0, height), Size::new(f32::INFINITY, height));
+        // A hidden toggle takes no room: an empty node, at no width.
+        let hidden = (!tree.state.downcast_ref::<State>().hovered || self.popover.is_some())
+            .then_some(self.toggle)
+            .flatten();
         let nodes: Vec<_> = self
             .items
             .iter_mut()
             .zip(&mut tree.children)
-            .map(|(item, tree)| item.as_widget_mut().layout(tree, renderer, &limits))
+            .enumerate()
+            .map(|(index, (item, tree))| {
+                if Some(index) == hidden {
+                    None
+                } else {
+                    Some(item.as_widget_mut().layout(tree, renderer, &limits))
+                }
+            })
             .collect();
-        let widths: Vec<_> = nodes.iter().map(|node| node.size().width).collect();
+        let widths: Vec<_> = nodes
+            .iter()
+            .map(|node| node.as_ref().map_or(0.0, |node| node.size().width))
+            .collect();
+        let laid_out = nodes.iter().flatten().count();
         let slots = slots(&widths, &self.groups);
         let mut x = padding;
         let children: Vec<_> = nodes
             .into_iter()
             .zip(slots)
             .map(|(node, slot)| {
+                let Some(node) = node else {
+                    return layout::Node::new(Size::ZERO).move_to(Point::new(x, height / 2.0));
+                };
                 let size = node.size();
                 let at = Point::new(
                     (x + (slot - size.width) / 2.0).round(),
@@ -1166,7 +1224,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
                 node.move_to(at)
             })
             .collect();
-        let width = if children.is_empty() {
+        let width = if laid_out == 0 {
             2.0 * padding
         } else {
             x - spacing + padding
@@ -1248,25 +1306,50 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
     ) {
         // Items under a popover are hidden, and stay out of it.
         if self.popover.is_none() {
-            for ((item, tree), layout) in self
+            for (index, ((item, tree), layout)) in self
                 .items
                 .iter_mut()
                 .zip(&mut tree.children)
                 .zip(layout.children())
+                .enumerate()
             {
+                if is_hidden(self.toggle, index, layout) {
+                    continue;
+                }
                 item.as_widget_mut().update(
                     tree, event, layout, cursor, renderer, clipboard, shell, viewport,
                 );
             }
         }
 
-        let motion = &mut tree.state.downcast_mut::<State>().motion;
+        let state = tree.state.downcast_mut::<State>();
+        // Hovering shows the toggle, and leaving hides it: the island makes room for it, or gives
+        // the room back. No message: it's the island's own.
+        if self.toggle.is_some()
+            && let Event::Mouse(
+                mouse::Event::CursorMoved { .. }
+                | mouse::Event::CursorEntered
+                | mouse::Event::CursorLeft,
+            ) = event
+        {
+            let hovered = !matches!(event, Event::Mouse(mouse::Event::CursorLeft))
+                && cursor.is_over(layout.bounds());
+            if hovered != state.hovered {
+                state.hovered = hovered;
+                shell.invalidate_layout();
+                shell.request_redraw();
+            }
+        }
+        let motion = &mut state.motion;
         motion.swap(self.popover.as_ref().map(|popover| popover.key));
+        // A hidden toggle isn't arranged, so it isn't drawn, and fades in when it shows.
         let positions = self
             .keys
             .iter()
             .zip(layout.children())
-            .map(|(key, child)| (*key, child.bounds().x));
+            .enumerate()
+            .filter(|(index, (_, child))| !is_hidden(self.toggle, *index, *child))
+            .map(|(_, (key, child))| (*key, child.bounds().x));
         motion.arrange(
             layout.bounds(),
             positions,
@@ -1332,7 +1415,9 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             .iter()
             .zip(&tree.children)
             .zip(layout.children())
-            .map(|((item, tree), layout)| {
+            .enumerate()
+            .filter(|(index, (_, layout))| !is_hidden(self.toggle, *index, *layout))
+            .map(|(_, ((item, tree), layout))| {
                 item.as_widget()
                     .mouse_interaction(tree, layout, cursor, viewport, renderer)
             })

@@ -1,12 +1,12 @@
 //! The host: holds the widget instances, routes their messages, and owns the bar surfaces. A
 //! popover isn't a surface of its own: the island holding its item morphs into it, and the bar
-//! surface grows to make room while it's there. Widgets' notifications turn the right island into
-//! a panel the same way, while there are any.
+//! surface grows to make room while it's there. Widgets' notifications turn the right island at
+//! the screen's edge into a panel the same way, while there are any.
 
 use std::time::{Duration, Instant};
 
 use eave_api::erased::{AnyMessage, ErasedWidget, PopoverRequest};
-use eave_api::ui::{Notice, NoticeParts};
+use eave_api::ui::{Icon, Notice, NoticeParts, Tone};
 use eave_api::{NudgeRequest, Registry};
 use iced::alignment::Horizontal;
 use iced::widget::{Space, container, row};
@@ -23,7 +23,7 @@ use crate::config::{self, Config, Entry, Zone};
 use crate::countdown::Countdown;
 use crate::island::{self, Island};
 use crate::slot::Slot;
-use crate::{kit, theme as style, watch};
+use crate::{icon, kit, theme as style, watch};
 
 pub struct Bar {
     registry: Registry,
@@ -60,7 +60,20 @@ pub struct Bar {
     timer: u64,
     /// When that timer goes off, if one is set.
     alarm: Option<Instant>,
+    /// Islands showing their collapsible items. The rest start, and stay, collapsed.
+    expanded: Vec<IslandId>,
 }
+
+/// One island: its zone, and which of the zone's islands it is, counted in bar order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IslandId {
+    zone: Zone,
+    index: usize,
+}
+
+/// A divider's key among its island's items: its item's id with the top bit set, so it follows
+/// that item.
+const DIVIDER_KEY: u64 = 1 << 63;
 
 struct Instance {
     id: u64,
@@ -73,6 +86,15 @@ struct Instance {
     window: Option<window::Id>,
     /// The last nudge it asked for, numbered by [`Bar::nudges`].
     nudge: Option<(u64, NudgeRequest)>,
+}
+
+impl Instance {
+    fn island(&self) -> IslandId {
+        IslandId {
+            zone: self.entry.zone,
+            index: self.entry.island,
+        }
+    }
 }
 
 /// Messages for widgets whose popover just opened or started closing, by instance id.
@@ -145,6 +167,8 @@ pub enum Message {
     Touched(window::Id, u64),
     /// A primary click on the bar that nothing handled: empty space, or a plain item.
     BarPressed,
+    /// The toggle on an island with collapsible items was pressed: show them, or hide them.
+    ToggleCollapse(IslandId),
     /// Hyprland saw a primary click somewhere ([`eave_hyprland::report_clicks`]).
     Clicked,
     PointerEntered,
@@ -193,6 +217,7 @@ impl Bar {
             windows: Vec::new(),
             timer: 0,
             alarm: None,
+            expanded: Vec::new(),
         };
         let task = bar.apply(config);
         (bar, task)
@@ -256,6 +281,14 @@ impl Bar {
         if let Some(window) = self.toast_window() {
             tasks.push(self.fit(window));
         }
+
+        // An island that no longer has collapsible items starts collapsed if it gets some again.
+        let instances = &self.instances;
+        self.expanded.retain(|island| {
+            instances
+                .iter()
+                .any(|instance| instance.island() == *island && instance.entry.collapsible)
+        });
 
         // A popover whose instance is gone has no island left to morph back into.
         let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.popovers)
@@ -332,7 +365,7 @@ impl Bar {
             );
             return Hooks::new();
         };
-        let zone = instance.entry.zone;
+        let island = instance.island();
 
         let mut hooks = self.close_popover();
         // Popovers open from a click on the bar, so that's where the pointer is.
@@ -343,7 +376,7 @@ impl Bar {
             let same_island = popover.window == window
                 && instances
                     .iter()
-                    .any(|other| other.id == popover.instance && other.entry.zone == zone);
+                    .any(|other| other.id == popover.instance && other.island() == island);
             popover.instance == id || !same_island
         });
         match self
@@ -449,14 +482,30 @@ impl Bar {
         self.windows.first().copied()
     }
 
-    /// Whether the notifications wait: the right island is an open popover, and an island does one
+    /// The island that shows the notifications: the right zone's last, at the screen's edge.
+    fn notice_island(&self) -> IslandId {
+        let index = self
+            .instances
+            .iter()
+            .filter(|instance| instance.entry.zone == Zone::Right)
+            .map(|instance| instance.entry.island)
+            .max()
+            .unwrap_or(0);
+        IslandId {
+            zone: Zone::Right,
+            index,
+        }
+    }
+
+    /// Whether the notifications wait: their island is an open popover, and an island does one
     /// thing at a time.
     fn toasts_held(&self) -> bool {
+        let island = self.notice_island();
         self.popovers.iter().any(|popover| {
             popover.open
                 && self
                     .find(popover.instance)
-                    .is_some_and(|instance| instance.entry.zone == Zone::Right)
+                    .is_some_and(|instance| instance.island() == island)
         })
     }
 
@@ -532,12 +581,13 @@ impl Bar {
             panel.open = true;
             // Shown, the panel holds only what's still listed: the rest just goes.
             self.toasts.retain(|toast| !toast.leaving);
+            let island = self.notice_island();
             let instances = &self.instances;
             let before = self.popovers.len();
             self.popovers.retain(|popover| {
                 popover.window != window
                     || !instances.iter().any(|instance| {
-                        instance.id == popover.instance && instance.entry.zone == Zone::Right
+                        instance.id == popover.instance && instance.island() == island
                     })
             });
             refit |= self.popovers.len() != before;
@@ -749,6 +799,15 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         Message::InnerPressed(id) if bar.popover_of(id).is_none() => send(bar.close_popover()),
         // Clicks on our own surfaces are handled where they land.
         Message::BarPressed => send(bar.close_popover()),
+        Message::ToggleCollapse(island) => {
+            match bar.expanded.iter().position(|expanded| *expanded == island) {
+                Some(position) => {
+                    bar.expanded.remove(position);
+                }
+                None => bar.expanded.push(island),
+            }
+            send(bar.close_popover())
+        }
         Message::Clicked if !bar.pointer_inside => send(bar.close_popover()),
         Message::PointerEntered => {
             bar.pointer_inside = true;
@@ -852,20 +911,39 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
 
 /// Every surface is a bar.
 pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
-    // Each zone is an island as wide as its items. A zone with nothing to show draws nothing, but
-    // still takes its share of the width, so the center island stays centered on screen.
-    let zone = |zone: Zone, align: Horizontal| {
+    let notices = bar
+        .notices
+        .as_ref()
+        .filter(|_| bar.toast_window() == Some(window));
+    let notice_island = bar.notice_island();
+
+    // Each island is as wide as its items. One with nothing to show draws nothing, unless it has
+    // collapsed items to bring back.
+    let island = |island: IslandId, align: Horizontal| -> Option<Element<'_, Message>> {
         let instances = || {
             bar.instances
                 .iter()
-                .filter(move |instance| instance.entry.zone == zone)
+                .filter(move |instance| instance.island() == island)
         };
-        let (items, groups): (Vec<_>, Vec<_>) = instances()
-            .filter_map(|instance| {
-                let item = (instance.id, item_view(instance, window, &bar.icons)?);
-                Some((item, instance.entry.width_group.as_deref()))
-            })
-            .unzip();
+        let collapsible = instances().any(|instance| instance.entry.collapsible);
+        let expanded = bar.expanded.contains(&island);
+        let mut items = Vec::new();
+        let mut groups = Vec::new();
+        for instance in instances() {
+            if instance.entry.collapsible && !expanded {
+                continue;
+            }
+            let Some(item) = item_view(instance, window, &bar.icons) else {
+                continue;
+            };
+            // Only between two items that show: one next to a hidden item goes with it.
+            if instance.entry.divider && !items.is_empty() {
+                items.push((instance.id | DIVIDER_KEY, kit::divider()));
+                groups.push(None);
+            }
+            items.push((instance.id, item));
+            groups.push(instance.entry.width_group.as_deref());
+        }
         let nudges = instances()
             .filter_map(|instance| Some((instance.id, instance.nudge?)))
             .collect();
@@ -876,28 +954,55 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             .filter(|popover| popover.window == window)
             .filter(|popover| instances().any(|instance| instance.id == popover.instance))
             .max_by_key(|popover| popover.open);
-
-        let notices = bar
-            .notices
-            .as_ref()
-            .filter(|_| zone == Zone::Right && bar.toast_window() == Some(window));
         // A popover there wins: the notifications wait for it.
         let popover = match popover {
             Some(popover) => Some(popover_view(bar, popover)),
-            None => notices.map(|panel| notices_view(bar, panel)),
+            None => notices
+                .filter(|_| island == notice_island)
+                .map(|panel| notices_view(bar, panel)),
         };
 
-        let island: Element<'_, Message> = if items.is_empty() && popover.is_none() {
-            Space::new().into()
-        } else {
+        if items.is_empty() && popover.is_none() && !collapsible {
+            return None;
+        }
+        // On the side facing the middle of the screen; a center island's on its right.
+        let side = match island.zone {
+            Zone::Right => Horizontal::Left,
+            Zone::Left | Zone::Center => Horizontal::Right,
+        };
+        let toggle = collapsible.then(|| (toggle_view(island, side, expanded), side));
+        Some(
             Island::new(items)
                 .align(align)
                 .popover(popover)
                 .nudges(nudges)
                 .width_groups(groups)
-                .into()
-        };
-        container(island).width(Length::Fill).align_x(align)
+                .toggle(toggle)
+                .into(),
+        )
+    };
+
+    // A zone's islands sit side by side. A zone with nothing to show still takes its share of the
+    // width, so the center islands stay centered on screen.
+    let zone = |zone: Zone, align: Horizontal| {
+        let mut indices: Vec<_> = bar
+            .instances
+            .iter()
+            .filter(|instance| instance.entry.zone == zone)
+            .map(|instance| instance.entry.island)
+            .collect();
+        // Notifications show even when no widget on the right does.
+        if notices.is_some() && zone == notice_island.zone {
+            indices.push(notice_island.index);
+        }
+        indices.sort_unstable();
+        indices.dedup();
+        let islands = indices
+            .into_iter()
+            .filter_map(|index| island(IslandId { zone, index }, align));
+        container(row(islands).spacing(style::ISLAND_SPACING))
+            .width(Length::Fill)
+            .align_x(align)
     };
 
     // No background of its own: the surface is transparent around and between the islands, and
@@ -914,6 +1019,22 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         left: style::EDGE_GAP.into(),
     })
     .into()
+}
+
+/// The chevron that shows and hides an island's collapsible items. It points the way they come
+/// out while they're hidden, and back once they show.
+fn toggle_view<'a>(island: IslandId, side: Horizontal, expanded: bool) -> Element<'a, Message> {
+    let icon = if (side == Horizontal::Left) != expanded {
+        Icon::Back
+    } else {
+        Icon::Forward
+    };
+    let content = container(icon::view(icon, style::tone(Tone::Dim)))
+        .padding([0, style::ITEM_PADDING])
+        .center_y(Length::Fill);
+    Slot::new(content)
+        .on_press(Message::ToggleCollapse(island))
+        .into()
 }
 
 fn item_view<'a>(
@@ -1476,6 +1597,83 @@ mod tests {
         let _ = update(&mut bar, Message::BarPressed);
         assert_eq!(panel(&bar), Some(true));
         assert!(bar.popovers.is_empty());
+    }
+
+    #[test]
+    fn notices_go_to_the_right_island_at_the_edge_and_others_popovers_dont_hold_them() {
+        let mut registry = Registry::new();
+        registry.widget::<Notifying>("n");
+        registry.widget::<WithPopover>("p");
+        let (mut bar, _) = Bar::new(
+            registry,
+            config(
+                "[[right]]\nwidget = \"p\"\n[[right]]\nisland = true\n[[right]]\nwidget = \"n\"",
+            ),
+        );
+        let _ = update(&mut bar, Message::WindowOpened(window::Id::unique()));
+        assert_eq!(
+            bar.notice_island(),
+            IslandId {
+                zone: Zone::Right,
+                index: 1
+            }
+        );
+        let _ = update(&mut bar, Message::Widget(1, AnyMessage::new(Note::Add(1))));
+        let window = bar.windows[0];
+        let _ = update(&mut bar, Message::Pressed(window, 0, None));
+        assert!(bar.popover_of(0).is_some());
+        assert!(!bar.toasts_held(), "the popover is on the other island");
+        assert_eq!(panel(&bar), Some(true));
+    }
+
+    #[test]
+    fn a_popover_on_one_island_leaves_another_islands_closing_one() {
+        let mut registry = Registry::new();
+        registry.widget::<WithPopover>("p");
+        let (mut bar, _) = Bar::new(
+            registry,
+            config(
+                "[[right]]\nwidget = \"p\"\n[[right]]\nisland = true\n[[right]]\nwidget = \"p\"",
+            ),
+        );
+        let window = window::Id::unique();
+        let _ = update(&mut bar, Message::Pressed(window, 0, None));
+        let _ = update(&mut bar, Message::Pressed(window, 1, None));
+        assert!(bar.popover_of(1).is_some());
+        assert_eq!(
+            bar.popovers.len(),
+            2,
+            "0 is still morphing back into its own island"
+        );
+    }
+
+    #[test]
+    fn islands_collapse_until_toggled_and_stay_toggled_across_reloads() {
+        let mut registry = Registry::new();
+        registry.widget::<Dummy>("a");
+        registry.widget::<Dummy>("b");
+        let source = "[[left]]\nwidget = \"a\"\ncollapsible = true\n[[left]]\nwidget = \"b\"";
+        let (mut bar, _) = Bar::new(registry, config(source));
+        let island = IslandId {
+            zone: Zone::Left,
+            index: 0,
+        };
+        assert!(bar.expanded.is_empty(), "islands start collapsed");
+        let _ = update(&mut bar, Message::ToggleCollapse(island));
+        assert_eq!(bar.expanded, [island]);
+
+        // Another option on `b` keeps the island and its collapsible item.
+        let _ = bar.apply(config(&format!("{source}\nx = 1")));
+        assert_eq!(bar.expanded, [island]);
+
+        // Without collapsible items, it forgets.
+        let _ = bar.apply(config("[[left]]\nwidget = \"a\""));
+        assert!(bar.expanded.is_empty());
+        let _ = bar.apply(config(source));
+        assert!(bar.expanded.is_empty());
+        let _ = update(&mut bar, Message::ToggleCollapse(island));
+        let _ = update(&mut bar, Message::ToggleCollapse(island));
+        assert!(bar.expanded.is_empty());
     }
 
     #[test]

@@ -118,6 +118,12 @@ pub const NUDGE_BUMP_ROOM: f32 = 4.0;
 /// Horizontal padding inside each item, so its click target is wider than its text.
 pub const ITEM_PADDING: u16 = 6;
 pub const ITEM_SPACING: u32 = 4;
+/// A divider between items: a line this wide and tall, in this color.
+pub const DIVIDER_WIDTH: f32 = 1.0;
+pub const DIVIDER_HEIGHT: f32 = 14.0;
+pub const DIVIDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
+/// Space between islands in the same zone.
+pub const ISLAND_SPACING: u32 = EDGE_GAP as u32;
 
 /// Space between a popover's edge and its content.
 pub const PANEL_PADDING: u16 = 12;

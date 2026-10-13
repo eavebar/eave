@@ -174,9 +174,9 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
             let width_group = match options.remove("width_group") {
                 Some(toml::Value::String(group)) => Some(group),
                 Some(_) => {
-                    config.warnings.push(format!(
-                        "{at}: `width_group` must be a name, ignoring it"
-                    ));
+                    config
+                        .warnings
+                        .push(format!("{at}: `width_group` must be a name, ignoring it"));
                     None
                 }
                 None => None,
