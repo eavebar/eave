@@ -136,7 +136,7 @@ A widget **cannot change the bar's layout**. It can only *declare* things about 
 
 **Status:** accepted (2026-10-12). Reverses part of the "no plugin system for other people" non-goal in [vision.md](vision.md).
 
-**What:** a plugin is a Rust crate in a git repository, with an `eave-plugin.toml` manifest at the root. It depends on `eave-api = "0.x"` and exports `pub fn register(&mut eave_api::Registry)`. Users list plugins in `~/.config/eave/plugins.toml` *(superseded by [D-30](#d-30-plugins-are-referenced-where-theyre-used-in-configtoml): config.toml's `widget = "owner/repo"` names them now, and plugins.toml is gone)*. `eave-build` clones them, checks each manifest's `api` against the eave checkout, generates a small crate whose `main` calls `eave::run(&[a::register, b::register])`, and builds it with cargo (the model is Caddy's xcaddy). The generated `[patch.crates-io]` points `eave-api` at the eave checkout, so the host and every plugin share one copy. That works even though eave-api isn't on crates.io (tested).
+**What:** a plugin is a Rust crate in a git repository, with an `eave-plugin.toml` manifest at the root *(superseded by [D-46](#d-46-collections-several-plugins-per-repository-one-widget-per-plugin): the manifest sits beside the crate's Cargo.toml, and a repository can hold several plugins)*. It depends on `eave-api = "0.x"` and exports `pub fn register(&mut eave_api::Registry)`. Users list plugins in `~/.config/eave/plugins.toml` *(superseded by [D-30](#d-30-plugins-are-referenced-where-theyre-used-in-configtoml): config.toml's `widget = "owner/repo"` names them now, and plugins.toml is gone)*. `eave-build` clones them, checks each manifest's `api` against the eave checkout, generates a small crate whose `main` calls `eave::run(&[a::register, b::register])`, and builds it with cargo (the model is Caddy's xcaddy). The generated `[patch.crates-io]` points `eave-api` at the eave checkout, so the host and every plugin share one copy. That works even though eave-api isn't on crates.io (tested).
 
 **Alternatives:**
 - **Dynamic libraries:** Rust has no stable ABI, so every plugin would have to be built with the exact same compiler and eave version anyway, plus `unsafe` loading. All of the risk, none of the benefit.
@@ -490,7 +490,7 @@ Both new watchers publish through a `tokio::sync::watch` channel, so every widge
 
 **Status:** accepted (2026-10-12). Replaces `plugins.toml` from [D-12](#d-12-third-party-plugins-compiled-in-by-eave-build).
 
-**What:** `widget = "…"` in config.toml both places a widget and says where it comes from: `<source>[@rev][#widget]`. No `/` is a built-in (`plugins/<name>` of the eave checkout), `owner/repo` is GitHub, `host/path` and anything with a `:` are git URLs, and a path starting with `/`, `~` or `.` is a local directory. The widget is the repository's name without `.git` and a leading `eave-`, unless `#widget` names it. A top-level `eave = "<source>[@rev]"` picks eave's own source, and defaults to `francescomengarelli/eave`. `eave-build` reads the same file: it compiles in exactly the widgets the config uses, built-ins included, and errors when one source is asked for at two revisions. The bar looks widgets up by the name part (`config::widget_name`). eave-build has its own copy of the grammar, because depending on `eave-api` would pull iced into a CLI. Both copies are tested against the same cases. `eave-rebuild.path` now watches config.toml.
+**What:** `widget = "…"` in config.toml both places a widget and says where it comes from: `<source>[@rev][#widget]`. No `/` is a built-in (`plugins/<name>` of the eave checkout; *since [D-46](#d-46-collections-several-plugins-per-repository-one-widget-per-plugin), the plugin of that name in the eave checkout's collection*), `owner/repo` is GitHub, `host/path` and anything with a `:` are git URLs, and a path starting with `/`, `~` or `.` is a local directory. The widget is the repository's name without `.git` and a leading `eave-`, unless `#widget` names it. *(Since [D-46](#d-46-collections-several-plugins-per-repository-one-widget-per-plugin), that name also picks the plugin, and eave-build checks it against the manifests.)* A top-level `eave = "<source>[@rev]"` picks eave's own source, and defaults to `francescomengarelli/eave`. `eave-build` reads the same file: it compiles in exactly the widgets the config uses, built-ins included, and errors when one source is asked for at two revisions. The bar looks widgets up by the name part (`config::widget_name`). eave-build has its own copy of the grammar, because depending on `eave-api` would pull iced into a CLI. Both copies are tested against the same cases. `eave-rebuild.path` now watches config.toml.
 
 **Alternatives:**
 - keep `plugins.toml` beside config.toml: two files to keep in step, and a built-in had to be listed in one before it could be used in the other.
@@ -834,3 +834,24 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 - a taller exclusive zone: windows would start 8 px lower for an effect that lasts while a button is held.
 
 **Measured** (Asahi, release, the user's config, ~16 s after start, alternating runs): binary 9,465,184 bytes either way. RSS ~17.1 MB here, 16.6–17.3 MB on `main`, within noise: the taller surface adds ~200 KB per buffer at scale 2. Idle CPU unchanged (6–7 ticks per 10 s). No new dependencies. *Gotcha (as in D-44):* the first run or two after a build sat at 33–44 MB on both, so compare several runs.
+
+---
+
+## D-46: Collections: several plugins per repository, one widget per plugin
+
+**Status:** accepted (2026-10-13). Changes the manifest of [D-12](#d-12-third-party-plugins-compiled-in-by-eave-build) and what `#name` means in [D-30](#d-30-plugins-are-referenced-where-theyre-used-in-configtoml).
+
+**What:**
+- A plugin is one crate that registers one widget, named by its manifest. `eave-plugin.toml` sits beside the crate's `Cargo.toml` and holds `name`, `description` and `api`. `crate` and `path` are gone: the crate's name is read from its Cargo.toml. eave-build rejects old manifests that still have them, and says to remove them.
+- A repository's root holds either one `eave-plugin.toml` (a single plugin) or an `eave-collection.toml` whose `[collection] plugins = [...]` lists plugin directories. Having both is an error, and so are two plugins with one name.
+- `<source>[#name]` picks the plugin called `name`, or, without `#`, the one named like the repository (without `eave-`). This is checked for every reference. Before, `#name` was never checked and a bare reference was checked against the single manifest. A missing name fails the build and lists the ones that are there, as `<source>#<name>`. Each plugin of a collection is compiled in only if the config uses it.
+- eave's own root has an `eave-collection.toml` listing `plugins/*`. A built-in is the plugin of that name in it, not the directory `plugins/<name>`. A test keeps the list in step with the directories.
+
+**Alternatives:**
+- a `widgets = [...]` list in the single manifest, for one crate registering several widgets: makes `#name` checkable, but all of them are compiled in to use one, and "the" plugin's `name` stays a confusing default.
+- `[[plugin]]` tables in one file at the root: one file per repository, but a plugin's manifest no longer travels with its crate, so moving a crate between repositories means editing two files.
+- finding plugins by globbing for `*/eave-plugin.toml`: nothing to keep in step, but a slow, surprising walk over a big repository, and no way to leave a crate out.
+
+**Why:** one name means one crate means one widget. That makes every reference checkable at build time, and the errors can say what to write instead. Each crate's manifest sits beside its Cargo.toml, so the manifest doesn't need to say where the crate is.
+
+**Cost:** existing manifests have to drop `crate` and `path`. Only eave's own plugins existed. A crate can no longer offer several widgets under one plugin: split it, or put the shared code in a library crate of the collection. Pinning `eave = "…@rev"` to a commit before this change no longer builds with the new eave-build, since that checkout has no collection. The bar itself is unchanged: `config::widget_name` already gave the name, and the bar still reports a widget a plugin didn't register.

@@ -9,9 +9,10 @@
 //! Plugins are compiled in, never loaded at runtime ([D-12](../../docs/decisions.md)). Every
 //! `widget = "…"` in config.toml names where it comes from ([D-30](../../docs/decisions.md)):
 //! `clock` is built in, `someone/weather` is a GitHub repository, and a git URL or a local path
-//! works too. For each source this finds its checkout (cloning it the first time), reads the
-//! `eave-plugin.toml` manifest, checks it targets this eave's plugin API, then generates a small
-//! crate whose `main` calls `eave::run` with every plugin's `register`, and builds it with cargo.
+//! works too. For each source this finds its checkout (cloning it the first time), finds the
+//! plugin it names (in its `eave-collection.toml`, or the `eave-plugin.toml` at its root), checks
+//! it targets this eave's plugin API, then generates a small crate whose `main` calls `eave::run`
+//! with every plugin's `register`, and builds it with cargo ([D-46](../../docs/decisions.md)).
 //!
 //! Nothing moves to a newer version unless you run `update` ([D-31](../../docs/decisions.md)).
 //! The binary is copied to `~/.local/bin/eave` only when it differs from the one there, and then a
@@ -29,6 +30,10 @@ use serde::Deserialize;
 /// Where eave comes from when config.toml has no `eave = "…"`.
 const DEFAULT_EAVE: &str = "francescomengarelli/eave";
 const SERVICE: &str = "eave.service";
+/// One plugin's manifest, beside its Cargo.toml.
+const PLUGIN_FILE: &str = "eave-plugin.toml";
+/// At a repository's root, the directories of the plugins it holds.
+const COLLECTION_FILE: &str = "eave-collection.toml";
 const USAGE: &str = "\
 usage: eave-build [update | init] [--config <config.toml>]
 
@@ -59,7 +64,7 @@ type Result<T> = std::result::Result<T, String>;
 /// Where a plugin's source is.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Location {
-    /// `plugins/<name>` in the eave checkout.
+    /// A plugin of the eave checkout's own collection.
     Builtin(String),
     Git(String),
     Path(PathBuf),
@@ -72,9 +77,8 @@ struct Reference {
     location: Location,
     /// A commit, tag or branch. Without one, the checkout stays wherever `update` last put it.
     rev: Option<String>,
+    /// The plugin it uses, which is also the widget's name: `#widget`, or the repository's name.
     widget: String,
-    /// Named with `#widget`, instead of taken from the repository's name.
-    explicit: bool,
 }
 
 #[derive(Deserialize)]
@@ -82,25 +86,34 @@ struct ManifestFile {
     plugin: Manifest,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
+    /// The one widget the plugin registers.
     name: String,
     #[serde(default)]
     description: String,
-    #[serde(rename = "crate")]
-    crate_name: String,
-    #[serde(default = "here")]
-    path: PathBuf,
     api: String,
 }
 
-fn here() -> PathBuf {
-    PathBuf::from(".")
+#[derive(Deserialize)]
+struct CollectionFile {
+    collection: Collection,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Collection {
+    #[serde(default)]
+    #[allow(dead_code)]
+    description: String,
+    /// Plugin directories, relative to the collection file.
+    plugins: Vec<PathBuf>,
 }
 
 struct Plugin {
     manifest: Manifest,
+    crate_name: String,
     crate_dir: PathBuf,
     module: String,
 }
@@ -179,38 +192,38 @@ fn build(config_path: &Path, update: bool) -> Result<()> {
     for group in group_references(widgets)? {
         let first = &group[0];
         let root = match &first.location {
-            Location::Builtin(name) => {
-                let dir = eave_dir.join("plugins").join(name);
-                if !dir.is_dir() {
+            Location::Builtin(_) => eave_dir.clone(),
+            _ => sources.dir_for(first, &first.widget)?,
+        };
+        let members = members(&root)?;
+        let mut used = HashSet::new();
+        for reference in &group {
+            if !used.insert(&reference.widget) {
+                continue;
+            }
+            let Some((dir, manifest)) = pick(&members, reference) else {
+                if let Location::Builtin(name) = &reference.location {
                     // The bar reports it too, and skips it.
                     eprintln!("eave-build: no built-in widget `{name}`, skipping it");
                     continue;
                 }
-                dir
-            }
-            _ => sources.dir_for(first, &first.widget)?,
-        };
-        let plugin = load_plugin(&root, &api_version)?;
-        for reference in &group {
-            if !reference.explicit && reference.widget != plugin.manifest.name {
+                return Err(missing(&members, reference));
+            };
+            let plugin = load_plugin(dir, manifest.clone(), &api_version)?;
+            if !crates.insert(plugin.crate_name.clone()) {
                 return Err(format!(
-                    "`{text}`: that plugin's widget is `{name}`; write `{text}#{name}`",
-                    text = reference.text,
-                    name = plugin.manifest.name,
+                    "crate `{}` comes from two sources",
+                    plugin.crate_name
                 ));
             }
+            let description = &plugin.manifest.description;
+            let gap = if description.is_empty() { "" } else { " " };
+            eprintln!(
+                "eave-build: + {} ({}){gap}{description}",
+                plugin.manifest.name, plugin.crate_name
+            );
+            plugins.push(plugin);
         }
-        if !crates.insert(plugin.manifest.crate_name.clone()) {
-            return Err(format!(
-                "crate `{}` comes from two sources",
-                plugin.manifest.crate_name
-            ));
-        }
-        eprintln!(
-            "eave-build: + {} ({}) {}",
-            plugin.manifest.name, plugin.manifest.crate_name, plugin.manifest.description
-        );
-        plugins.push(plugin);
     }
 
     let build_dir = cache_dir()?.join("eave/build");
@@ -343,7 +356,6 @@ fn parse_reference(text: &str) -> Result<Reference> {
         location,
         rev: rev.map(str::to_owned),
         widget: explicit.unwrap_or_else(|| default_name(source)).to_owned(),
-        explicit: explicit.is_some(),
     })
 }
 
@@ -541,15 +553,93 @@ fn customize_unit(unit: &str, watched: Option<&Path>, exe: &Path) -> String {
     )
 }
 
-/// Reads `eave-plugin.toml` in `root` and checks it against the crate it points at.
-fn load_plugin(root: &Path, api_version: &str) -> Result<Plugin> {
-    let manifest_path = root.join("eave-plugin.toml");
-    let text = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-    let manifest = toml::from_str::<ManifestFile>(&text)
-        .map_err(|e| format!("{}: {e}", manifest_path.display()))?
-        .plugin;
+/// The plugins a source holds, with their directories: those its `eave-collection.toml` lists,
+/// or the one whose `eave-plugin.toml` is at its root.
+fn members(root: &Path) -> Result<Vec<(PathBuf, Manifest)>> {
+    let collection_path = root.join(COLLECTION_FILE);
+    let single = root.join(PLUGIN_FILE).exists();
+    if !collection_path.exists() {
+        if !single {
+            return Err(format!(
+                "{}: no {COLLECTION_FILE} or {PLUGIN_FILE}",
+                root.display()
+            ));
+        }
+        return Ok(vec![(root.to_path_buf(), read_manifest(root)?)]);
+    }
+    if single {
+        return Err(format!(
+            "{}: has both {COLLECTION_FILE} and {PLUGIN_FILE}; list the plugin in the collection instead",
+            root.display()
+        ));
+    }
+    let text = std::fs::read_to_string(&collection_path)
+        .map_err(|e| format!("{}: {e}", collection_path.display()))?;
+    let collection = toml::from_str::<CollectionFile>(&text)
+        .map_err(|e| format!("{}: {e}", collection_path.display()))?
+        .collection;
+    let mut members: Vec<(PathBuf, Manifest)> = Vec::new();
+    for dir in collection.plugins {
+        let dir = root.join(dir);
+        let manifest = read_manifest(&dir)?;
+        if members.iter().any(|(_, m)| m.name == manifest.name) {
+            return Err(format!(
+                "{}: two plugins are named `{}`",
+                collection_path.display(),
+                manifest.name
+            ));
+        }
+        members.push((dir, manifest));
+    }
+    Ok(members)
+}
 
+fn read_manifest(dir: &Path) -> Result<Manifest> {
+    let path = dir.join(PLUGIN_FILE);
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let table: toml::Table = text
+        .parse()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let plugin = table.get("plugin").and_then(|p| p.as_table());
+    if plugin.is_some_and(|p| p.contains_key("crate") || p.contains_key("path")) {
+        return Err(format!(
+            "{}: `crate` and `path` are gone; the manifest sits beside its Cargo.toml now, so remove them",
+            path.display()
+        ));
+    }
+    toml::from_str::<ManifestFile>(&text)
+        .map(|file| file.plugin)
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The member `reference` uses: the one with its name.
+fn pick<'a>(
+    members: &'a [(PathBuf, Manifest)],
+    reference: &Reference,
+) -> Option<&'a (PathBuf, Manifest)> {
+    members.iter().find(|(_, m)| m.name == reference.widget)
+}
+
+/// Why `reference` names no member, and what it could say instead.
+fn missing(members: &[(PathBuf, Manifest)], reference: &Reference) -> String {
+    let source = reference
+        .text
+        .rsplit_once('#')
+        .map_or(reference.text.as_str(), |(source, _)| source);
+    let choices: Vec<String> = members
+        .iter()
+        .map(|(_, m)| format!("`{source}#{}`", m.name))
+        .collect();
+    format!(
+        "`{}`: no plugin `{}` there. Write one of: {}",
+        reference.text,
+        reference.widget,
+        choices.join(", ")
+    )
+}
+
+/// The plugin in `dir`, once its manifest is checked against this eave's API.
+fn load_plugin(dir: &Path, manifest: Manifest, api_version: &str) -> Result<Plugin> {
     if !api_compatible(&manifest.api, api_version) {
         return Err(format!(
             "plugin `{}` targets eave plugin API {}, but this eave provides {api_version}",
@@ -557,22 +647,13 @@ fn load_plugin(root: &Path, api_version: &str) -> Result<Plugin> {
         ));
     }
 
-    let crate_dir = root.join(&manifest.path);
-    let cargo_toml = crate_dir.join("Cargo.toml");
+    let cargo_toml = dir.join("Cargo.toml");
     let package: toml::Table = read_toml(&cargo_toml)?;
     let name = package
         .get("package")
         .and_then(|p| p.get("name"))
         .and_then(|n| n.as_str())
         .ok_or_else(|| format!("{}: no package name", cargo_toml.display()))?;
-    if name != manifest.crate_name {
-        return Err(format!(
-            "{}: manifest says crate `{}`, but {} is `{name}`",
-            manifest_path.display(),
-            manifest.crate_name,
-            cargo_toml.display()
-        ));
-    }
     let module = package
         .get("lib")
         .and_then(|lib| lib.get("name"))
@@ -581,8 +662,8 @@ fn load_plugin(root: &Path, api_version: &str) -> Result<Plugin> {
 
     Ok(Plugin {
         manifest,
-        crate_dir: std::fs::canonicalize(&crate_dir)
-            .map_err(|e| format!("{}: {e}", crate_dir.display()))?,
+        crate_name: name.to_owned(),
+        crate_dir: std::fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?,
         module,
     })
 }
@@ -828,7 +909,7 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
     for plugin in plugins {
         manifest += &format!(
             "{} = {{ path = {} }}\n",
-            plugin.manifest.crate_name,
+            plugin.crate_name,
             quote(&plugin.crate_dir)
         );
     }
@@ -1140,5 +1221,139 @@ mod tests {
         .unwrap();
         assert_eq!(eave.as_deref(), Some("~/code/eave"));
         assert_eq!(widgets, ["someone/weather", "battery"]);
+    }
+
+    /// A scratch directory holding `files` (path, contents), removed by the caller.
+    fn tree(label: &str, files: &[(&str, &str)]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("eave-build-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (path, contents) in files {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+        dir
+    }
+
+    fn manifest(name: &str) -> String {
+        format!("[plugin]\nname = \"{name}\"\napi = \"0.1\"\n")
+    }
+
+    fn names(members: &[(PathBuf, Manifest)]) -> Vec<&str> {
+        members.iter().map(|(_, m)| m.name.as_str()).collect()
+    }
+
+    #[test]
+    fn collections_hold_their_listed_plugins() {
+        let (cpu, mem) = (manifest("cpu"), manifest("mem"));
+        let dir = tree(
+            "collection",
+            &[
+                (
+                    COLLECTION_FILE,
+                    "[collection]\nplugins = [\"cpu\", \"crates/mem\"]\n",
+                ),
+                ("cpu/eave-plugin.toml", &cpu),
+                ("cpu/Cargo.toml", "[package]\nname = \"eave-cpu\"\n"),
+                ("crates/mem/eave-plugin.toml", &mem),
+                ("unlisted/eave-plugin.toml", &manifest("unlisted")),
+            ],
+        );
+        let members = members(&dir).unwrap();
+        assert_eq!(names(&members), ["cpu", "mem"]);
+
+        let reference = parse_reference("./tools#cpu").unwrap();
+        let (cpu_dir, cpu) = pick(&members, &reference).unwrap();
+        let plugin = load_plugin(cpu_dir, cpu.clone(), "0.1.3").unwrap();
+        assert_eq!(
+            (plugin.crate_name.as_str(), plugin.module.as_str()),
+            ("eave-cpu", "eave_cpu")
+        );
+
+        // `./tools` alone names a `tools` plugin, which isn't there.
+        let reference = parse_reference("./tools").unwrap();
+        assert!(pick(&members, &reference).is_none());
+        assert_eq!(
+            missing(&members, &reference),
+            "`./tools`: no plugin `tools` there. Write one of: `./tools#cpu`, `./tools#mem`"
+        );
+        let reference = parse_reference("someone/tools@main#nope").unwrap();
+        assert!(
+            missing(&members, &reference)
+                .ends_with("`someone/tools@main#cpu`, `someone/tools@main#mem`")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn single_plugins_answer_only_to_their_name() {
+        let dir = tree("single", &[(PLUGIN_FILE, &manifest("weather"))]);
+        let members = members(&dir).unwrap();
+        assert_eq!(names(&members), ["weather"]);
+        for (text, found) in [
+            ("someone/eave-weather", true),
+            ("someone/forecast#weather", true),
+            ("someone/forecast", false),
+            ("someone/eave-weather#rain", false),
+        ] {
+            let reference = parse_reference(text).unwrap();
+            assert_eq!(pick(&members, &reference).is_some(), found, "{text}");
+        }
+        assert_eq!(
+            missing(&members, &parse_reference("someone/forecast").unwrap()),
+            "`someone/forecast`: no plugin `forecast` there. Write one of: `someone/forecast#weather`"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sources_need_exactly_one_kind_of_manifest() {
+        let both = tree(
+            "both",
+            &[
+                (COLLECTION_FILE, "[collection]\nplugins = []\n"),
+                (PLUGIN_FILE, &manifest("a")),
+            ],
+        );
+        assert!(members(&both).unwrap_err().contains("both"));
+        let neither = tree("neither", &[("README", "")]);
+        assert!(members(&neither).is_err());
+        let twice = tree(
+            "twice",
+            &[
+                (COLLECTION_FILE, "[collection]\nplugins = [\"a\", \"b\"]\n"),
+                ("a/eave-plugin.toml", &manifest("same")),
+                ("b/eave-plugin.toml", &manifest("same")),
+            ],
+        );
+        assert!(members(&twice).unwrap_err().contains("two plugins"));
+        let old = tree(
+            "old",
+            &[(
+                PLUGIN_FILE,
+                "[plugin]\nname = \"a\"\ncrate = \"eave-a\"\npath = \".\"\napi = \"0.1\"\n",
+            )],
+        );
+        assert!(members(&old).unwrap_err().contains("are gone"));
+        for dir in [both, neither, twice, old] {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_built_ins_are_eaves_collection() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let members = members(&root).unwrap();
+        let mut listed: Vec<String> = members.iter().map(|(_, m)| m.name.clone()).collect();
+        let mut on_disk: Vec<String> = std::fs::read_dir(root.join("plugins"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        listed.sort();
+        on_disk.sort();
+        assert_eq!(listed, on_disk);
+        for (dir, manifest) in members {
+            load_plugin(&dir, manifest, env!("CARGO_PKG_VERSION")).unwrap();
+        }
     }
 }

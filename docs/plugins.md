@@ -1,6 +1,6 @@
 # Plugins
 
-Everything in the bar is a plugin, including the clock. A plugin is an ordinary Rust crate that implements `eave_api::Widget`. It lives in a git repository and gets compiled into the bar by `eave-build`. Nothing is loaded at runtime ([D-12](decisions.md)).
+Everything in the bar is a plugin, including the clock. A plugin is an ordinary Rust crate that provides one widget, an `eave_api::Widget`. It lives in a git repository, alone or with others, and gets compiled into the bar by `eave-build`. Nothing is loaded at runtime ([D-12](decisions.md)).
 
 ## Using plugins
 
@@ -33,12 +33,12 @@ Unknown widgets and invalid options are reported on stderr and skipped. They nev
 
 | You write | Comes from | Widget |
 |---|---|---|
-| `clock` (no `/`) | built in: `plugins/clock` of eave itself | `clock` |
+| `clock` (no `/`) | built in: the `clock` plugin of eave's own collection | `clock` |
 | `someone/weather` | `https://github.com/someone/weather` | `weather` |
 | `someone/eave-weather@v0.2` | the same, at tag `v0.2` (or any commit or branch) | `weather`: a leading `eave-` is dropped |
 | `codeberg.org/x/eave-mail`, `https://…`, `git@host:x/y.git` | any git repository | `mail` |
 | `~/code/eave-weather`, `./weather`, `/abs/path` | a local directory, for working on a plugin | `weather` |
-| `someone/tools#cpu` | `github.com/someone/tools` | `cpu`, for a repository with several widgets |
+| `someone/tools#cpu` | `github.com/someone/tools` | `cpu`: picks one plugin of a repository that has several |
 
 Built-in widgets come with eave, so they take no `@rev`. The same plugin can appear many times, but always at one revision. An optional top-level `eave = "<source>[@rev]"` says where eave itself comes from. It defaults to `francescomengarelli/eave`, and `eave = "~/code/eave"` builds from a local checkout.
 
@@ -101,16 +101,34 @@ eave-api = { path = "../eave/crates/eave-api" }
 ```
 
 ```toml
-# eave-plugin.toml, at the repository root
+# eave-plugin.toml, beside the crate's Cargo.toml
 [plugin]
-name = "weather"         # the widget `owner/repo` refers to (see below)
+name = "weather"         # the one widget it registers
 description = "Current weather, forecast in the popover"
-crate = "eave-weather"   # package name
-path = "."               # crate directory, relative to this file
 api = "0.1"              # eave-api version you target (cargo caret rules)
 ```
 
-Users write `widget = "you/<repo>"`, and that refers to the widget named like the repository, without a leading `eave-`. So a repository `eave-weather` should set `name = "weather"` and register `weather`. `eave-build` checks the manifest's `name` against the reference and suggests `you/<repo>#<name>` when they differ. A plugin that registers several widgets is used as `you/<repo>#<widget>`.
+A plugin is one crate with one widget, registered under the manifest's `name` ([D-46](decisions.md)). `eave-build` takes the crate's name from its `Cargo.toml` and calls its `register`.
+
+**One plugin per repository:** put `eave-plugin.toml` and `Cargo.toml` at the root. Users write `widget = "you/<repo>"`, which asks for the plugin named like the repository, without a leading `eave-`. So a repository `eave-weather` should set `name = "weather"`. When the names differ, `eave-build` says to write `you/<repo>#<name>`.
+
+**Several plugins in one repository:** put an `eave-collection.toml` at the root that lists their directories, each holding its own `eave-plugin.toml` and `Cargo.toml`. Users pick one with `#name`. eave's own built-ins are such a collection.
+
+```toml
+# eave-collection.toml, at the repository root
+[collection]
+description = "System monitors"
+plugins = ["cpu", "mem"]   # directories, relative to this file
+```
+
+```toml
+[[right]]
+widget = "you/eave-monitors#cpu"
+[[right]]
+widget = "you/eave-monitors#mem"
+```
+
+A repository has one of the two files at its root, never both. Plugins in a collection can share code through a library crate of their own, and only the ones a config uses are compiled in. A name that isn't there fails the build with a list of the ones that are.
 
 ```rust
 use eave_api::ui::{self, Item, Panel, Tone};

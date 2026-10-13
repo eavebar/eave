@@ -1,7 +1,5 @@
-# Plugin manifest. In a plugin's own repository this file sits at the repo root.
+# Plugin manifest, beside the crate's Cargo.toml.
 [plugin]
 name = "network"
 description = "Network connection, with signal and addresses in the popover (from the kernel, works with any network manager)"
-crate = "eave-network"
-path = "."
 api = "0.1"
