@@ -1457,6 +1457,7 @@ The icons are theme names (`battery-caution`, `battery-full-charged`). `notify =
   - Only on a built-in panel (`eDP-*`) that isn't rotated.
 - `notch = false` ignores it. `notch = { … }` says what it is: see D-71 for the keys and their units.
 - The center zone splits in two around it. Its first half of islands goes before the notch, the rest after. The two islands against it reach under it and up to the top edge, so they and the notch read as one black shape. Popovers stay on their island's side.
+  - *Superseded in part by D-73:* they fuse only with `attach = "top"`. Without it, they sit a gap away and are rounded like the notch. Always fusing left no way to have islands float beside the notch.
 
 **Alternative:** leaving the center zone empty, as platform.md planned. That wastes the room on both sides of the notch, where the clock fits.
 
@@ -1521,4 +1522,30 @@ screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
 - **Shoulders:** an island attached to the top is rounded outwards where its free sides meet the edge, with the notch's `shoulder` and `smoothing` (`squircle::hanging`). Islands then hang from the top the way the notch does, and the notch's fused islands carry its outline on. The free sides are the ones that don't reach on to a screen edge or under the notch. A shoulder is never wider than the room the island's frame keeps around it (14 px).
 - With nothing measured, the bar draws as before.
 
-**Not done: concentric corners.** The plan was for the islands nearest the screen's rounded corners to follow them at an even distance, with radius = screen radius − gap. An island is 30 px tall, so its corners already top out at 15 px. Against a MacBook's ~20 px corners, that's what concentric would give anyway, so it would change nothing visible. Revisit if islands get taller, or there's a screen with much rounder corners.
+**Not done: concentric corners.** *Superseded by D-73, which does them.* The plan was for the islands nearest the screen's rounded corners to follow them at an even distance, with radius = screen radius − gap. An island is 30 px tall, so its corners already top out at 15 px. Against a MacBook's ~20 px corners, that's what concentric would give anyway, so it would change nothing visible. Revisit if islands get taller, or there's a screen with much rounder corners.
+
+---
+
+## D-73: Islands take their corners from the screen
+
+**Status:** accepted (2026-10-13).
+
+**Problem:** `eave calibrate` measures the screen's corners and the notch, but the bar used only the notch's size and shoulders. Every island had the theme's 14 px corners, whatever the screen looked like, and the screen's `corners` weren't read at all.
+
+**What:** each corner of an island takes its curve, radius and smoothing together, from what it faces:
+- **A screen corner:** the top left of the first island on the left, and the top right of the last on the right, follow the screen's corner at an even distance: radius = the screen's − `EDGE_GAP`, with its smoothing. A screen corner no rounder than the gap leaves the island's as it would otherwise be.
+- **The top edge:** an island attached there hangs from it with the notch's shoulders, as before (D-72).
+- **The notch:** a center island beside the notch that isn't attached to the top sits a gap away from it, and its two corners on that side are the notch's lower ones. With `attach = "top"`, it's fused to the notch, as D-69 had it for every island there.
+- **Anything else:** `islands = { radius, smoothing }` in config.toml, in physical pixels. Each is `"auto"` by default: the notch's corners, then the screen's top corners at an even distance, then the theme's 14 px and 0.6. With nothing measured, the bar looks as before. A notch found by `"auto"` has no measured corners, so it's skipped.
+
+A corner that's attached somewhere is out of sight, so whatever it would be doesn't matter. A live island is still round until it grows into a popover, and then eases into these corners. `notch::Screen` resolves all of this once per setting, so drawing reads four `CornerShape`s per island.
+
+**Why concentric:** two curves the same distance apart all the way round read as one shape nested in the other, which is what the islands near the screen's corners should look like. With the MacBook's 19.5 px corners at scale 2, that's 13.5 px. D-72 thought this would be invisible against the theme's 14 px. With the notch setting the rest at 10 px, it isn't.
+
+**Why `attach` decides fusing:** it's the key that already says "this island grows out of the screen", and the island against the notch is no different. A floating one is now possible, and a fused one says so in the config.
+
+**Alternatives:**
+- **The same radius as the screen's corner:** 19.5 px, which a 30 px island caps at 15. The gap between them would narrow toward the corner.
+- **`islands` inside `screen`:** all the geometry in one table, but `eave calibrate` writes `screen` and has nothing to measure for islands. It's a choice, not a measurement.
+
+**Cost:** no new dependency. The corners are resolved when the setting changes, and an island's shape is cached as before, so nothing new runs per frame.

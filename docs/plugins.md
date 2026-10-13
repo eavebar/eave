@@ -36,6 +36,17 @@ screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
 - `smoothing` 0 is a circle's corner, and up to 1 a squircle's.
 - A screen's `corners` go top left, top right, bottom right, bottom left. `inset` goes top, right, bottom, left: rows and columns the bezel hides, which the bar keeps off. Either takes one number for all four.
 
+The islands take their corners from these ([D-73](decisions.md)):
+- The top corner of the first island on the left, and of the last on the right, follows the screen's corner at an even distance (its radius less the bar's 6 px gap).
+- A center island next to the notch is rounded like the notch on that side.
+- Every other corner follows `islands`, also in physical pixels:
+
+```toml
+islands = { radius = "auto", smoothing = "auto" }   # or radius = 24, smoothing = 0.6
+```
+
+`"auto"`, the default, takes the notch's `radius` and `smoothing`, then the screen's top corners at an even distance. With neither measured, the islands keep the bar's own 14 px squircle corners.
+
 `width_group = "name"` lines items up: items in the same island with the same group all get a slot as wide as the widest of them, each centered in its slot ([D-34](decisions.md)). For example, put `volume` and `network` in one group, so the Wi-Fi icon gets the same room as the volume item, which needs space for its percent.
 
 A zone is one island, or several side by side. Entries without a widget arrange them ([D-55](decisions.md)):
@@ -59,7 +70,7 @@ widget = "battery"
 ```
 
 - `island = true` starts another island in the same zone. Add `live = true` in the same entry to make it a live island, snug around its items and rounder, still a squircle ([D-60](decisions.md)). A marker before the zone's first item sets the first island.
-- `attach = ["top", "left"]` in an island's entry makes it flush with those screen edges, as if it grew out of them ([D-70](decisions.md)). Only the first island on the left can attach left, and only the last on the right can attach right.
+- `attach = ["top", "left"]` in an island's entry makes it flush with those screen edges, as if it grew out of them ([D-70](decisions.md)). Only the first island on the left can attach left, and only the last on the right can attach right. A center island next to the notch that attaches to the top is fused to it: it reaches under the notch and down as far as it does, so the two read as one shape. Without `attach`, it sits a gap away from the notch ([D-73](decisions.md)).
 - `divider = true` puts a line before the next item. It shows only between two items that show.
 - `collapsible = true` hides the item while its island is collapsed, which it is at first. Hover over the island and a chevron appears on the side facing the middle of the screen. Press it to show the hidden items in their places, and again to hide them. A collapsed item whose widget nudges (the volume going up, say) comes out by itself for two seconds after the last nudge, then tucks back.
 
