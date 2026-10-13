@@ -54,8 +54,9 @@ pub struct Notifications {
     history: Vec<Notification>,
     /// The ones shown in the island, newest first.
     shown: Vec<u32>,
-    /// How many arrived since the popover was last opened.
-    unread: usize,
+    /// The ones that arrived since the popover was last opened, and that you haven't dealt with
+    /// yourself: closed, clicked, or picked an action of. Ones that expired still count.
+    unread: Vec<u32>,
     quiet: bool,
     open: bool,
     /// The time the popover's "ago"s are counted from.
@@ -90,7 +91,7 @@ impl Widget for Notifications {
             status: Status::Starting,
             history: Vec::new(),
             shown: Vec::new(),
-            unread: 0,
+            unread: Vec::new(),
             quiet: false,
             open: false,
             now: SystemTime::now(),
@@ -160,7 +161,7 @@ impl Widget for Notifications {
             }
             Message::Opened => {
                 self.open = true;
-                self.unread = 0;
+                self.unread.clear();
                 self.now = SystemTime::now();
                 Effect::none()
             }
@@ -187,7 +188,7 @@ impl Widget for Notifications {
 
     fn item(&self) -> Item<Message> {
         let bell = ui::icon(Icon::Bell { muted: self.quiet });
-        let content = match self.unread {
+        let content = match self.unread.len() {
             0 => bell,
             unread => ui::row([bell, ui::counter(unread.min(99) as i64, 0..=99, "")]),
         };
@@ -290,9 +291,10 @@ impl Notifications {
             .split_off(self.history.len().min(self.config.history))
         {
             self.shown.retain(|id| *id != gone.id);
+            self.unread.retain(|id| *id != gone.id);
         }
         if !replaced && !self.open {
-            self.unread += 1;
+            self.unread.push(id);
         }
         if self.quiet && !critical {
             // Not shown, so the bell says it instead.
@@ -308,10 +310,11 @@ impl Notifications {
         Effect::none()
     }
 
-    /// Off the screen and out of the list.
+    /// Off the screen and out of the list, and no longer news.
     fn forget(&mut self, id: u32) {
         self.shown.retain(|shown| *shown != id);
         self.history.retain(|notification| notification.id != id);
+        self.unread.retain(|unread| *unread != id);
     }
 
     fn notice(&self, notification: &Notification) -> Notice<Message> {
@@ -452,7 +455,7 @@ mod tests {
         arrive(&mut widget, 2);
         let keys: Vec<_> = widget.notices().iter().map(Notice::key).collect();
         assert_eq!(keys, [2, 1]);
-        assert_eq!(widget.unread, 2);
+        assert_eq!(widget.unread.len(), 2);
 
         let _ = widget.update(Message::Expired(2));
         let keys: Vec<_> = widget.notices().iter().map(Notice::key).collect();
@@ -474,7 +477,7 @@ mod tests {
         let _ = widget.update(Message::Server(Event::Notified(newer)));
         assert_eq!(widget.history.len(), 2);
         assert_eq!(widget.history[1].summary, "changed");
-        assert_eq!(widget.unread, 2);
+        assert_eq!(widget.unread.len(), 2);
     }
 
     #[test]
@@ -491,13 +494,28 @@ mod tests {
     }
 
     #[test]
+    fn only_notifications_left_alone_count_as_new() {
+        let mut widget = notifications();
+        for id in 1..=4 {
+            arrive(&mut widget, id);
+        }
+        // Dealt with: closed, picked an action of, clicked.
+        let _ = widget.update(Message::Dismiss(1));
+        let _ = widget.update(Message::Action(2, "reply".into()));
+        let _ = widget.update(Message::Press(3));
+        // Left alone until it went by itself.
+        let _ = widget.update(Message::Expired(4));
+        assert_eq!(widget.unread, [4]);
+    }
+
+    #[test]
     fn opening_the_popover_reads_everything() {
         let mut widget = notifications();
         arrive(&mut widget, 1);
         let _ = widget.update(Message::Opened);
-        assert_eq!(widget.unread, 0);
+        assert!(widget.unread.is_empty());
         arrive(&mut widget, 2);
-        assert_eq!(widget.unread, 0, "seen while open");
+        assert!(widget.unread.is_empty(), "seen while open");
     }
 
     #[test]
