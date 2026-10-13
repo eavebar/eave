@@ -915,6 +915,19 @@ impl Motion {
         )
     }
 
+    /// How squished an item is by its own kick ([`Motion::kick`]): narrower and a little taller the
+    /// further out it is, as if it bumped into where it's going.
+    fn kicked(&self, key: u64) -> Squish {
+        let Some(item) = self.items.iter().find(|item| item.key == key) else {
+            return Squish::NONE;
+        };
+        let out = item.kick.value.abs();
+        Squish {
+            x: 1.0 - theme::NUDGE_KICK_SQUISH * out,
+            y: 1.0 + theme::NUDGE_KICK_SQUISH / 2.0 * out,
+        }
+    }
+
     /// How far the whole island has moved: its share of the drag, and any nudge.
     fn offset(&self) -> Vector {
         Vector::new(
@@ -1216,6 +1229,11 @@ fn draw_island<M>(
                         continue;
                     }
                     let (squished, down) = motion.squish_at(shape, bounds.center_x() + dx);
+                    let kicked = motion.kicked(*key);
+                    let squished = Squish {
+                        x: squished.x * kicked.x,
+                        y: squished.y * kicked.y,
+                    };
                     let moved = Vector::new(dx, down);
                     // It rides along with the jelly where it is, and with the overshoot, to where
                     // the stretch takes its center. It squishes with both.
@@ -2431,13 +2449,21 @@ mod tests {
     fn a_sideways_nudge_kicks_its_item_a_little_further_and_back() {
         let mut motion = nudged(&[(2, (2, Nudge::Left))]);
         let (mut one, mut two) = (0.0f32, 0.0f32);
+        let mut narrowest: f32 = 1.0;
         run(&mut motion, Instant::now(), |motion| {
             one = one.max(motion.item(1, 10.0).0.abs());
             two = two.min(motion.item(2, 50.0).0);
+            narrowest = narrowest.min(motion.kicked(2).x);
         });
+        assert!(
+            (0.85..0.98).contains(&narrowest),
+            "squished a little: {narrowest}"
+        );
+        assert_eq!(motion.kicked(1), Squish::NONE);
         assert_eq!(one, 0.0, "only the item that nudged");
         assert!((-4.0..-1.0).contains(&two), "a few px left: {two}");
         assert_eq!(motion.item(2, 50.0), (0.0, 1.0), "and back");
+        assert_eq!(motion.kicked(2), Squish::NONE, "unsquished");
 
         // Up and down bump the edge instead.
         let motion = nudged(&[(2, (2, Nudge::Up))]);

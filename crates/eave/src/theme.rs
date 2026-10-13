@@ -101,6 +101,9 @@ pub const NUDGE_LIFT_SPEED: f32 = 30.0;
 /// How fast a sideways nudge sets off the item that asked for it, on top of its island's push:
 /// about 2.5 px further, and back.
 pub const NUDGE_KICK_SPEED: f32 = 150.0;
+/// How much a kicked item squishes per pixel it's out: narrower by this much, taller by half.
+/// About 7 % narrower at the furthest.
+pub const NUDGE_KICK_SQUISH: f32 = 0.03;
 /// About how long a nudge takes to settle: a push is back within 5 % of its peak by then. A
 /// nudge asked to last longer (`Effect::nudge_lasting`) plays the same motion slowed down by as
 /// much.
