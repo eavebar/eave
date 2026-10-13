@@ -144,6 +144,8 @@ struct Toast {
     deadline: Option<Instant>,
     /// The widget dropped it.
     leaving: bool,
+    /// Its reply field was clicked and has the focus: the bar has the keyboard for it.
+    engaged: bool,
 }
 
 /// The right island while it's a panel of notifications. Like a popover, but nobody opens it:
@@ -187,6 +189,9 @@ pub enum Message {
     PointerLeft,
     /// A key was pressed while a popover had the keyboard.
     KeyPressed,
+    /// A notification's reply field got the focus from a click, or lost it: the instance, the
+    /// notice's key, and whether it has it.
+    ReplyFocused(u64, u64, bool),
     /// An island placed the popover it's turning into.
     PopoverPlaced(u64, Rectangle),
     /// An island finished turning back from a popover.
@@ -335,8 +340,13 @@ impl Bar {
         }
         let notices = self.toasts.iter().map(|toast| &toast.notice);
         wanted.apps.extend(
-            notices.filter_map(|notice| notice.app_icon.as_ref().or(notice.app.as_ref()).cloned()),
+            notices
+                .clone()
+                .filter_map(|notice| notice.app_icon.as_ref().or(notice.app.as_ref()).cloned()),
         );
+        wanted
+            .covers
+            .extend(notices.filter_map(|notice| notice.image.clone()));
         let mut tasks = Vec::new();
         for file in wanted.files {
             let key = FileKey::of(file);
@@ -393,10 +403,9 @@ impl Bar {
         if !instance.has_popover {
             return Hooks::new();
         }
-        let Some(window) = instance.window else {
-            eprintln!(
-                "eave: a widget asked for its popover before its item was ever clicked; not opening it"
-            );
+        // Opened from a notification or a signal, before its item was ever clicked: on the bar
+        // the notifications show on.
+        let Some(window) = instance.window.or_else(|| self.toast_window()) else {
             return Hooks::new();
         };
         let island = instance.island();
@@ -606,6 +615,7 @@ impl Bar {
                     left: expires,
                     deadline: None,
                     leaving: false,
+                    engaged: false,
                 }),
             }
         }
@@ -693,15 +703,16 @@ impl Bar {
         Task::perform(sleep, move |_| Message::ToastTimer(timer))
     }
 
-    /// Whether a notification on screen has a field to answer it in. The bar has the keyboard
-    /// meanwhile ([D-49](../../../docs/decisions.md)).
+    /// Whether an answer is being typed into a notification on screen: its field was clicked
+    /// and has the focus. The bar has the keyboard meanwhile ([D-49](../../../docs/decisions.md),
+    /// [D-62](../../../docs/decisions.md)).
     fn typing(&self) -> bool {
         self.notices.as_ref().is_some_and(|panel| panel.open)
             && !self.toasts_held()
             && self
                 .toasts
                 .iter()
-                .any(|toast| !toast.leaving && toast.notice.reply.is_some())
+                .any(|toast| !toast.leaving && toast.engaged && toast.notice.reply.is_some())
     }
 
     /// The messages that cancel every answer being typed.
@@ -884,8 +895,27 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             bar.pointer_inside = false;
             Task::none()
         }
-        // Esc while answering a notification cancels the answer.
-        Message::KeyPressed if bar.typing() => send(bar.cancel_replies()),
+        // Esc while answering a notification cancels the answer, and lets go of the field.
+        Message::KeyPressed if bar.typing() => {
+            let cancel = send(bar.cancel_replies());
+            for toast in &mut bar.toasts {
+                toast.engaged = false;
+            }
+            let unfocus = iced::advanced::widget::operate(
+                iced::advanced::widget::operation::focusable::unfocus(),
+            );
+            Task::batch([cancel, unfocus])
+        }
+        Message::ReplyFocused(instance, key, focused) => {
+            if let Some(toast) = bar
+                .toasts
+                .iter_mut()
+                .find(|toast| toast.instance == instance && toast.notice.key == key)
+            {
+                toast.engaged = focused;
+            }
+            Task::none()
+        }
         Message::KeyPressed => send(bar.close_popover()),
         Message::PopoverPlaced(id, rect) => {
             let Some(popover) = bar
@@ -1148,9 +1178,15 @@ fn item_view<'a>(
 fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Message> {
     let id = popover.instance;
     // A widget can stop offering its popover while it closes: the island morphs back empty.
+    let mut width = style::PANEL_WIDTH;
     let content: Element<'_, AnyMessage> =
         match bar.find(id).and_then(|instance| instance.widget.popover()) {
-            Some(panel) => kit::panel(panel.into_node(), &bar.icons),
+            Some(panel) => {
+                if panel.is_wide() {
+                    width = style::PANEL_WIDE_WIDTH;
+                }
+                kit::panel(panel.into_node(), &bar.icons)
+            }
             None => Space::new().into(),
         };
     island::Popover {
@@ -1160,6 +1196,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         on_placed: Box::new(move |rect| Message::PopoverPlaced(id, rect)),
         on_closed: Message::PopoverClosed(id),
         on_hover: None,
+        width,
     }
 }
 
@@ -1176,8 +1213,14 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
                     left: toast.left.unwrap_or_default(),
                     ends: toast.deadline,
                 });
-                kit::notice(toast.notice.clone(), countdown, &bar.icons)
-                    .map(move |message| Message::Widget(instance, message))
+                let key = toast.notice.key;
+                kit::notice(
+                    toast.notice.clone(),
+                    countdown,
+                    &bar.icons,
+                    move |message| Message::Widget(instance, message),
+                    move |focused| Message::ReplyFocused(instance, key, focused),
+                )
             }),
     );
     island::Popover {
@@ -1187,6 +1230,7 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
         on_placed: Box::new(Message::NoticesPlaced),
         on_closed: Message::NoticesClosed,
         on_hover: Some(Box::new(Message::NoticesHovered)),
+        width: style::PANEL_WIDTH,
     }
 }
 
@@ -1443,6 +1487,17 @@ mod tests {
         let _ = update(&mut bar, Message::BarPressed);
         assert_eq!(bar.popovers.len(), 1, "still morphing back");
         assert_eq!(bar.keyboard, None);
+    }
+
+    #[test]
+    fn a_popover_opens_before_its_item_was_ever_clicked() {
+        // Asked for by a notification's action or a signal: it opens on the first bar.
+        let mut bar = notifying_bar();
+        let window = bar.windows[0];
+        assert_eq!(bar.find(1).and_then(|instance| instance.window), None);
+        let _ = bar.open_popover(1);
+        assert_eq!(bar.popovers.len(), 1);
+        assert_eq!(bar.popovers[0].window, window);
     }
 
     #[test]
@@ -1831,6 +1886,11 @@ mod tests {
         assert_eq!(bar.keyboard, None, "a notice alone never takes it");
 
         tell(&mut bar, Note::Answer(1));
+        assert!(!bar.typing(), "a field alone doesn't take it either");
+        assert_eq!(bar.keyboard, None);
+
+        // A click on the field.
+        let _ = update(&mut bar, Message::ReplyFocused(0, 1, true));
         assert!(bar.typing());
         assert_eq!(bar.keyboard, Some(window));
         let _ = bar.run_clocks(Instant::now());
@@ -1846,5 +1906,22 @@ mod tests {
         tell(&mut bar, Note::Cancel);
         assert!(!bar.typing());
         assert_eq!(bar.keyboard, None);
+    }
+
+    #[test]
+    fn esc_lets_go_of_the_field_and_the_keyboard() {
+        let mut bar = notifying_bar();
+        tell(&mut bar, Note::Add(1));
+        let _ = handle(&mut bar, Message::NoticesPlaced(placed()));
+        tell(&mut bar, Note::Answer(1));
+        let _ = update(&mut bar, Message::ReplyFocused(0, 1, true));
+        assert!(bar.keyboard.is_some());
+        let _ = update(&mut bar, Message::KeyPressed);
+        assert!(!bar.typing());
+        assert_eq!(
+            bar.keyboard, None,
+            "the field stays, the keyboard goes back"
+        );
+        assert!(bar.toasts[0].notice.reply.is_some());
     }
 }

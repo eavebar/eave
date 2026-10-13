@@ -165,6 +165,14 @@ pub const BUTTON_RADIUS: f32 = 6.0;
 /// Every popover is this wide, padding included, so rows can push things to their far end and
 /// moving between a popover's pages only changes its height (D-40).
 pub const PANEL_WIDTH: f32 = 320.0;
+/// A popover that asked to be wide ([`eave_api::ui::Panel::wide`]), for reading: a conversation.
+pub const PANEL_WIDE_WIDTH: f32 = 480.0;
+/// The tallest a [`eave_api::ui::scroll`] grows in a popover before it scrolls.
+pub const SCROLL_MAX_HEIGHT: f32 = 520.0;
+/// Markdown: behind code, the bar beside a quote, and the room between blocks.
+pub const CODE_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.07);
+pub const QUOTE_BAR: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
+pub const BLOCK_SPACING: u32 = 6;
 /// A notification card's close button: smaller than a popover's icon buttons, to sit beside the
 /// app's name.
 pub const NOTICE_CLOSE: f32 = 22.0;
@@ -307,6 +315,8 @@ pub const STRONG_FONT: Font = Font {
     weight: font::Weight::Semibold,
     ..Font::DEFAULT
 };
+/// Code in Markdown.
+pub const MONO_FONT: Font = Font::MONOSPACE;
 /// The large number of a popover ([`eave_api::ui::display`]).
 pub const DISPLAY_SIZE: f32 = 32.0;
 

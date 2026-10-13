@@ -914,7 +914,7 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 
 ## D-49: Answering a notification: a field, and the keyboard only once asked
 
-**Status:** accepted (2026-10-13)
+**Status:** accepted (2026-10-13). Partly superseded by [D-62](#d-62-reading-and-writing-in-popovers-markdown-a-text-area-scrolling-wide-panels): the field now shows with the notice, and the keyboard is taken on a click on it rather than on a Reply button first. The rest stands.
 
 **What:** a notification can take a typed answer, like a reply to a message.
 - **The spec has no such thing, so we follow KDE's extension**, which messengers (Telegram, KDE Connect and others) use. The server advertises `inline-reply`. An app that wants an answer adds an `inline-reply` action, and may say what the field shows while empty (`x-kde-reply-placeholder-text`) and what the send button says (`x-kde-reply-submit-button-text`). The answer goes back as a `NotificationReplied(id, text)` signal. `eave-notify` takes that action out of the actions (`Notification::reply`), and `reply(id, text)` sends the signal.
@@ -1251,3 +1251,34 @@ A marker before the zone's first item sets the first island, so no island has to
 **Measured** (Asahi, release, the user's config, no popover open, alternating runs in one session): the binary is 11,693,568 bytes before and after (identical, the change fits in the same pages). RSS was 18.5–18.8 MB on both, and idle CPU 2–4 ticks in 10 s on both. The content color is three floats per cover, computed from the 32 px copy that was being made anyway.
 
 **Cost:** one more host widget, about 250 lines with tests. Tone colors changed for every plugin at once, which is the point.
+
+---
+
+## D-62: Reading and writing in popovers: Markdown, a text area, scrolling, wide panels
+
+**Status:** accepted (2026-10-13). Supersedes the "Reply button first" part of [D-49](#d-49-answering-a-notification-a-field-and-the-keyboard-only-once-asked).
+
+**Why now:** the Claude plugin's popover becomes a chat: a list of sessions, and for each one its conversation, what it's doing, and a field to answer it. Its replies and plans are Markdown, its messages are several lines long, and a conversation is taller than any screen. Its notifications should take an answer without a click on Reply first. None of this is Claude's alone: any messenger, mail or notes plugin needs the same pieces.
+
+**What:**
+- **`ui::markdown(text)`.** The host reads it with `pulldown-cmark` (no default features) and builds plain iced widgets (`markdown.rs`): paragraphs as rich text with bold, italic, struck, link and inline-code spans; headings; bullet and numbered lists, nested; quotes with a bar; code blocks in monospace on a tinted box that scrolls sideways; tables with cells sharing the width; rules; task list boxes. Colors and sizes are the theme's, and `.tone(..)` sets the text's color. Links are drawn as links but don't open: the bar starts no programs. Everything built is owned, so nothing borrows from the plugin's view. It's parsed on each view, which runs after a message, not on every frame. Pulldown-cmark reads a long reply in well under a millisecond, so no cache yet.
+- **`ui::text_area(placeholder, value, on_input)`**, with `.on_submit` and `.trailing`: several lines, growing to six then scrolling (`text_area.rs`). Enter sends `on_submit`; Shift+Enter breaks the line. Esc stays the bar's: it closes the popover, as with a one-line field (D-41). It's iced's text editor, whose `Content` lives in the widget's tree state instead of the app's: the plugin keeps a plain string, the widget follows every edit and sends the new text, and takes the plugin's text again when it differs (cleared after sending). It goes in the same `Field` box as `text_input`, which now grows with it.
+- **`ui::scroll(content)`**, with `.bottom()`: in a popover, its content scrolls once taller than `SCROLL_MAX_HEIGHT` (520 px). `.bottom()` keeps the end in view as content arrives there, unless you've scrolled up to read (iced's `anchor_bottom`). In the bar it's just its content.
+- **`Panel::wide()`:** the popover is `PANEL_WIDE_WIDTH` (480 px) instead of 320. The host still picks the number. Every place that took `PANEL_WIDTH` now takes the popover's own width (`island::Popover::width`).
+- **Notices:**
+  - `.image(url)` shows a picture by URL instead of the app's icon, loaded like a `cover` (D-57). Covers now also take SVG, drawn with resvg, which was already in the build. This is how an app's icon file reaches a notification (eave-notify's `image-path` hint and `app_icon` paths).
+  - `.markdown()` sets the body as Markdown.
+  - The reply field is a text area too.
+- **The reply field shows with the notice; the keyboard waits for a click on it.** `Field::on_focus` tells the host when the field gets the focus or loses it. The host marks that notice engaged, and only then does it take the keyboard (Exclusive, D-36) and stop the clocks. Esc cancels the answer, unfocuses the field and gives the keyboard back. So D-49's promise holds — a notification never takes the keyboard by itself — without the extra Reply click. The pointer works without the keyboard, which is what lets the click reach the field.
+- **`Effect::open_popover()` before the item was ever clicked** opens on the bar the notifications show on. Before, it refused with a log line, so a notification's action couldn't open its plugin's popover until you had clicked that plugin's item once.
+
+**Alternatives:**
+- **iced's `markdown` feature:** its widget borrows parsed items for the view's lifetime, which plugins' owned nodes can't give without a cache in the app keyed by text. It also brings its own styling and url parsing. Walking pulldown-cmark's events ourselves is ~300 lines, and owned.
+- **Plugins rendering Markdown into rows of labels:** every plugin would parse it on its own, and the vocabulary has no spans.
+- **A text area as a new widget from scratch:** cursor, selection, IME and clipboard are what iced's editor already does.
+- **`KeyboardInteractivity::OnDemand` for the reply field:** with `follow_mouse`, the focus would leave as soon as the pointer left the bar (D-36, D-49).
+- **A wider panel for every popover:** the narrow ones are better for lists and switches. Only reading pages ask for room.
+
+**Measured** (aarch64, release, the user's config, 10 s windows after 8 s, run beside the user's own bar): binary 11,693,568 → 12,152,320 bytes (+448 KiB: pulldown-cmark, iced's text editor and the new widgets). RSS 18.8 → 19.3 MB on a quiet run, the code pages. Idle CPU unchanged: 1 and 3 ticks per 10 s. A first, noisier run of each measured 20.1 and 21.0 MB, with 105 and 91 ticks.
+
+**Cost:** +448 KiB of binary for every bar, whether or not a plugin shows Markdown or a text area. One more dependency (pulldown-cmark, pure Rust).

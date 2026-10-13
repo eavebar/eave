@@ -85,6 +85,8 @@ pub struct Popover<'a, M> {
     pub on_closed: M,
     /// Sent when the pointer comes onto the popover (true) or leaves it (false), if given.
     pub on_hover: Option<Box<dyn Fn(bool) -> M + 'a>>,
+    /// Its width, padding included: [`theme::PANEL_WIDTH`], or wider for reading.
+    pub width: f32,
 }
 
 impl<'a, M> Island<'a, M> {
@@ -1395,11 +1397,14 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         // An open popover takes the panel's width in the row, so it pushes the islands beside it
         // away instead of covering them. They glide there and back on their own springs. The
         // island itself stays where its popover grows from: at the zone's side, or centered.
-        let open = self.popover.as_ref().is_some_and(|popover| popover.open);
-        let room = if open {
-            width.max(theme::PANEL_WIDTH)
-        } else {
-            width
+        let panel = self
+            .popover
+            .as_ref()
+            .filter(|popover| popover.open)
+            .map(|popover| popover.width);
+        let room = match panel {
+            Some(panel) => width.max(panel),
+            None => width,
         };
         let offset = match self.align {
             Horizontal::Left => 0.0,
@@ -1682,10 +1687,10 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
         let panel = state
             .panel
             .get_or_insert_with(|| Tree::new(&popover.content));
-        // Every panel is as wide as `PANEL_WIDTH`, padding included, so rows can stretch to its
-        // edge (D-40). Its height is its own: unbounded and compressed, so `Fill` children don't
-        // stretch to infinity.
-        let width = theme::PANEL_WIDTH - 2.0 * f32::from(theme::PANEL_PADDING);
+        // Every panel is as wide as `PANEL_WIDTH` (or `PANEL_WIDE_WIDTH`, if it asked), padding
+        // included, so rows can stretch to its edge (D-40). Its height is its own: unbounded and
+        // compressed, so `Fill` children don't stretch to infinity.
+        let width = popover.width - 2.0 * f32::from(theme::PANEL_PADDING);
         let limits = layout::Limits::with_compression(
             Size::new(width, 0.0),
             Size::new(width, f32::INFINITY),

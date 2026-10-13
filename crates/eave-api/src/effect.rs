@@ -65,7 +65,17 @@ impl<M> Effect<M> {
         }
     }
 
+    /// Runs `task` too, alongside the one it has.
+    pub fn and_task(mut self, task: Task<M>) -> Self
+    where
+        M: Send + 'static,
+    {
+        self.task = Task::batch([self.task, task]);
+        self
+    }
+
     /// Opens this widget's popover, under its item. Ignored if the widget has no popover.
+    /// Before the item was ever clicked, it opens on the bar the notifications show on.
     pub fn open_popover(mut self) -> Self {
         self.popover = Some(PopoverRequest::Open);
         self
