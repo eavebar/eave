@@ -27,10 +27,16 @@ struct Found {
 
 /// How wide each model's notch is, in physical pixels, by the first entry of the device tree's
 /// `compatible`. Only measured ones: a guess would put islands over the screen or under the notch.
+///
+/// The 14" and 16" panels are both 254 ppi, and macOS measures their notch at 185 points wide in
+/// the native-scale mode (`NSScreen`'s frame minus its auxiliary top areas): 370 pixels.
+/// notchbay.com/blog/macbook-notch-size and crestnotch.app/macbook-notch-dimensions.
 const WIDTHS: &[(&str, u32)] = &[
-    // MacBook Pro 14" (M1 Pro, M1 Max).
-    ("apple,j314s", 380),
-    ("apple,j314c", 380),
+    // MacBook Pro 14" and 16" (M1 Pro, M1 Max).
+    ("apple,j314s", 370),
+    ("apple,j314c", 370),
+    ("apple,j316s", 370),
+    ("apple,j316c", 370),
 ];
 
 /// For a notch whose width nobody has measured: wide enough to clear any MacBook's, in logical
@@ -160,7 +166,7 @@ mod tests {
         assert_eq!(
             find(&root),
             Some(Found {
-                width: Some(380),
+                width: Some(370),
                 height: 74
             })
         );
