@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use serde::de::DeserializeOwned;
 
-use crate::ui::{Item, Notice, Panel};
+use crate::ui::{Action, Item, Notice, Panel};
 use crate::{Effect, Subscription, Task};
 
 /// Something that sits in the bar, with an optional popover.
@@ -44,6 +44,17 @@ pub trait Widget: Sized + 'static {
     /// host takes each one away once its key is no longer in the list. Keep the notices you mean to show in your state, and drop
     /// one when it's dismissed or expires.
     fn notices(&self) -> Vec<Notice<Self::Message>> {
+        Vec::new()
+    }
+
+    /// What the widget can do, for the dormer: the host's search dialog, which a keybind opens.
+    /// Typing finds an action by its title, subtitle and keywords, and picking it sends its message
+    /// to this widget, like a click would.
+    ///
+    /// The host reads them only while the dormer is open, after each of your messages, so they can
+    /// follow your state: "Mute" while sound plays, "Unmute" while muted. Leave out what can't be
+    /// done right now. Keep it pure and cheap, like the views.
+    fn actions(&self) -> Vec<Action<Self::Message>> {
         Vec::new()
     }
 }

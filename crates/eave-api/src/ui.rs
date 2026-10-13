@@ -1603,6 +1603,85 @@ pub struct NoticeParts<M> {
     pub reply: Option<ReplyParts<M>>,
 }
 
+/// Something the widget can do, from [`Widget::actions`](crate::Widget::actions), for the dormer:
+/// the host's search dialog. Typing finds it by its title, subtitle and keywords, and picking it
+/// sends `message` to the widget.
+pub struct Action<M> {
+    title: String,
+    subtitle: Option<String>,
+    keywords: Vec<String>,
+    leading: Option<Node<M>>,
+    message: M,
+}
+
+/// An action titled `title` that sends `message` when picked.
+pub fn action<M>(title: impl Into<String>, message: M) -> Action<M> {
+    Action {
+        title: title.into(),
+        subtitle: None,
+        keywords: Vec::new(),
+        leading: None,
+        message,
+    }
+}
+
+impl<M> Action<M> {
+    /// A line under the title: what it acts on, or what kind of thing it is.
+    pub fn subtitle(mut self, text: impl Into<String>) -> Self {
+        self.subtitle = Some(text.into());
+        self
+    }
+
+    /// Other words it should be found by, not shown.
+    pub fn keywords(mut self, words: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.keywords.extend(words.into_iter().map(Into::into));
+        self
+    }
+
+    /// A small picture before the title: an [`icon`], [`app_icon`], [`image`] or [`symbol`].
+    pub fn leading(mut self, node: Node<M>) -> Self {
+        self.leading = Some(node);
+        self
+    }
+
+    pub fn map<N: 'static>(self, f: &(impl Fn(M) -> N + Clone + 'static)) -> Action<N>
+    where
+        M: 'static,
+    {
+        Action {
+            title: self.title,
+            subtitle: self.subtitle,
+            keywords: self.keywords,
+            leading: self.leading.map(|node| node.map(f)),
+            message: f(self.message),
+        }
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    #[doc(hidden)]
+    pub fn into_parts(self) -> ActionParts<M> {
+        ActionParts {
+            title: self.title,
+            subtitle: self.subtitle,
+            keywords: self.keywords,
+            leading: self.leading,
+            message: self.message,
+        }
+    }
+}
+
+#[doc(hidden)]
+pub struct ActionParts<M> {
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub keywords: Vec<String>,
+    pub leading: Option<Node<M>>,
+    pub message: M,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

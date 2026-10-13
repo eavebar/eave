@@ -8,7 +8,7 @@ use std::fmt;
 use std::sync::Arc;
 
 pub use crate::effect::PopoverRequest;
-use crate::ui::{Item, Notice, Panel};
+use crate::ui::{Action, Item, Notice, Panel};
 use crate::{Effect, NudgeRequest, Subscription, Task, Widget};
 
 /// A message of some widget's own type. Cloning is cheap: the value sits behind an `Arc`.
@@ -44,6 +44,7 @@ pub trait ErasedWidget {
     fn item(&self) -> Item<AnyMessage>;
     fn popover(&self) -> Option<Panel<AnyMessage>>;
     fn notices(&self) -> Vec<Notice<AnyMessage>>;
+    fn actions(&self) -> Vec<Action<AnyMessage>>;
 }
 
 impl<W: Widget> ErasedWidget for W {
@@ -88,6 +89,13 @@ impl<W: Widget> ErasedWidget for W {
             .map(|notice| notice.map(&AnyMessage::new))
             .collect()
     }
+
+    fn actions(&self) -> Vec<Action<AnyMessage>> {
+        Widget::actions(self)
+            .into_iter()
+            .map(|action| action.map(&AnyMessage::new))
+            .collect()
+    }
 }
 
 pub type Constructor = fn(toml::Table) -> Result<(Box<dyn ErasedWidget>, Task<AnyMessage>), String>;
@@ -117,6 +125,33 @@ mod tests {
         let mut extra = toml::Table::new();
         extra.insert("format".into(), "x".into());
         assert!(extra.try_into::<crate::NoConfig>().is_err());
+    }
+
+    #[test]
+    fn actions_carry_the_widgets_messages() {
+        struct Acting;
+        impl Widget for Acting {
+            type Config = crate::NoConfig;
+            type Message = u8;
+            fn new(_: Self::Config) -> (Self, Task<u8>) {
+                (Acting, Task::none())
+            }
+            fn update(&mut self, _: u8) -> Effect<u8> {
+                Effect::none()
+            }
+            fn item(&self) -> Item<u8> {
+                Item::new(crate::ui::empty())
+            }
+            fn actions(&self) -> Vec<Action<u8>> {
+                vec![crate::ui::action("Mute", 7).keywords(["sound"])]
+            }
+        }
+
+        let actions = ErasedWidget::actions(&Acting);
+        let parts = actions.into_iter().next().unwrap().into_parts();
+        assert_eq!(parts.title, "Mute");
+        assert_eq!(parts.keywords, ["sound"]);
+        assert_eq!(parts.message.downcast::<u8>(), Some(7));
     }
 
     #[test]
