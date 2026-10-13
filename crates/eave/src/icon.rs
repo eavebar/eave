@@ -154,7 +154,10 @@ impl<M> canvas::Program<M> for Glyph {
             return None;
         };
         let charging = matches!(self.icon, Icon::Battery { charging: true, .. });
-        state.pour.step(charging, *now).map(Action::request_redraw_at)
+        state
+            .pour
+            .step(charging, *now)
+            .map(Action::request_redraw_at)
     }
 
     fn draw(

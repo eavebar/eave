@@ -311,7 +311,10 @@ pub fn fingerprint<M>(node: &Node<M>, hasher: &mut impl Hasher) {
             ..
         } => {
             (title, subtitle).hash(hasher);
-            all(&mut leading.iter().chain(trailing).map(|node| &**node), hasher);
+            all(
+                &mut leading.iter().chain(trailing).map(|node| &**node),
+                hasher,
+            );
         }
         Kind::Section { title, trailing } => {
             title.hash(hasher);

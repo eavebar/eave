@@ -113,6 +113,16 @@ pub struct Wanted {
     pub covers: Vec<String>,
 }
 
+impl Wanted {
+    /// Adds what `other` wants.
+    pub fn extend(&mut self, other: &Wanted) {
+        self.apps.extend_from_slice(&other.apps);
+        self.files.extend_from_slice(&other.files);
+        self.frames.extend_from_slice(&other.frames);
+        self.covers.extend_from_slice(&other.covers);
+    }
+}
+
 /// Which shipped file: its address and length. The bytes are `'static`, compiled into a plugin,
 /// so the address stays theirs and comparing it saves hashing the file on every view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
