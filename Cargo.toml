@@ -52,6 +52,7 @@ toml = { version = "0.9", default-features = false, features = ["std", "parse", 
 # every transparent pixel shows as black. Our copy uses `Argb8888` (D-25).
 [patch.crates-io]
 softbuffer = { path = "vendor/softbuffer" }
+iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
 
 [profile.release]
 lto = "thin"
