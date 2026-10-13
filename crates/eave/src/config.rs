@@ -18,6 +18,9 @@
 //! island = true   # the next items are another island, beside this one
 //! live = true     # optional: a live island, rounder and snugger around its items
 //! ```
+//!
+//! One key sits above the zones: `renderer = "gpu"` (the default) or `"cpu"` (D-67). It's read
+//! when the bar starts.
 
 use std::path::{Path, PathBuf};
 
@@ -57,10 +60,31 @@ pub struct Entry {
     pub options: toml::Table,
 }
 
+/// What draws the bar (D-67).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Renderer {
+    /// wgpu, falling back to tiny-skia where there's no GPU to use.
+    #[default]
+    Gpu,
+    /// tiny-skia only.
+    Cpu,
+}
+
+impl Renderer {
+    /// What iced's `ICED_BACKEND` is set to for it: the backends to try, in order.
+    pub fn backends(self) -> &'static str {
+        match self {
+            Renderer::Gpu => "wgpu,tiny-skia",
+            Renderer::Cpu => "tiny-skia",
+        }
+    }
+}
+
 /// Entries in bar order, plus a warning for everything that was skipped.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Config {
     pub entries: Vec<Entry>,
+    pub renderer: Renderer,
     pub warnings: Vec<String>,
 }
 
@@ -121,6 +145,14 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
     // Where eave itself comes from. Only eave-build reads it.
     table.remove("eave");
     let mut config = Config::default();
+    match table.remove("renderer") {
+        Some(toml::Value::String(name)) if name == "gpu" => config.renderer = Renderer::Gpu,
+        Some(toml::Value::String(name)) if name == "cpu" => config.renderer = Renderer::Cpu,
+        Some(_) => config
+            .warnings
+            .push("`renderer` must be \"gpu\" or \"cpu\", using \"gpu\"".into()),
+        None => {}
+    }
 
     for zone in Zone::ALL {
         let Some(value) = table.remove(zone.key()) else {
@@ -238,6 +270,16 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_renderer_is_the_gpu_unless_it_says_cpu() {
+        assert_eq!(parse("").unwrap().renderer, Renderer::Gpu);
+        assert_eq!(parse("renderer = \"cpu\"").unwrap().renderer, Renderer::Cpu);
+        assert_eq!(parse("renderer = \"gpu\"").unwrap().renderer, Renderer::Gpu);
+        let odd = parse("renderer = \"vulkan\"").unwrap();
+        assert_eq!(odd.renderer, Renderer::Gpu);
+        assert_eq!(odd.warnings.len(), 1);
+    }
 
     #[test]
     fn empty_file_means_empty_bar() {

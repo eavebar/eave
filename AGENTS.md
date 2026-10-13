@@ -24,12 +24,12 @@ We build it ourselves, not on a framework like Quickshell or AGS, because we wan
 
 ## Quick facts
 
-- Stack: **Rust + iced 0.14 + iced_layershell 0.19**, with the **tiny-skia** (CPU) renderer by default.
+- Stack: **Rust + iced 0.14 + iced_layershell 0.19**, with the **wgpu** (GPU) renderer by default and **tiny-skia** (CPU) as fallback and as `renderer = "cpu"` ([D-67](docs/decisions.md)).
 - **Everything is a plugin.** With no `~/.config/eave/config.toml` the bar is empty. Plugins are crates compiled in by `eave-build`, never loaded at runtime ([docs/plugins.md](docs/plugins.md)).
 - `config.toml` is the only user file. It reloads live, and its `widget = "owner/repo[@rev]"` entries say what `eave-build` compiles in (rebuilt on save by `eave-rebuild.path`). Nothing updates without `eave-build update`. Install with `install.sh`, or `paru -S eave` from the AUR, which ships only eave-build ([D-54](docs/decisions.md)). The bar runs best as a systemd user service ([docs/running.md](docs/running.md)).
-- Run it: `cargo run --release`. GPU renderer: `cargo run --release --features gpu`. Tests: `cargo test --workspace`.
+- Run it: `cargo run --release`. CPU renderer: `ICED_BACKEND=tiny-skia cargo run --release`. Tests: `cargo test --workspace`.
 - Code: `crates/eave-api` (plugin SDK: `Widget`, closed `ui` vocabulary), `crates/eave` (host: surfaces, layout, theme, popovers), `crates/eave-build` (builds, installs and updates the bar with the plugins config.toml uses), `crates/eave-{hyprland,net,dbus,iwd,pulse,mpris}` (shared services), `plugins/{clock,workspaces,window,keyboard,battery,network,volume,media}`.
-- Baseline: ~11.8 MB RSS with two clocks and ~0% idle CPU (see [docs/development.md](docs/development.md#measuring)). Don't regress it without a reason written down in `docs/decisions.md`.
+- Baseline: ~11.8 MB RSS with two clocks and ~0% idle CPU on tiny-skia; the GPU default adds ~56 MB of RSS, mostly shared driver libraries (see [docs/development.md](docs/development.md#measuring), D-67). Don't regress it without a reason written down in `docs/decisions.md`.
 
 ## Rules for agents
 

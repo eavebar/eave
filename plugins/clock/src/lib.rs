@@ -2,9 +2,10 @@
 
 use chrono::format::{Item as FormatItem, StrftimeItems};
 use chrono::{DateTime, Datelike, Days, Local, Months, NaiveDate};
-use eave_api::time::{Duration, every};
+use eave_api::time::{Duration, sleep};
 use eave_api::ui::{self, Icon, Item, Node, Panel, Tone};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
+use futures_util::{Stream, stream};
 use serde::Deserialize;
 
 pub fn register(registry: &mut Registry) {
@@ -92,8 +93,8 @@ impl Widget for Clock {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        // No event source for "the minute changed", so this is one of the few allowed timers.
-        every(Duration::from_secs(1)).map(|_| Message::Tick)
+        let formats = (self.format.0.clone(), self.hover_format.0.clone());
+        Subscription::run_with(formats, |formats| changes(formats.clone())).map(|_| Message::Tick)
     }
 
     fn item(&self) -> Item<Message> {
@@ -127,6 +128,30 @@ impl Widget for Clock {
         // It always opens on this month.
         Some(Panel::new(panel).on_open(Message::ThisMonth))
     }
+}
+
+/// Yields whenever the time reads differently in either format. There's no event source for
+/// "the minute changed", so this is one of the few allowed timers: it looks at the start of every
+/// second, but only a change becomes a message, since each message rebuilds the whole bar.
+fn changes((format, hover): (String, String)) -> impl Stream<Item = ()> {
+    stream::unfold(None, move |last: Option<(String, String)>| {
+        let (format, hover) = (format.clone(), hover.clone());
+        async move {
+            loop {
+                let into = Local::now().timestamp_subsec_nanos();
+                let wait = 1_000_000_000u32.saturating_sub(into).max(1_000_000);
+                sleep(Duration::from_nanos(wait.into())).await;
+                let now = Local::now();
+                let shown = (
+                    now.format(&format).to_string(),
+                    now.format(&hover).to_string(),
+                );
+                if last.as_ref() != Some(&shown) {
+                    return Some(((), Some(shown)));
+                }
+            }
+        }
+    })
 }
 
 impl Clock {

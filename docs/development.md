@@ -4,14 +4,15 @@
 
 - Rust (stable, edition 2024). Developed with 1.97.
 - A running Hyprland session (the bar needs a Wayland compositor with layer-shell).
-- System libraries: `wayland`, `libxkbcommon` (with its headers), and `pkg-config` to find it at build time. Arch and CachyOS have all of them with Hyprland; Debian-like systems need `libxkbcommon-dev pkg-config`. For the `gpu` feature, also a Vulkan loader plus drivers (Mesa on Asahi).
+- System libraries: `wayland`, `libxkbcommon` (with its headers), and `pkg-config` to find it at build time. Arch and CachyOS have all of them with Hyprland; Debian-like systems need `libxkbcommon-dev pkg-config`. For the GPU renderer, the default, also a Vulkan loader plus drivers (Mesa on Asahi). Without them the bar falls back to the CPU renderer.
 
 ## Build and run
 
 ```fish
 cargo run                          # debug, default binary (host + built-in plugins)
 cargo run --release                # what you'd actually use
-cargo run --release --features gpu # wgpu renderer instead of tiny-skia
+ICED_BACKEND=tiny-skia cargo run --release   # the CPU renderer, like renderer = "cpu"
+cargo run --release --no-default-features --features builtin   # a CPU-only build
 cargo test --workspace             # every crate
 cargo install --path crates/eave-build   # then `eave-build`: install what config.toml uses
 
@@ -75,7 +76,7 @@ Current baseline (Asahi, aarch64, release, tiny-skia, default binary). Measured 
 
 Before the plugin split (skeleton, clock + date hard-coded): binary 5.6 MiB, RSS ~11.5 MB. The +0.2 MiB of binary and +0.3 MB of RSS are the price of the registry, config parsing (`toml`) and popover surfaces ([D-12](decisions.md), [D-14](decisions.md)).
 
-The wgpu renderer measured 9.5 MB binary, ~72 MB RSS and ~1% idle CPU at the skeleton stage ([D-4](decisions.md)).
+The wgpu renderer measured 9.5 MB binary, ~72 MB RSS and ~1% idle CPU at the skeleton stage ([D-4](decisions.md)). It's the default since [D-67](decisions.md): with the user's config it measured 18.2 MB binary, 77.6 MB RSS (most of it shared driver libraries) and 0.1% idle CPU, against 14.0 MB, 21.4 MB and 0.1% on tiny-skia. The table above is tiny-skia.
 
 Update this table when the baseline moves for a good reason, and record that reason in [decisions.md](decisions.md).
 

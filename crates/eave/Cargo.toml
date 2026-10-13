@@ -43,7 +43,7 @@ eave-window = { workspace = true, optional = true }
 eave-workspaces = { workspace = true, optional = true }
 
 [features]
-default = ["builtin"]
+default = ["builtin", "gpu"]
 builtin = [
     "dep:eave-battery",
     "dep:eave-clock",
@@ -54,7 +54,8 @@ builtin = [
     "dep:eave-window",
     "dep:eave-workspaces",
 ]
-# GPU renderer (wgpu); tiny-skia stays as fallback. Default is CPU-only, which is lighter for a bar.
+# GPU renderer (wgpu), the default since D-67; tiny-skia stays as fallback, and is what
+# `renderer = "cpu"` in config.toml picks. Without this feature the bar is CPU-only.
 gpu = ["iced/wgpu"]
 
 [[bin]]

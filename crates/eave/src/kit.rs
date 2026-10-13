@@ -5,6 +5,8 @@
 //! ([D-40](../../../docs/decisions.md)), so there rows stretch, lists scroll and `fill` pushes
 //! things to the end. The bar has no width to give, so those collapse to their content.
 
+use std::hash::{Hash, Hasher};
+
 use eave_api::erased::AnyMessage;
 use eave_api::ui::{Kind, Mark, Node, NoticeParts, Tone, Urgency};
 use iced::widget::scrollable::{self, Scrollbar};
@@ -266,6 +268,101 @@ pub fn notice<'a, M: Clone + 'a>(
             .interaction(iced::mouse::Interaction::Pointer)
             .into(),
         None => card.into(),
+    }
+}
+
+/// A hash of what `node` says: its kinds and its text. Two nodes that read the same hash the
+/// same, so a timeline can tell its steps apart from one view to the next.
+pub fn fingerprint<M>(node: &Node<M>, hasher: &mut impl Hasher) {
+    let kind = node.kind();
+    std::mem::discriminant(kind).hash(hasher);
+    let all = |children: &mut dyn Iterator<Item = &Node<M>>, hasher: &mut _| {
+        children.for_each(|child| fingerprint(child, hasher))
+    };
+    match kind {
+        Kind::Label { text, .. }
+        | Kind::Heading { text, .. }
+        | Kind::Badge { text, .. }
+        | Kind::Markdown { text, .. }
+        | Kind::Literal { text, .. }
+        | Kind::Divider { text } => text.hash(hasher),
+        Kind::AppIcon { app_id, .. } => app_id.hash(hasher),
+        Kind::Cover { url, .. } => url.hash(hasher),
+        Kind::Counter { value, unit, .. } => (value, unit).hash(hasher),
+        Kind::Diff { title, lines } => {
+            title.hash(hasher);
+            for (change, line) in lines {
+                std::mem::discriminant(change).hash(hasher);
+                line.hash(hasher);
+            }
+        }
+        Kind::ListItem {
+            title,
+            subtitle,
+            leading,
+            trailing,
+            ..
+        }
+        | Kind::Header {
+            title,
+            subtitle,
+            leading,
+            trailing,
+            ..
+        } => {
+            (title, subtitle).hash(hasher);
+            all(
+                &mut leading.iter().chain(trailing).map(|node| &**node),
+                hasher,
+            );
+        }
+        Kind::Section { title, trailing } => {
+            title.hash(hasher);
+            all(&mut trailing.iter().map(|node| &**node), hasher);
+        }
+        Kind::Detail { name, value } => {
+            name.hash(hasher);
+            fingerprint(value, hasher);
+        }
+        Kind::Alternate { options, .. } => all(&mut options.iter(), hasher),
+        Kind::Row(children)
+        | Kind::Column(children)
+        | Kind::List(children)
+        | Kind::Timeline(children)
+        | Kind::Grid {
+            cells: children, ..
+        } => all(&mut children.iter(), hasher),
+        Kind::Switcher { options, .. } => all(&mut options.iter().map(|(node, _)| node), hasher),
+        Kind::Tabs(pages) => pages.iter().for_each(|(name, page)| {
+            name.hash(hasher);
+            fingerprint(page, hasher);
+        }),
+        Kind::Button { content, .. }
+        | Kind::Gulp(content)
+        | Kind::Center(content)
+        | Kind::Display(content)
+        | Kind::Mark(content)
+        | Kind::Scroll { content, .. } => fingerprint(content, hasher),
+        Kind::Step {
+            mark,
+            leading,
+            content,
+        } => {
+            std::mem::discriminant(mark).hash(hasher);
+            all(&mut leading.iter().map(|node| &**node), hasher);
+            fingerprint(content, hasher);
+        }
+        Kind::TextInput { .. }
+        | Kind::TextArea { .. }
+        | Kind::Icon { .. }
+        | Kind::Image { .. }
+        | Kind::Sprite { .. }
+        | Kind::Separator
+        | Kind::Empty
+        | Kind::Fill
+        | Kind::Slider { .. }
+        | Kind::Toggle { .. }
+        | Kind::Meter { .. } => {}
     }
 }
 
@@ -628,8 +725,12 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             steps
                 .into_iter()
                 .map(|node| {
+                    let mut hasher = std::hash::DefaultHasher::new();
+                    fingerprint(&node, &mut hasher);
+                    let key = hasher.finish();
                     if !matches!(node.kind(), Kind::Step { .. }) {
                         return timeline::Step {
+                            key,
                             mark: Mark::Note,
                             leading: None,
                             content: render(node, ctx, icons),
@@ -644,6 +745,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                         unreachable!()
                     };
                     timeline::Step {
+                        key,
                         mark,
                         leading: leading.map(|node| render(*node, ctx, icons)),
                         content: render(*content, ctx, icons),

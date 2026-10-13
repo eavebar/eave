@@ -61,6 +61,23 @@ fn use_installed_sans() {
     }
 }
 
+/// A renderer for laying widgets out in tests: tiny-skia, with or without the `gpu` feature, so no
+/// test needs a GPU.
+#[cfg(test)]
+fn test_renderer() -> iced::Renderer {
+    use iced::advanced::renderer::Headless;
+    let renderer = <iced::Renderer as Headless>::new(
+        iced::Font::DEFAULT,
+        iced::Pixels(14.0),
+        Some("tiny-skia"),
+    );
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("a runtime")
+        .block_on(renderer)
+        .expect("tiny-skia")
+}
+
 /// Builds the registry from `plugins`, reads `config.toml` (and keeps watching it), and runs the
 /// bar until it exits.
 pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
@@ -77,12 +94,20 @@ pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
         std::process::exit(1);
     }
 
-    use_installed_sans();
-
     let config = config::load().unwrap_or_else(|error| {
         eprintln!("eave: config: {error}");
         config::Config::default()
     });
+
+    // iced reads the renderer to use from ICED_BACKEND when it creates its compositor. One set by
+    // hand wins over config.toml. Only a build with both renderers looks at it (D-67).
+    if std::env::var_os("ICED_BACKEND").is_none() {
+        // SAFETY: nothing else runs yet: no thread has started, so none can read the environment
+        // while it changes.
+        unsafe { std::env::set_var("ICED_BACKEND", config.renderer.backends()) };
+    }
+
+    use_installed_sans();
 
     iced_layershell::daemon(
         move || app::Bar::new(registry.clone(), config.clone()),

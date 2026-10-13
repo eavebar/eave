@@ -20,7 +20,7 @@ Everything must build from source on both aarch64 and x86_64. In practice:
 - Test any change to renderer or GPU code on both machines. The GPU stacks are very different: Asahi's Mesa drivers versus Intel/AMD/NVIDIA.
 
 ### Asahi specifics
-- **GPU:** Asahi's Mesa drivers provide OpenGL and Vulkan, so wgpu works. We still default to the CPU renderer, for memory reasons rather than compatibility (see [decisions.md](decisions.md)).
+- **GPU:** Asahi's Mesa drivers provide OpenGL and Vulkan, so wgpu works. The GPU renderer is the default, with the CPU one as a fallback and as `renderer = "cpu"` (see [decisions.md](decisions.md), D-67).
 - **HiDPI / fractional scaling:** the MacBook panel runs at a non-1 scale, so the bar must render crisp text at fractional scales. If text ever looks blurry, check whether the fractional-scale and viewporter protocols are being used.
 - **The notch:** by default Asahi hides the notch area, so the usable screen is just shorter. If it's enabled with the `apple_dcp.show_notch=1` kernel parameter, the top-center of the display is physically missing. The bar should then leave the center empty on that output. This is planned, not implemented yet.
 - **Battery and backlight** are read from `/sys/class/power_supply` and `/sys/class/backlight`. No Apple-specific code. `macsmc-battery` reports `charge_*` and `energy_*`, and its `capacity` is the firmware's rounded-up display value, so the percentage comes from the energy ratio instead ([D-23](decisions.md)).

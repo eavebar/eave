@@ -629,7 +629,7 @@ mod tests {
             true,
         );
         let mut tree = Tree::new(&alternate as &dyn Widget<_, _, _>);
-        let renderer = iced::Renderer::new(iced::Font::DEFAULT, iced::Pixels(14.0));
+        let renderer = crate::test_renderer();
         let limits = layout::Limits::new(Size::ZERO, Size::new(500.0, 500.0));
         let size = |alternate: &mut Alternate<'_, ()>, tree: &mut Tree| {
             alternate.layout(tree, &renderer, &limits).size()

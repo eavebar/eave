@@ -69,6 +69,9 @@ pub struct Bar {
     /// How many times a collapsed item has come out on its own, so only the last timer of each
     /// puts it back.
     reveals: u64,
+    /// The icons an open popover shows, read from the popover its widget built while updating,
+    /// so it isn't built again just to look for them.
+    panel_wanted: Option<(u64, Wanted)>,
 }
 
 /// One island: its zone, and which of the zone's islands it is, counted in bar order.
@@ -242,6 +245,7 @@ impl Bar {
             alarm: None,
             expanded: Vec::new(),
             reveals: 0,
+            panel_wanted: None,
         };
         let task = bar.apply(config);
         (bar, task)
@@ -326,17 +330,28 @@ impl Bar {
     }
 
     /// Starts loading the app icons that items and the open popover show and nobody has asked
-    /// for yet.
-    fn load_icons(&mut self) -> Vec<Task<Message>> {
+    /// for yet. Only `changed`'s, if it's the one widget whose view may have changed: a widget's
+    /// view comes from its own state alone.
+    fn load_icons(&mut self, changed: Option<u64>) -> Vec<Task<Message>> {
         let mut wanted = Wanted::default();
+        let read = self.panel_wanted.take();
         for instance in &self.instances {
+            if changed.is_some_and(|id| id != instance.id) {
+                continue;
+            }
             if let Some(content) = instance.widget.item().into_parts().content {
                 kit::wanted(content, &mut wanted);
             }
-            if self.popover_of(instance.id).is_some()
-                && let Some(panel) = instance.widget.popover()
-            {
-                kit::wanted(panel.into_node(), &mut wanted);
+            if self.popover_of(instance.id).is_none() {
+                continue;
+            }
+            match &read {
+                Some((id, panel)) if *id == instance.id => wanted.extend(panel),
+                _ => {
+                    if let Some(panel) = instance.widget.popover() {
+                        kit::wanted(panel.into_node(), &mut wanted);
+                    }
+                }
             }
         }
         let notices = self.toasts.iter().map(|toast| &toast.notice);
@@ -759,6 +774,10 @@ impl Bar {
 }
 
 pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
+    let changed = match &message {
+        Message::Widget(id, _) => Some(*id),
+        _ => None,
+    };
     let was_open = bar.is_open();
     let mut tasks = vec![handle(bar, message)];
     let open = bar.is_open();
@@ -773,7 +792,7 @@ pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
     }
     tasks.push(bar.sync_panel());
     tasks.extend(hand_keyboard(bar));
-    tasks.extend(bar.load_icons());
+    tasks.extend(bar.load_icons(changed));
     tasks.push(bar.run_clocks(Instant::now()));
     Task::batch(tasks)
 }
@@ -813,8 +832,16 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
                 return Task::none();
             };
             let (task, request, nudge) = instance.widget.update(message).into_parts();
-            instance.has_popover = instance.widget.popover().is_some();
+            let panel = instance.widget.popover();
+            instance.has_popover = panel.is_some();
             let has_popover = instance.has_popover;
+            if let Some(panel) = panel
+                && bar.popover_of(id).is_some()
+            {
+                let mut wanted = Wanted::default();
+                kit::wanted(panel.into_node(), &mut wanted);
+                bar.panel_wanted = Some((id, wanted));
+            }
             bar.sync_notices(id);
             let mut reveal = Task::none();
             if let Some(nudge) = nudge {
@@ -1023,7 +1050,12 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         Message::ConfigChanged(config) => match config {
             // Editors often fire several events per save; only a real change rebuilds anything.
             Ok(config) if config == bar.config => Task::none(),
-            Ok(config) => bar.apply(config),
+            Ok(config) => {
+                if config.renderer != bar.config.renderer {
+                    eprintln!("eave: config: the new `renderer` is used once the bar restarts");
+                }
+                bar.apply(config)
+            }
             Err(error) => {
                 eprintln!("eave: config: {error}; keeping the current bar");
                 Task::none()

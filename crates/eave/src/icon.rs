@@ -7,6 +7,7 @@
 //! frames a second, not the compositor's rate, to keep it cheap
 //! ([D-37](../../../docs/decisions.md)).
 
+use std::cell::Cell;
 use std::f32::consts::{PI, TAU};
 use std::time::Instant;
 
@@ -129,12 +130,22 @@ struct Glyph {
     color: Color,
 }
 
+/// A glyph's pour, and its paths as last drawn while it was still, so a still icon is drawn
+/// once, not on every frame of whatever else moves on its surface.
+#[derive(Default)]
+struct State {
+    pour: Pour,
+    still: canvas::Cache,
+    /// What `still` holds a drawing of.
+    drawn: Cell<Option<(Icon, Color)>>,
+}
+
 impl<M> canvas::Program<M> for Glyph {
-    type State = Pour;
+    type State = State;
 
     fn update(
         &self,
-        pour: &mut Pour,
+        state: &mut State,
         event: &Event,
         _bounds: Rectangle,
         _cursor: mouse::Cursor,
@@ -143,18 +154,31 @@ impl<M> canvas::Program<M> for Glyph {
             return None;
         };
         let charging = matches!(self.icon, Icon::Battery { charging: true, .. });
-        pour.step(charging, *now).map(Action::request_redraw_at)
+        state
+            .pour
+            .step(charging, *now)
+            .map(Action::request_redraw_at)
     }
 
     fn draw(
         &self,
-        pour: &Pour,
+        state: &State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let squish = squish::current();
+        let pouring = matches!(self.icon, Icon::Battery { charging: true, .. });
+        if squish.is_none() && !pouring {
+            if state.drawn.replace(Some((self.icon, self.color))) != Some((self.icon, self.color)) {
+                state.still.clear();
+            }
+            return vec![state.still.draw(renderer, bounds.size(), |frame| {
+                frame.scale(theme::ICON_SIZE / GRID);
+                self.paint(frame, Gulp::default());
+            })];
+        }
         let mut frame = if squish.is_none() {
             Frame::new(renderer, bounds.size())
         } else {
@@ -165,8 +189,8 @@ impl<M> canvas::Program<M> for Glyph {
             frame
         };
         frame.scale(theme::ICON_SIZE / GRID);
-        let gulp = pour.gulp();
-        if let Icon::Battery { charging: true, .. } = self.icon {
+        let gulp = state.pour.gulp();
+        if pouring {
             // Swells from its middle.
             let middle = Vector::new(battery_width() / 2.0, GRID / 2.0);
             frame.translate(middle);
@@ -176,8 +200,16 @@ impl<M> canvas::Program<M> for Glyph {
             ));
             frame.translate(-middle);
         }
+        self.paint(&mut frame, gulp);
+        vec![frame.into_geometry()]
+    }
+}
+
+impl Glyph {
+    /// Draws the icon on `frame`, scaled to the grid.
+    fn paint(&self, frame: &mut Frame, gulp: Gulp) {
         let mut pen = Pen {
-            frame: &mut frame,
+            frame,
             on: self.color,
             off: Color {
                 a: self.color.a * theme::ICON_OFF_ALPHA,
@@ -237,7 +269,6 @@ impl<M> canvas::Program<M> for Glyph {
                 pen.block(11.25, 3.0, 2.25, 10.0, 1.0);
             }
         }
-        vec![frame.into_geometry()]
     }
 }
 

@@ -10,6 +10,9 @@
 # you press the chevron that shows when you hover its island, or for a moment when it changes.
 # `live = true` beside `island = true` makes that island a live one: snugger and rounder. Before a
 # zone's first item, it applies to the first island.
+#
+# `renderer = "cpu"` draws the bar on the CPU instead of the GPU: lighter on memory, less smooth in
+# big popovers. It takes effect when the bar restarts.
 
 [[left]]
 widget = "workspaces"
