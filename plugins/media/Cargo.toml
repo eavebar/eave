@@ -1,0 +1,15 @@
+[package]
+name = "eave-media"
+version = "0.1.0"
+description = "Now playing for eave: the track in the bar, controls, seeking and players in the popover"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+eave-mpris.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

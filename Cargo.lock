@@ -853,6 +853,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "eave-media"
+version = "0.1.0"
+dependencies = [
+ "eave-api",
+ "eave-mpris",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "eave-mpris"
+version = "0.1.0"
+dependencies = [
+ "eave-dbus",
+ "futures-util",
+ "tokio",
+]
+
+[[package]]
 name = "eave-net"
 version = "0.1.0"
 dependencies = [

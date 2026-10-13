@@ -1,0 +1,13 @@
+[package]
+name = "eave-mpris"
+version = "0.1.0"
+description = "Media players for eave plugins, through MPRIS on the session bus"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The shared session bus connection, and the zbus it re-exports (D-55).
+eave-dbus.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio = { version = "1", default-features = false, features = ["time"] }
