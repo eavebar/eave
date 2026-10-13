@@ -33,8 +33,8 @@ use iced::{
 };
 
 use crate::field::AnyFocused;
-use crate::jelly::{Jelly, Side};
-use crate::spring::{DRAG, FADE, MAX_FRAME, MORPH, NUDGE, PLAYFUL, REST_DISTANCE, SQUISH, Spring};
+use crate::jelly::{self, Jelly, Side};
+use crate::spring::{FADE, HAND, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
 use crate::squircle::{self, CornerShape, squircle_corners, warp};
 use crate::squish::{self, Squish};
 use crate::theme;
@@ -304,19 +304,19 @@ impl Default for Motion {
         Self {
             press: None,
             grab: None,
-            x: Spring::new(0.0, DRAG),
-            y: Spring::new(0.0, DRAG),
-            inset: Spring::new(0.0, PLAYFUL),
+            x: Spring::new(0.0, HAND),
+            y: Spring::new(0.0, HAND),
+            inset: Spring::new(0.0, HAND),
             island: None,
             edges: Edges::at(Rectangle::default()),
             items: Vec::new(),
             popover: PopoverMotion::default(),
-            push_x: Spring::new(0.0, NUDGE),
-            push_y: Spring::new(0.0, NUDGE),
+            push_x: Spring::new(0.0, REACT),
+            push_y: Spring::new(0.0, REACT),
             jelly: Jelly::default(),
             pace: 1.0,
-            stretch_x: Spring::new(0.0, SQUISH),
-            stretch_y: Spring::new(0.0, SQUISH),
+            stretch_x: Spring::new(0.0, REACT),
+            stretch_y: Spring::new(0.0, REACT),
             seen: None,
             pushed: 0.0,
             pushing: 0.0,
@@ -510,10 +510,13 @@ impl Motion {
         let NudgeRequest { nudge, lasting } = request;
         // The springs run on time slowed by the pace, so the same kicks go just as far, slower.
         self.pace = lasting.map_or(1.0, |lasting| {
-            (lasting.as_secs_f32() / theme::NUDGE_LASTING.as_secs_f32()).clamp(0.5, 5.0)
+            (lasting.as_secs_f32() / REACT.settle_time().as_secs_f32()).clamp(0.5, 5.0)
         });
-        let (push, lift) = (theme::NUDGE_PUSH_SPEED, theme::NUDGE_LIFT_SPEED);
-        let lean = theme::JELLY_LEAN;
+        let (push, lift) = (react(theme::NUDGE_PUSH), react(theme::NUDGE_LIFT));
+        let (lean, bump) = (
+            jelly::poke(theme::JELLY_LEAN),
+            jelly::poke(theme::JELLY_BUMP),
+        );
         // From −1 at the start of a side to 1 at its end, eased at both.
         let lean_toward_end = move |along: f32| lean * (std::f32::consts::PI * (along - 0.5)).sin();
         match nudge {
@@ -545,7 +548,7 @@ impl Motion {
                 let half = theme::NUDGE_BUMP_WIDTH / 2.0 / island.width;
                 self.jelly.kick(edge, |along| {
                     let from = ((along - at) / half).clamp(-1.0, 1.0);
-                    theme::JELLY_BUMP * 0.5 * (1.0 + (std::f32::consts::PI * from).cos())
+                    bump * 0.5 * (1.0 + (std::f32::consts::PI * from).cos())
                 });
             }
         }
@@ -580,14 +583,14 @@ impl Motion {
             // Going left, it's pushed from the right: its right end swells, gradually.
             let way = speed.signum();
             let building = (self.pushing / theme::PUSH_BUILD.as_secs_f32()).min(1.0);
-            let lean = strength(speed, theme::PUSH_LEAN) * building;
+            let lean = strength(speed, jelly::poke(theme::PUSH_LEAN)) * building;
             for side in [Side::Top, Side::Bottom] {
                 self.jelly
                     .kick(side, |along| -way * lean * toward_end(along));
             }
         } else if self.pushed != 0.0 {
             let way = self.pushed.signum();
-            let wiggle = strength(self.pushed, theme::PUSH_WIGGLE);
+            let wiggle = strength(self.pushed, jelly::poke(theme::PUSH_WIGGLE));
             for side in [Side::Top, Side::Bottom] {
                 self.jelly
                     .kick(side, |along| way * wiggle * toward_end(along));
@@ -631,7 +634,7 @@ impl Motion {
                         target: 1.0,
                         ..Spring::new(0.0, MORPH)
                     },
-                    kick: Spring::new(0.0, NUDGE),
+                    kick: Spring::new(0.0, REACT),
                 }),
             }
         }
@@ -703,7 +706,7 @@ impl Motion {
                 // way, nothing to hit when it gets there.
                 if !popover.squished {
                     popover.squished = true;
-                    self.stretch_x.velocity = -theme::SQUISH_OPEN_SQUEEZE * panel.width;
+                    self.stretch_x.velocity = -react(theme::SQUISH_OPEN * panel.width);
                 }
                 popover.items.target = 0.0;
                 popover.panel.target = if popover.items.value < REST_DISTANCE
@@ -717,11 +720,14 @@ impl Motion {
             (None, Some(panel)) if popover.present => {
                 self.edges.aim(island);
                 // Splats against the top as it lands. Not while it's open and waiting for room.
-                let landing = self.edges.bottom.value - (island.y + island.height);
+                // Where its bottom will be by the time a splat kicked now peaks.
+                let mut ahead = self.edges.bottom;
+                ahead.advance(REACT.peak_time());
+                let landing = ahead.value - (island.y + island.height);
                 if !popover.open && !popover.squished && landing < theme::SQUISH_LAND {
                     popover.squished = true;
-                    self.stretch_y.velocity = -theme::SQUISH_CLOSE_FLATTEN;
-                    self.stretch_x.velocity = theme::SQUISH_CLOSE_WIDEN;
+                    self.stretch_y.velocity = -react(theme::SPLAT_FLATTEN);
+                    self.stretch_x.velocity = react(theme::SPLAT_WIDEN);
                 }
                 popover.panel.target = 0.0;
                 popover.items.target = if popover.panel.value < REST_DISTANCE
@@ -820,7 +826,7 @@ impl Motion {
             Nudge::Up | Nudge::Down => return,
         };
         if let Some(item) = self.items.iter_mut().find(|item| item.key == key) {
-            item.kick.velocity = way * theme::NUDGE_KICK_SPEED;
+            item.kick.velocity = way * react(theme::NUDGE_KICK);
         }
     }
 
@@ -893,8 +899,8 @@ impl Motion {
         if stretch_x == 0.0 && stretch_y == 0.0 {
             return edges;
         }
-        let width = (edges.width + stretch_x - theme::SQUISH_BULGE * stretch_y).max(0.0);
-        let height = (edges.height + stretch_y - theme::SQUISH_BULGE * stretch_x).max(0.0);
+        let width = (edges.width + stretch_x - theme::BULGE * stretch_y).max(0.0);
+        let height = (edges.height + stretch_y - theme::BULGE * stretch_x).max(0.0);
         Rectangle::new(
             Point::new(edges.center_x() - width / 2.0, edges.y),
             Size::new(width, height),
@@ -951,7 +957,7 @@ impl Motion {
         let out = item.kick.value.abs();
         Squish {
             x: 1.0 - theme::NUDGE_KICK_SQUISH * out,
-            y: 1.0 + theme::NUDGE_KICK_SQUISH / 2.0 * out,
+            y: 1.0 + theme::BULGE * theme::NUDGE_KICK_SQUISH * out,
         }
     }
 
@@ -1025,6 +1031,12 @@ fn slots(widths: &[f32], groups: &[Option<&str>]) -> Vec<f32> {
             None => widths[index],
         })
         .collect()
+}
+
+/// How fast to kick a REACT spring at rest so it goes out `peak` at its furthest, with every
+/// reaction's size (`REACT_SIZE`).
+fn react(peak: f32) -> f32 {
+    REACT.kick(peak * theme::REACT_SIZE)
 }
 
 /// Moves almost one to one at first, then gives less and less, approaching `limit` without ever
@@ -2198,9 +2210,10 @@ mod tests {
             let (shape, edges) = (motion.shape(), motion.edges.rect());
             squeezed |= shape.width < edges.width - 4.0 && shape.height > edges.height;
             assert_eq!(shape.y, edges.y, "the top stays on the bar");
+            let squeeze = theme::SQUISH_OPEN * theme::REACT_SIZE * panel.width;
             assert!(
-                shape.width < edges.width + 1.0,
-                "never swings visibly wider"
+                shape.width < edges.width + 1.0 + 1.3 * REACT.overshoot() * squeeze,
+                "never swings wider than its feel's rebound"
             );
         });
         assert!(squeezed, "squished on the way");
@@ -2211,7 +2224,9 @@ mod tests {
         let (mut splat, mut spread) = (false, false);
         run(&mut motion, Instant::now(), |motion| {
             let (shape, edges) = (motion.shape(), motion.edges.rect());
-            splat |= shape.height < island.height - 1.0 && shape.width > island.width + 1.0;
+            // Most of it, at least: the shape is still arriving as it peaks.
+            splat |= shape.height < island.height - size(theme::SPLAT_FLATTEN) / 2.0
+                && shape.width > island.width + size(theme::SPLAT_WIDEN) / 2.0;
             assert_eq!(shape.y, edges.y, "the top stays put");
             assert!(
                 shape.width - edges.width < 2.0 * gap,
@@ -2381,6 +2396,16 @@ mod tests {
         Some(25.0 + 40.0 * (key - 1) as f32)
     }
 
+    /// How far a reaction going out `peak` goes, with every reaction's size.
+    fn size(peak: f32) -> f32 {
+        peak * theme::REACT_SIZE
+    }
+
+    /// Whether `value` is within `share` of how far a reaction going out `peak` goes.
+    fn near(value: f32, peak: f32, share: f32) -> bool {
+        (value - size(peak)).abs() <= share * size(peak)
+    }
+
     /// An island at rest that has already noted the nudges so far.
     fn nudged(nudges: &[(u64, (u64, Nudge))]) -> Motion {
         let mut motion = settled(rect(0.0, 200.0), &[1, 2]);
@@ -2398,9 +2423,13 @@ mod tests {
         run(&mut motion, Instant::now(), |motion| {
             let x = motion.offset().x;
             furthest = furthest.max(x);
-            assert!(x > -0.2, "doesn't swing back past: {x}");
+            let rebound = 1.3 * REACT.overshoot() * size(theme::NUDGE_PUSH);
+            assert!(
+                x > -rebound - 0.2,
+                "swings back past no more than its feel: {x}"
+            );
         });
-        assert!((4.0..6.0).contains(&furthest), "{furthest}");
+        assert!(near(furthest, theme::NUDGE_PUSH, 0.2), "{furthest}");
         assert_eq!(motion.offset(), Vector::ZERO);
         // Already played.
         motion.nudges([(2, (2, Nudge::Right))], center);
@@ -2427,7 +2456,7 @@ mod tests {
             (furthest, peak_at, frames)
         };
         let (far, peak, frames) = push(None);
-        let (slow_far, slow_peak, slow_frames) = push(Some(theme::NUDGE_LASTING * 3));
+        let (slow_far, slow_peak, slow_frames) = push(Some(REACT.settle_time() * 3));
         assert!((far - slow_far).abs() < 0.2, "{far} {slow_far}");
         assert!(slow_peak >= peak * 2, "{peak} {slow_peak}");
         assert!(slow_frames >= frames * 2, "{frames} {slow_frames}");
@@ -2446,8 +2475,10 @@ mod tests {
             let jelly = &motion.jelly;
             let under = jelly.value(Side::Bottom, 65.0 / 400.0);
             furthest = furthest.max(under);
+            // As much as the feel rebounds, the far end can swing out past it.
+            let rebound = 1.3 * REACT.overshoot() * size(theme::JELLY_BUMP);
             assert!(
-                under >= jelly.value(Side::Bottom, 0.9) - 0.05,
+                under >= jelly.value(Side::Bottom, 0.9) - 0.05 - rebound,
                 "it's under the item: {under} {}",
                 jelly.value(Side::Bottom, 0.9)
             );
@@ -2456,13 +2487,16 @@ mod tests {
             item = item.max(motion.squish_at(shape, 65.0).1);
         });
         assert!(
-            (0.4..0.65).contains(&lowest),
-            "the island moves half a pixel: {lowest}"
+            near(lowest, theme::NUDGE_LIFT, 0.25),
+            "the island moves as far as a lift: {lowest}"
         );
-        assert!((1.5..2.5).contains(&furthest), "{furthest}");
-        assert!(wider > 0.5, "the bottom widens: {wider}");
+        assert!(near(furthest, theme::JELLY_BUMP, 0.25), "{furthest}");
         assert!(
-            (0.5..1.5).contains(&item),
+            wider > size(theme::JELLY_LEAN) / 3.0,
+            "the bottom widens: {wider}"
+        );
+        assert!(
+            near(item, theme::JELLY_BUMP / 2.0, 0.5),
             "the item rides half the bump: {item}"
         );
         assert!(motion.jelly.is_flat());
@@ -2489,12 +2523,19 @@ mod tests {
             taller = taller.max(motion.squish_at(shape, 185.0).0.y);
             flatter = flatter.min(motion.squish_at(shape, 15.0).0.y);
         });
-        assert!((1.0..2.0).contains(&swell), "the right end swells: {swell}");
         assert!(
-            (-2.0..-1.0).contains(&flat),
+            near(swell, theme::JELLY_LEAN, 0.33),
+            "the right end swells: {swell}"
+        );
+        assert!(
+            near(-flat, theme::JELLY_LEAN, 0.33),
             "the left end flattens: {flat}"
         );
-        assert!(taller > 1.05 && flatter < 0.95, "{taller} {flatter}");
+        let lean = size(theme::JELLY_LEAN) / shape.height;
+        assert!(
+            taller > 1.0 + lean && flatter < 1.0 - lean,
+            "{taller} {flatter}"
+        );
         assert!(motion.jelly.is_flat());
 
         let mut motion = nudged(&[(2, (2, Nudge::Left))]);
@@ -2502,7 +2543,10 @@ mod tests {
         run(&mut motion, Instant::now(), |motion| {
             leaned = leaned.max(motion.jelly.value(Side::Top, 0.05));
         });
-        assert!(leaned > 1.0, "the left end swells: {leaned}");
+        assert!(
+            near(leaned, theme::JELLY_LEAN, 0.33),
+            "the left end swells: {leaned}"
+        );
 
         let mut motion = nudged(&[(2, (2, Nudge::Up))]);
         let (mut top, mut bulge): (f32, f32) = (0.0, 0.0);
@@ -2511,7 +2555,7 @@ mod tests {
             bulge = bulge.max(motion.jelly.value(Side::Top, 65.0 / 200.0));
         });
         assert!(
-            top > 0.5 && bulge > 1.5,
+            top > size(theme::JELLY_LEAN) / 3.0 && bulge > 0.75 * size(theme::JELLY_BUMP),
             "the top widens and bulges: {top} {bulge}"
         );
     }
@@ -2527,12 +2571,16 @@ mod tests {
             narrowest = narrowest.min(motion.kicked(2).x);
         });
         assert!(
-            (0.85..0.98).contains(&narrowest),
+            near(
+                1.0 - narrowest,
+                theme::NUDGE_KICK_SQUISH * theme::NUDGE_KICK,
+                0.6
+            ),
             "squished a little: {narrowest}"
         );
         assert_eq!(motion.kicked(1), Squish::NONE);
         assert_eq!(one, 0.0, "only the item that nudged");
-        assert!((-4.0..-1.0).contains(&two), "a few px left: {two}");
+        assert!(near(-two, theme::NUDGE_KICK, 0.6), "a few px left: {two}");
         assert_eq!(motion.item(2, 50.0), (0.0, 1.0), "and back");
         assert_eq!(motion.kicked(2), Squish::NONE, "unsquished");
 

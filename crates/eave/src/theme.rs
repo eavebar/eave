@@ -71,88 +71,84 @@ pub const DRAG_LIMIT_Y: f32 = 6.0;
 /// the island in one long curve rather than a dent.
 pub const DRAG_FOLLOW: f32 = 0.5;
 pub const DRAG_REACH: f32 = 200.0;
-/// The spring a drag pulls the island on, and brings it back on: softer than the press, and
-/// damped enough that letting go only overshoots a little.
-pub const DRAG_STIFFNESS: f32 = 220.0;
-pub const DRAG_DAMPING: f32 = 0.7;
 /// How directly a drag moves the island at first: 1 follows the pointer, lower feels heavier.
 pub const DRAG_RESISTANCE: f32 = 0.5;
-/// The spring that moves an island back into place: stiffness, and damping ratio (below 1 it
-/// overshoots a little before settling).
-pub const SPRING_STIFFNESS: f32 = 600.0;
-pub const SPRING_DAMPING: f32 = 0.5;
-/// The spring an island's shape and items follow when its content changes, or it turns into a
-/// popover and back. Damped close to critical, so it settles without wobbling.
-pub const MORPH_STIFFNESS: f32 = 380.0;
-pub const MORPH_DAMPING: f32 = 0.9;
-/// The spring an island's items fade out on as it turns into a popover, and the popover's content
-/// fades in on (and back). Critically damped, so a fade never overshoots.
-pub const FADE_STIFFNESS: f32 = 1500.0;
+
+// The motion language (D-83, docs/design.md, Motion). Every spring an interaction plays on is
+// one of three feels, each given as its response (how long one swing would take, undamped, in
+// seconds) and its damping ratio (below 1 it overshoots a little, 1 is critical): what the hand
+// moves rides HAND, what an event kicks rides REACT, what's going somewhere rides MORPH. A
+// motion says how far it goes, in pixels; the feel works out how hard that is to kick. Turning
+// these few numbers changes how the whole bar feels, together.
+
+/// What the hand moves: the press's squeeze and the drag's stretch, after the pointer and back.
+/// Damped enough that letting go only overshoots a little.
+pub const HAND_RESPONSE: f32 = 0.26;
+pub const HAND_DAMPING: f32 = 0.75;
+/// What an event kicks out and back: a nudge's push and lift, the nudged item's kick, the jelly's
+/// pokes, a popover's squish and splat. Just under critical, so it comes back without a swing you
+/// can see.
+pub const REACT_RESPONSE: f32 = 0.20;
+pub const REACT_DAMPING: f32 = 0.92;
+/// The shape and items of an island when its content changes, or it turns into a popover and
+/// back. Damped close to critical, so it settles without wobbling: the squish rides on top.
+pub const MORPH_RESPONSE: f32 = 0.28;
+pub const MORPH_DAMPING: f32 = 0.95;
+/// An island's items fading out as it turns into a popover, and the popover's content fading in
+/// (and back). Quicker than the morph, and critically damped, so a fade never overshoots. Not part
+/// of the language: it's a value, not a shape.
+pub const FADE_RESPONSE: f32 = 0.16;
 pub const FADE_DAMPING: f32 = 1.0;
-/// The spring a popover's squish and splat ride on, on top of its morph. Just under critical, so one kick
-/// squashes the shape and it eases back, without a visible bounce.
-pub const SQUISH_STIFFNESS: f32 = 250.0;
-pub const SQUISH_DAMPING: f32 = 0.75;
-/// How hard an opening popover is squeezed in from the sides as it sets off, per second, as a
-/// share of the panel's width: about 5 % narrower at the peak (and taller, by the bulge), easing
-/// back as it grows.
-pub const SQUISH_OPEN_SQUEEZE: f32 = 2.0;
-/// How hard a closing popover's island splats against the top, in logical pixels per second:
-/// about 1.5 px flatter and 3.5 px wider at the peak, before the bulge. Wider stays inside the
-/// `EDGE_GAP` from the screen's sides.
-pub const SQUISH_CLOSE_FLATTEN: f32 = 50.0;
-pub const SQUISH_CLOSE_WIDEN: f32 = 125.0;
-/// How close, in logical pixels, a closing popover's bottom edge comes to its island's before it
-/// splats. The splat peaks about four frames after, as the shape arrives.
-pub const SQUISH_LAND: f32 = 5.0;
-/// How much stretching along one axis pulls the other in, per pixel stretched.
-pub const SQUISH_BULGE: f32 = 0.5;
-/// The spring a nudged island moves back on: damped nearly to critical, so it comes
-/// back without swinging past.
-pub const NUDGE_STIFFNESS: f32 = 600.0;
-pub const NUDGE_DAMPING: f32 = 0.85;
-/// How fast a nudge sets an island off, in logical pixels per second. A push sideways peaks at
-/// about 5 px. Up or down, the whole island moves about half a pixel.
-pub const NUDGE_PUSH_SPEED: f32 = 300.0;
-pub const NUDGE_LIFT_SPEED: f32 = 30.0;
-/// How fast a sideways nudge sets off the item that asked for it, on top of its island's push:
-/// about 2.5 px further, and back.
-pub const NUDGE_KICK_SPEED: f32 = 150.0;
-/// How much a kicked item squishes per pixel it's out: narrower by this much, taller by half.
-/// About 7 % narrower at the furthest.
+/// How far every reaction goes, all together: 1 is as the peaks below say.
+pub const REACT_SIZE: f32 = 0.8;
+/// How hard each piece of an island's outline is pulled toward its neighbors, as a share of how
+/// hard REACT pulls it back where it belongs. That pull is what spreads a poke into a smooth curve
+/// ([`crate::jelly`]): higher spreads it wider, and softer.
+pub const JELLY_SPREAD: f32 = 2.33;
+/// How much stretching along one axis pulls the other in, per pixel or share stretched: a squished
+/// thing keeps about its size.
+pub const BULGE: f32 = 0.5;
+
+/// How far a sideways nudge pushes the whole island, and an up or down one lifts it, in logical
+/// pixels at the furthest.
+pub const NUDGE_PUSH: f32 = 5.0;
+pub const NUDGE_LIFT: f32 = 0.5;
+/// How much further than its island a sideways nudge pushes the item that asked for it.
+pub const NUDGE_KICK: f32 = 2.5;
+/// How much a kicked item squishes per pixel it's out: narrower by this share, taller by the
+/// bulge of it. About 7 % narrower at the furthest.
 pub const NUDGE_KICK_SQUISH: f32 = 0.03;
-/// About how long a nudge takes to settle: a push is back within 5 % of its peak by then. A
-/// nudge asked to last longer (`Effect::nudge_lasting`) plays the same motion slowed down by as
-/// much.
-pub const NUDGE_LASTING: Duration = Duration::from_millis(190);
-/// The jelly an island's outline is made of ([`crate::jelly`]): how hard each piece of the edge
-/// is pulled back where it belongs, its damping ratio (just under critical, so it settles without
-/// wobbling), and how hard it's pulled toward its neighbors, which is what smooths a poke out.
-pub const JELLY_STIFFNESS: f32 = 600.0;
-pub const JELLY_DAMPING: f32 = 0.85;
-pub const JELLY_COUPLING: f32 = 1400.0;
-/// How hard a nudge pokes the jelly, outward in logical pixels per second. The bump: the edge
-/// over the nudged item, going up or down, about 2 px out at its peak. The lean: the end (or
-/// edge) the island is going toward swells and the one it's leaving flattens, about 1.5 px each
-/// way.
-pub const JELLY_BUMP: f32 = 150.0;
-pub const JELLY_LEAN: f32 = 120.0;
-/// A pushed island (one sliding as a whole, because a neighbor made room for itself) piles up at
-/// the end it's pushed from: that end of its top and bottom edges swells out, kicked up to this
-/// many logical pixels per second for as long as it slides at `PUSH_FULL_SPEED` or more (less,
-/// slower), working up to that over `PUSH_BUILD`. It counts as sliding above `PUSH_MOVING`. When
-/// it stops, the swell is kicked across to the other end, at up to `PUSH_WIGGLE`, and the jelly
-/// settles from there. About 1 px at most each way.
-pub const PUSH_LEAN: f32 = 45.0;
 /// How long the squash of an island showing or hiding its collapsible items lasts: a nudge's
 /// motion, slowed down to this.
 pub const COLLAPSE_SQUASH: Duration = Duration::from_millis(450);
 /// How long a collapsed item stays out after its widget nudges, from the last nudge.
 pub const REVEAL_SHOWN: Duration = Duration::from_millis(2000);
+/// How far a nudge pokes the jelly out, in logical pixels. The bump: the edge over the nudged
+/// item, going up or down. The lean: the end (or edge) the island is going toward swells and the
+/// one it's leaving flattens, each way.
+pub const JELLY_BUMP: f32 = 2.0;
+pub const JELLY_LEAN: f32 = 1.5;
+/// A pushed island (one sliding as a whole, because a neighbor made room for itself) piles up at
+/// the end it's pushed from: that end of its top and bottom edges is poked out to `PUSH_LEAN`,
+/// every frame for as long as it slides at `PUSH_FULL_SPEED` or more (less, slower), working up
+/// to that over `PUSH_BUILD`, which piles up to about 1 px. It counts as sliding above
+/// `PUSH_MOVING`. When it stops, the swell is poked across to the other end, `PUSH_WIGGLE` out,
+/// and the jelly settles from there.
+pub const PUSH_LEAN: f32 = 0.6;
+pub const PUSH_WIGGLE: f32 = 1.2;
 pub const PUSH_BUILD: Duration = Duration::from_millis(250);
-pub const PUSH_WIGGLE: f32 = 90.0;
 pub const PUSH_FULL_SPEED: f32 = 600.0;
 pub const PUSH_MOVING: f32 = 20.0;
+/// How much an opening popover is squeezed in from the sides as it sets off, as a share of the
+/// panel's width (and taller, by the bulge), easing back as it grows.
+pub const SQUISH_OPEN: f32 = 0.055;
+/// How much a closing popover's island splats against the top, in logical pixels: flatter, and
+/// wider, before the bulge. Wider stays inside the `EDGE_GAP` from the screen's sides.
+pub const SPLAT_FLATTEN: f32 = 1.4;
+pub const SPLAT_WIDEN: f32 = 3.5;
+/// A closing popover splats as it lands, so the splat peaks as the shape arrives: when its bottom
+/// edge will be this close to its island's, in logical pixels, by the time REACT peaks.
+pub const SQUISH_LAND: f32 = 1.0;
 /// How wide a nudge's bump in an island's edge is, end to end.
 pub const NUDGE_BUMP_WIDTH: f32 = 176.0;
 /// The furthest the outline reaches out of the island: it stays inside `EDGE_GAP` above and at
