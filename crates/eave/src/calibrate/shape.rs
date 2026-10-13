@@ -195,10 +195,10 @@ pub fn shown(shape: &Shape, width: u32, height: u32) -> Vec<bool> {
         );
         crossings.sort_unstable_by(f32::total_cmp);
         let row = &mut shown[y * w..(y + 1) * w];
-        for pair in crossings.chunks_exact(2) {
+        for [from, to] in crossings.as_chunks::<2>().0 {
             // The pixels whose centers lie from one crossing up to the next.
-            let first = (pair[0] - 0.5).ceil().clamp(0.0, w as f32) as usize;
-            let end = (pair[1] - 0.5).ceil().clamp(0.0, w as f32) as usize;
+            let first = (from - 0.5).ceil().clamp(0.0, w as f32) as usize;
+            let end = (to - 0.5).ceil().clamp(0.0, w as f32) as usize;
             row[first..end.max(first)].fill(true);
         }
     }

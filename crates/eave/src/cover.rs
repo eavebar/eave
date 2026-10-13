@@ -169,7 +169,7 @@ fn content_color(pixels: &[u8]) -> Option<Color> {
     let mut weight = [0.0f32; HUES];
     let mut sum = [[0.0f32; 3]; HUES];
     let count = pixels.len() / 4;
-    for pixel in pixels.chunks_exact(4) {
+    for pixel in pixels.as_chunks::<4>().0 {
         let [r, g, b, a] = [0, 1, 2, 3].map(|i| f32::from(pixel[i]) / 255.0);
         let max = r.max(g).max(b);
         let min = r.min(g).min(b);
