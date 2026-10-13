@@ -24,7 +24,7 @@ pub fn register(registry: &mut Registry) {
 pub struct Config {
     /// Seconds a notification shows, for notifications that don't say.
     timeout: u64,
-    /// How many notifications the popover keeps.
+    /// How many notifications the popover's History tab keeps, and its first tab at most.
     history: usize,
 }
 
@@ -32,7 +32,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             timeout: 5,
-            history: 50,
+            history: 100,
         }
     }
 }
@@ -50,8 +50,10 @@ enum Status {
 pub struct Notifications {
     config: Config,
     status: Status,
-    /// The latest notifications, newest first.
-    history: Vec<Notification>,
+    /// The notifications still waiting for you, newest first: the popover's first tab.
+    inbox: Vec<Notification>,
+    /// Every notification that arrived, newest first, whatever became of it: the History tab.
+    past: Vec<Notification>,
     /// The ones shown in the island, newest first.
     shown: Vec<u32>,
     /// The ones that arrived since the popover was last opened, and that you haven't dealt with
@@ -61,6 +63,8 @@ pub struct Notifications {
     open: bool,
     /// The one the popover's list shows all of, with its actions.
     expanded: Option<u32>,
+    /// The one the History tab shows all of.
+    expanded_past: Option<u32>,
     /// The time the popover's "ago"s are counted from.
     now: SystemTime,
 }
@@ -78,6 +82,8 @@ pub enum Message {
     Press(u32),
     /// A click on it in the popover's list: shows all of it, and its actions, or hides them again.
     Expand(u32),
+    /// The same, in the History tab.
+    ExpandPast(u32),
     Clear,
     ToggleQuiet,
     Opened,
@@ -93,12 +99,14 @@ impl Widget for Notifications {
         let notifications = Self {
             config,
             status: Status::Starting,
-            history: Vec::new(),
+            inbox: Vec::new(),
+            past: Vec::new(),
             shown: Vec::new(),
             unread: Vec::new(),
             quiet: false,
             open: false,
             expanded: None,
+            expanded_past: None,
             now: SystemTime::now(),
         };
         (notifications, Task::none())
@@ -133,7 +141,7 @@ impl Widget for Notifications {
             }
             Message::Press(id) => {
                 let default = self
-                    .history
+                    .inbox
                     .iter()
                     .find(|notification| notification.id == id)
                     .and_then(Notification::default_action);
@@ -146,8 +154,12 @@ impl Widget for Notifications {
                 self.expanded = (self.expanded != Some(id)).then_some(id);
                 Effect::none()
             }
+            Message::ExpandPast(id) => {
+                self.expanded_past = (self.expanded_past != Some(id)).then_some(id);
+                Effect::none()
+            }
             Message::Clear => {
-                let ids: Vec<_> = self.history.drain(..).map(|n| n.id).collect();
+                let ids: Vec<_> = self.inbox.drain(..).map(|n| n.id).collect();
                 self.shown.clear();
                 Effect::task(Task::batch(ids.into_iter().map(|id| {
                     Task::future(async move {
@@ -159,9 +171,9 @@ impl Widget for Notifications {
             Message::ToggleQuiet => {
                 self.quiet = !self.quiet;
                 if self.quiet {
-                    let history = &self.history;
+                    let inbox = &self.inbox;
                     self.shown.retain(|id| {
-                        history
+                        inbox
                             .iter()
                             .any(|n| n.id == *id && n.urgency == eave_notify::Urgency::Critical)
                     });
@@ -177,6 +189,7 @@ impl Widget for Notifications {
             Message::Closed => {
                 self.open = false;
                 self.expanded = None;
+                self.expanded_past = None;
                 Effect::none()
             }
             Message::Tick => {
@@ -212,7 +225,7 @@ impl Widget for Notifications {
 
     fn popover(&self) -> Option<Panel<Message>> {
         let mut header = ui::header("Notifications");
-        if !self.history.is_empty() {
+        if !self.inbox.is_empty() {
             header = header.trailing(ui::button(ui::label("Clear"), Message::Clear));
         }
         let status = match &self.status {
@@ -230,15 +243,21 @@ impl Widget for Notifications {
             ui::fill(),
             ui::toggle(self.quiet, Message::ToggleQuiet),
         ]);
-        let list = if self.history.is_empty() {
+        let list = if self.inbox.is_empty() {
             ui::label("No notifications").tone(Tone::Dim)
         } else {
+            ui::list(self.inbox.iter().map(|notification| self.row(notification)))
+        };
+        let past = if self.past.is_empty() {
+            ui::label("Nothing yet").tone(Tone::Dim)
+        } else {
             ui::list(
-                self.history
+                self.past
                     .iter()
-                    .map(|notification| self.row(notification)),
+                    .map(|notification| self.past_row(notification)),
             )
         };
+        let tabs = ui::tabs([("New", list), ("History", past)]);
         let content = ui::column(
             [
                 Some(header),
@@ -246,7 +265,7 @@ impl Widget for Notifications {
             ]
             .into_iter()
             .flatten()
-            .chain([quiet, ui::separator(), list]),
+            .chain([quiet, ui::separator(), tabs]),
         );
         Some(
             Panel::new(content)
@@ -258,7 +277,7 @@ impl Widget for Notifications {
     fn notices(&self) -> Vec<Notice<Message>> {
         self.shown
             .iter()
-            .filter_map(|id| self.history.iter().find(|n| n.id == *id))
+            .filter_map(|id| self.inbox.iter().find(|n| n.id == *id))
             .map(|notification| self.notice(notification))
             .collect()
     }
@@ -285,20 +304,26 @@ impl Notifications {
     fn arrived(&mut self, notification: Notification) -> Effect<Message> {
         let id = notification.id;
         let critical = notification.urgency == eave_notify::Urgency::Critical;
+        // The log keeps everything, a replacement in its old one's place.
+        match self.past.iter_mut().find(|n| n.id == id) {
+            Some(old) => *old = notification.clone(),
+            None => self.past.insert(0, notification.clone()),
+        }
+        self.past.truncate(self.config.history);
         // A replacement takes the old one's place, and isn't news.
-        let replaced = match self.history.iter_mut().find(|n| n.id == id) {
+        let replaced = match self.inbox.iter_mut().find(|n| n.id == id) {
             Some(old) => {
                 *old = notification;
                 true
             }
             None => {
-                self.history.insert(0, notification);
+                self.inbox.insert(0, notification);
                 false
             }
         };
         for gone in self
-            .history
-            .split_off(self.history.len().min(self.config.history))
+            .inbox
+            .split_off(self.inbox.len().min(self.config.history))
         {
             self.shown.retain(|id| *id != gone.id);
             self.unread.retain(|id| *id != gone.id);
@@ -323,7 +348,7 @@ impl Notifications {
     /// Off the screen and out of the list, and no longer news.
     fn forget(&mut self, id: u32) {
         self.shown.retain(|shown| *shown != id);
-        self.history.retain(|notification| notification.id != id);
+        self.inbox.retain(|notification| notification.id != id);
         self.unread.retain(|unread| *unread != id);
     }
 
@@ -405,6 +430,32 @@ impl Notifications {
         let buttons = (!notification.actions.is_empty())
             .then(|| ui::row(std::iter::once(ui::fill()).chain(buttons)));
         ui::column([Some(row), body, buttons].into_iter().flatten())
+    }
+}
+
+impl Notifications {
+    /// A notification in the History tab: what it said and when. A click shows all of it. Its
+    /// actions are gone: the app was told it closed.
+    fn past_row(&self, notification: &Notification) -> ui::Node<Message> {
+        let id = notification.id;
+        let leading = match icon(notification) {
+            Some(icon) => ui::app_icon(icon),
+            None => ui::icon(Icon::Bell { muted: false }),
+        };
+        let expanded = self.expanded_past == Some(id);
+        let subtitle = match notification.body.lines().next() {
+            Some(line) if !line.is_empty() && !expanded => line.to_string(),
+            _ => notification.app.clone(),
+        };
+        let row = ui::list_item(&notification.summary)
+            .subtitle(subtitle)
+            .leading(leading)
+            .trailing(ui::label(ago(notification.received, self.now)))
+            .on_press(Message::ExpandPast(id));
+        if !expanded || notification.body.is_empty() {
+            return row;
+        }
+        ui::column([row, ui::label(&notification.body).tone(Tone::Dim)])
     }
 }
 
@@ -493,11 +544,11 @@ mod tests {
         let _ = widget.update(Message::Expired(2));
         let keys: Vec<_> = widget.notices().iter().map(Notice::key).collect();
         assert_eq!(keys, [1]);
-        assert_eq!(widget.history.len(), 2);
+        assert_eq!(widget.inbox.len(), 2);
 
         let _ = widget.update(Message::Dismiss(1));
         assert!(widget.notices().is_empty());
-        assert_eq!(widget.history.len(), 1);
+        assert_eq!(widget.inbox.len(), 1);
     }
 
     #[test]
@@ -508,8 +559,8 @@ mod tests {
         let mut newer = notification(1, eave_notify::Urgency::Normal);
         newer.summary = "changed".into();
         let _ = widget.update(Message::Server(Event::Notified(newer)));
-        assert_eq!(widget.history.len(), 2);
-        assert_eq!(widget.history[1].summary, "changed");
+        assert_eq!(widget.inbox.len(), 2);
+        assert_eq!(widget.inbox[1].summary, "changed");
         assert_eq!(widget.unread.len(), 2);
     }
 
@@ -519,7 +570,7 @@ mod tests {
         let _ = widget.update(Message::ToggleQuiet);
         arrive(&mut widget, 1);
         assert!(widget.notices().is_empty());
-        assert_eq!(widget.history.len(), 1);
+        assert_eq!(widget.inbox.len(), 1);
         let critical = notification(2, eave_notify::Urgency::Critical);
         let _ = widget.update(Message::Server(Event::Notified(critical)));
         let keys: Vec<_> = widget.notices().iter().map(Notice::key).collect();
@@ -552,7 +603,37 @@ mod tests {
         assert_eq!(widget.expanded, Some(2), "one at a time");
         let _ = widget.update(Message::Expand(2));
         assert_eq!(widget.expanded, None);
-        assert_eq!(widget.history.len(), 2);
+        assert_eq!(widget.inbox.len(), 2);
+    }
+
+    #[test]
+    fn history_keeps_everything_that_arrived_whatever_became_of_it() {
+        let mut widget = Notifications::new(Config {
+            history: 3,
+            ..Config::default()
+        })
+        .0;
+        for id in 1..=4 {
+            arrive(&mut widget, id);
+        }
+        let _ = widget.update(Message::Dismiss(4));
+        let _ = widget.update(Message::Action(3, "reply".into()));
+        let _ = widget.update(Message::Server(Event::Closed(2)));
+        let _ = widget.update(Message::Clear);
+        assert!(widget.inbox.is_empty());
+        let past: Vec<_> = widget.past.iter().map(|n| n.id).collect();
+        assert_eq!(
+            past,
+            [4, 3, 2],
+            "newest first, the oldest past its length gone"
+        );
+
+        // A replacement updates its entry instead of adding one.
+        let mut newer = notification(3, eave_notify::Urgency::Normal);
+        newer.summary = "changed".into();
+        let _ = widget.update(Message::Server(Event::Notified(newer)));
+        assert_eq!(widget.past.len(), 3);
+        assert_eq!(widget.past[1].summary, "changed");
     }
 
     #[test]
@@ -575,7 +656,7 @@ mod tests {
         for id in 1..=3 {
             arrive(&mut widget, id);
         }
-        let ids: Vec<_> = widget.history.iter().map(|n| n.id).collect();
+        let ids: Vec<_> = widget.inbox.iter().map(|n| n.id).collect();
         assert_eq!(ids, [3, 2]);
         assert!(!widget.shown.contains(&1), "its card went with it");
     }
@@ -585,13 +666,13 @@ mod tests {
         let mut widget = notifications();
         arrive(&mut widget, 1);
         let _ = widget.update(Message::Server(Event::Closed(1)));
-        assert!(widget.history.is_empty());
+        assert!(widget.inbox.is_empty());
         assert!(widget.notices().is_empty());
     }
 
     #[test]
     fn config_has_defaults() {
         let config: Config = toml::from_str("timeout = 8").unwrap();
-        assert_eq!((config.timeout, config.history), (8, 50));
+        assert_eq!((config.timeout, config.history), (8, 100));
     }
 }
