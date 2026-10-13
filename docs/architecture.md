@@ -114,8 +114,9 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/jelly.rs             an island's outline as a ring of coupled springs, which nudges poke
   src/slot.rs              item wrapper: clicks, scroll steps, and the pointer for alternates
   src/alternate.rs         alternate: one option at a time with fades; hover, and growing (expand)
+  src/handover.rs          one thing on screen at a time: fade (and slide) out, then the next in; alternates and tabs
   src/switcher.rs          switcher: row of options with a sliding, frame-paced mark
-  src/tabs.rs              tabs: a pill strip of names over the current page, which the host owns
+  src/tabs.rs              tabs: a pill strip of names over the current page, which the host owns; pages hand over
   src/toggle.rs            toggle: a pill whose knob slides over
   src/meter.rs             meter: a thin bar eased to its value, with an optional limit tick
   src/field.rs             text field box, its focus on appearing, and the focus query popovers use
