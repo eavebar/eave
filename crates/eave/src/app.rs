@@ -1062,6 +1062,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                 .nudges(nudges)
                 .width_groups(groups)
                 .toggle(toggle)
+                .live(instances().any(|instance| instance.entry.live))
                 .into(),
         )
     };

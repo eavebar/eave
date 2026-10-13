@@ -1204,3 +1204,23 @@ RSS and CPU are in D-56: a cover costs about 1 MB of RSS whether it came from a 
 - **Cover beside the text:** more compact, but the cover is the popover's picture. The centered layout was picked.
 
 **Cost:** none measurable. One `container` per centered node while the popover is open.
+
+---
+
+## D-60: Live islands, set on the island marker
+
+**Status:** accepted (2026-10-13). Extends [D-55](#d-55-several-islands-per-zone-collapsible-items-and-dividers-set-in-configtoml) and [D-26](#d-26-squircle-islands-that-squeeze-and-spring-back).
+
+**What:** `live = true` beside `island = true` makes that island a live one. For now that only changes its shape:
+- **Snug:** `LIVE_ISLAND_PADDING` (4 px) at its ends instead of `ISLAND_PADDING` (14), and never narrower than it is tall. An island of one icon is about 36 × 30, nearly round.
+- **Rounder:** `LIVE_ISLAND_RADIUS`, half the island's height, with the same smoothing, so it's still a squircle. As it grows into a popover the radius eases back to `ISLAND_RADIUS` over the first island height, so its panel looks like any other.
+
+A marker before the zone's first item sets the first island, so no island has to be empty to be live. `live` that isn't a boolean is warned about and ignored. Every entry of the island carries `live` (`Entry::live`), and the view reads it the way it reads `collapsible`. The island rebuilds its cached shape when it changes.
+
+**Why a property of the island, not a shape flag:** "live" is meant to grow. A live island is one showing something happening now, and it may get more behaviour later. The shape is only the first thing it changes.
+
+**Alternatives:**
+- **`live = true` on an item,** making its island live: like `collapsible`. But it describes the island, and with several items it would be unclear which one decides.
+- **Settable padding and radius:** more knobs than anyone needs, and it makes the look the config's, not the host's (D-13).
+
+**Cost:** none. One more branch in layout and drawing.

@@ -52,6 +52,8 @@ pub struct Island<'a, M> {
     /// Where the toggle is, and whether the collapsible items show.
     toggle_side: Horizontal,
     expanded: bool,
+    /// A live island: snug around its items and rounder.
+    live: bool,
 }
 
 /// The control at one end of an island that shows and hides its collapsible items: there while
@@ -98,7 +100,15 @@ impl<'a, M> Island<'a, M> {
             toggle: None,
             toggle_side: Horizontal::Right,
             expanded: false,
+            live: false,
         }
+    }
+
+    /// Makes it a live island: less room at its ends and rounder corners, so one item in it is
+    /// nearly round. Still a squircle. Its popover panel is like any other.
+    pub fn live(mut self, live: bool) -> Self {
+        self.live = live;
+        self
     }
 
     pub fn align(mut self, align: Horizontal) -> Self {
@@ -175,6 +185,8 @@ struct State {
     /// Whether the last layout made room for the toggle. A hidden one is still laid out, but
     /// takes no room and gets no events.
     toggle_shown: bool,
+    /// Whether it's a live island, so `shape` is rebuilt when that changes.
+    live: bool,
 }
 
 /// How a spring moves: how hard it pulls toward its target, and its damping ratio (below 1 it
@@ -1068,6 +1080,18 @@ fn panel_offset(place: Size, content: Size) -> Vector {
     )
 }
 
+/// The island's corner radius at `height`. A live one's corners are rounder, until it grows into
+/// a popover: they ease to the usual radius over the first island height it grows, so the panel
+/// looks like any other.
+fn radius(live: bool, height: f32) -> f32 {
+    if !live {
+        return theme::ISLAND_RADIUS;
+    }
+    let island = theme::ISLAND_HEIGHT as f32;
+    let grown = ((height - island) / island).clamp(0.0, 1.0);
+    theme::LIVE_ISLAND_RADIUS + (theme::ISLAND_RADIUS - theme::LIVE_ISLAND_RADIUS) * grown
+}
+
 /// Draws the island as it is right now: the shape, the items that show, and the popover panel if
 /// one is given (with its layout).
 #[allow(clippy::too_many_arguments)]
@@ -1118,7 +1142,7 @@ fn draw_island<M>(
             let frame_size = Size::new(shape.width + 2.0 * room.x, shape.height + 2.0 * room.y);
             let geometry = state.shape.draw(renderer, frame_size, |frame| {
                 let size = shape.size();
-                let radius = theme::ISLAND_RADIUS;
+                let radius = radius(state.live, size.height);
                 let smoothing = theme::ISLAND_SMOOTHING;
                 let outline = Rectangle::new(Point::ORIGIN + room, size);
                 // Bent by the jelly and stretched by the drag while they move, both paths the
@@ -1264,6 +1288,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             toggle_shown: false,
             expanded: None,
             own: (0.0, 0.0),
+            live: false,
         })
     }
 
@@ -1280,10 +1305,18 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         _limits: &layout::Limits,
     ) -> layout::Node {
         let height = theme::ISLAND_HEIGHT as f32;
-        let padding = f32::from(theme::ISLAND_PADDING);
+        let padding = f32::from(if self.live {
+            theme::LIVE_ISLAND_PADDING
+        } else {
+            theme::ISLAND_PADDING
+        });
         let spacing = theme::ITEM_SPACING as f32;
         let limits = layout::Limits::new(Size::new(0.0, height), Size::new(f32::INFINITY, height));
         let state = tree.state.downcast_mut::<State>();
+        if state.live != self.live {
+            state.live = self.live;
+            state.shape.clear();
+        }
         state.toggle_shown = (state.hovered || self.expanded) && self.popover.is_none();
         // A hidden toggle takes no room.
         let hidden = (!state.toggle_shown).then_some(self.toggle).flatten();
@@ -1319,6 +1352,8 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         } else {
             x - spacing + padding
         };
+        // A live island is never narrower than round.
+        let width = if self.live { width.max(height) } else { width };
         // An open popover takes the panel's width in the row, so it pushes the islands beside it
         // away instead of covering them. They glide there and back on their own springs. The
         // island itself stays where its popover grows from: at the zone's side, or centered.

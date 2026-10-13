@@ -43,7 +43,7 @@ island = true          # what follows is another island, beside this one
 widget = "battery"
 ```
 
-- `island = true` starts another island in the same zone.
+- `island = true` starts another island in the same zone. Add `live = true` in the same entry to make it a live island, snug around its items and rounder, still a squircle ([D-60](decisions.md)). A marker before the zone's first item sets the first island.
 - `divider = true` puts a line before the next item. It shows only between two items that show.
 - `collapsible = true` hides the item while its island is collapsed, which it is at first. Hover over the island and a chevron appears on the side facing the middle of the screen. Press it to show the hidden items in their places, and again to hide them. A collapsed item whose widget nudges (the volume going up, say) comes out by itself for two seconds after the last nudge, then tucks back.
 

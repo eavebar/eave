@@ -7,7 +7,9 @@
 #
 # Entries without a widget arrange the zone: `island = true` starts another island beside the last,
 # `divider = true` puts a line before the next item. `collapsible = true` on an item hides it until
-# you press the chevron that shows when you hover its island.
+# you press the chevron that shows when you hover its island, or for a moment when it changes.
+# `live = true` beside `island = true` makes that island a live one: snugger and rounder. Before a
+# zone's first item, it applies to the first island.
 
 [[left]]
 widget = "workspaces"

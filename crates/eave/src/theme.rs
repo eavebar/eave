@@ -39,6 +39,10 @@ pub const ISLAND_RADIUS: f32 = 14.0;
 /// 0.6 is the iOS look). On an island too short for the full spread, the curve is squeezed to fit
 /// rather than the smoothing reduced, so a radius up to half the island's height stays smooth.
 pub const ISLAND_SMOOTHING: f32 = 0.6;
+/// A live island's padding at its ends: snug, so an island of one icon is nearly round.
+pub const LIVE_ISLAND_PADDING: u16 = 4;
+/// A live island's corner radius, before smoothing: half its height, as round as it gets.
+pub const LIVE_ISLAND_RADIUS: f32 = ISLAND_HEIGHT as f32 / 2.0;
 /// How far each side of a pressed island moves in, in logical pixels.
 pub const PRESS_INSET: f32 = 1.5;
 /// The most the part of a dragged island under the pointer moves, sideways and up or down. It only

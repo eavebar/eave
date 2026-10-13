@@ -16,6 +16,7 @@
 //!
 //! [[right]]
 //! island = true   # the next items are another island, beside this one
+//! live = true     # optional: a live island, rounder and snugger around its items
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -51,6 +52,8 @@ pub struct Entry {
     pub collapsible: bool,
     /// A divider comes before it.
     pub divider: bool,
+    /// Whether its island is a live one, set on the marker that starts it.
+    pub live: bool,
     pub options: toml::Table,
 }
 
@@ -135,6 +138,7 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
         // one.
         let mut filled = false;
         let mut divider = false;
+        let mut live = false;
         for (index, item) in items.into_iter().enumerate() {
             let at = format!("{}[{index}]", zone.key());
             let toml::Value::Table(mut options) = item else {
@@ -144,8 +148,12 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
             let Some(widget) = options.remove("widget") else {
                 // A marker: a divider, or the start of another island.
                 let marker = |options: &toml::Table, key| options.get(key) == Some(&true.into());
+                let live_option = options.get("live");
                 match options.len() {
-                    1 if marker(&options, "island") => {
+                    1 | 2
+                        if marker(&options, "island")
+                            && (options.len() == 1 || live_option.is_some()) =>
+                    {
                         if divider {
                             config.warnings.push(format!(
                                 "{at}: a divider must come before an item, ignoring it"
@@ -156,11 +164,21 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
                             island += 1;
                             filled = false;
                         }
+                        live = match live_option {
+                            Some(toml::Value::Boolean(value)) => *value,
+                            Some(_) => {
+                                config.warnings.push(format!(
+                                    "{at}: `live` must be true or false, ignoring it"
+                                ));
+                                false
+                            }
+                            None => false,
+                        };
                     }
                     1 if marker(&options, "divider") => divider = true,
                     _ => config.warnings.push(format!(
                         "{at} has no `widget = \"name\"` (or is `divider = true` or \
-                         `island = true`)"
+                         `island = true`, with `live = true` if you like)"
                     )),
                 }
                 continue;
@@ -198,6 +216,7 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
                 island,
                 collapsible,
                 divider: std::mem::take(&mut divider),
+                live,
                 options,
             });
             filled = true;
@@ -333,6 +352,55 @@ mod tests {
                 (name, entry.island, entry.divider, entry.collapsible)
             })
             .collect()
+    }
+
+    #[test]
+    fn live_markers_make_their_island_live() {
+        let config = parse(
+            r#"
+            [[center]]
+            island = true
+            live = true
+            [[center]]
+            widget = "media"
+            [[center]]
+            island = true
+            [[center]]
+            widget = "clock"
+            [[center]]
+            island = true
+            live = true
+            [[center]]
+            widget = "window"
+            [[right]]
+            island = true
+            live = "yes"
+            [[right]]
+            widget = "battery"
+            [[right]]
+            island = true
+            live = true
+            extra = 1
+            "#,
+        )
+        .unwrap();
+        let live: Vec<_> = config
+            .entries
+            .iter()
+            .map(|entry| (entry.widget.as_str(), entry.island, entry.live))
+            .collect();
+        assert_eq!(
+            live,
+            [
+                ("media", 0, true),
+                ("clock", 1, false),
+                ("window", 2, true),
+                ("battery", 0, false),
+            ]
+        );
+        assert_eq!(config.warnings.len(), 2, "{:?}", config.warnings);
+        assert!(config.warnings[0].contains("`live` must be true or false"));
+        assert!(config.warnings[1].contains("has no `widget"));
     }
 
     #[test]
