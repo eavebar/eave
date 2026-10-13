@@ -720,7 +720,10 @@ impl Motion {
             (None, Some(panel)) if popover.present => {
                 self.edges.aim(island);
                 // Splats against the top as it lands. Not while it's open and waiting for room.
-                let landing = self.edges.bottom.value - (island.y + island.height);
+                // Where its bottom will be by the time a splat kicked now peaks.
+                let mut ahead = self.edges.bottom;
+                ahead.advance(REACT.peak_time());
+                let landing = ahead.value - (island.y + island.height);
                 if !popover.open && !popover.squished && landing < theme::SQUISH_LAND {
                     popover.squished = true;
                     self.stretch_y.velocity = -react(theme::SPLAT_FLATTEN);
@@ -2221,7 +2224,9 @@ mod tests {
         let (mut splat, mut spread) = (false, false);
         run(&mut motion, Instant::now(), |motion| {
             let (shape, edges) = (motion.shape(), motion.edges.rect());
-            splat |= shape.height < island.height - 1.0 && shape.width > island.width + 1.0;
+            // Most of it, at least: the shape is still arriving as it peaks.
+            splat |= shape.height < island.height - size(theme::SPLAT_FLATTEN) / 2.0
+                && shape.width > island.width + size(theme::SPLAT_WIDEN) / 2.0;
             assert_eq!(shape.y, edges.y, "the top stays put");
             assert!(
                 shape.width - edges.width < 2.0 * gap,
@@ -2470,8 +2475,10 @@ mod tests {
             let jelly = &motion.jelly;
             let under = jelly.value(Side::Bottom, 65.0 / 400.0);
             furthest = furthest.max(under);
+            // As much as the feel rebounds, the far end can swing out past it.
+            let rebound = 1.3 * REACT.overshoot() * size(theme::JELLY_BUMP);
             assert!(
-                under >= jelly.value(Side::Bottom, 0.9) - 0.05,
+                under >= jelly.value(Side::Bottom, 0.9) - 0.05 - rebound,
                 "it's under the item: {under} {}",
                 jelly.value(Side::Bottom, 0.9)
             );

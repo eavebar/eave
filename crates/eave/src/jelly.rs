@@ -273,9 +273,10 @@ mod tests {
     #[test]
     fn a_stream_of_kicks_levels_off_inside_the_room() {
         let mut jelly = Jelly::default();
+        let speed = poke(theme::JELLY_BUMP);
         let bump = |along: f32| {
             if (along - 0.5).abs() < 0.15 {
-                150.0
+                speed
             } else {
                 0.0
             }
@@ -290,7 +291,7 @@ mod tests {
             let out = jelly.value(Side::Top, 0.5);
             // Never faster than a kick sets it off.
             assert!(
-                (out - previous).abs() <= 150.0 * FRAME,
+                (out - previous).abs() <= speed * FRAME,
                 "{previous} → {out}"
             );
             previous = out;

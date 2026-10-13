@@ -146,9 +146,9 @@ pub const SQUISH_OPEN: f32 = 0.055;
 /// wider, before the bulge. Wider stays inside the `EDGE_GAP` from the screen's sides.
 pub const SPLAT_FLATTEN: f32 = 1.4;
 pub const SPLAT_WIDEN: f32 = 3.5;
-/// How close, in logical pixels, a closing popover's bottom edge comes to its island's before it
-/// splats. The splat peaks about four frames after, as the shape arrives.
-pub const SQUISH_LAND: f32 = 5.0;
+/// A closing popover splats as it lands, so the splat peaks as the shape arrives: when its bottom
+/// edge will be this close to its island's, in logical pixels, by the time REACT peaks.
+pub const SQUISH_LAND: f32 = 1.0;
 /// How wide a nudge's bump in an island's edge is, end to end.
 pub const NUDGE_BUMP_WIDTH: f32 = 176.0;
 /// The furthest the outline reaches out of the island: it stays inside `EDGE_GAP` above and at

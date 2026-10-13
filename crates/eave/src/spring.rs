@@ -36,11 +36,22 @@ impl Feel {
     /// stepping a kick the way [`Spring::advance`] does, not from the exact solution, which the
     /// steps fall a few percent short of, more the more damped.
     pub fn kick(self, peak: f32) -> f32 {
-        let mut spring = self.kicked();
+        peak / self.turn().0
+    }
+
+    /// How long a kick takes to go out as far as it goes, before it turns back.
+    pub fn peak_time(self) -> f32 {
+        self.turn().1
+    }
+
+    /// Where a unit kick turns back, and when.
+    fn turn(self) -> (f32, f32) {
+        let (mut spring, mut time) = (self.kicked(), 0.0);
         while spring.velocity > 0.0 {
             spring.advance(SUBSTEP);
+            time += SUBSTEP;
         }
-        peak / spring.value
+        (spring.value, time)
     }
 
     /// How far past rest it swings back after a kick, as a share of how far it went out: 0 when
