@@ -282,6 +282,10 @@ pub const GULP_SWELL: f32 = 0.08;
 /// How often the charging battery is redrawn: 30 frames a second, cheaper than the compositor's
 /// rate and smooth enough for motion this small.
 pub const BATTERY_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
+/// How long a sprite shows each frame, and how many times it plays its loop when it shows up or
+/// changes before it rests ([D-64](../../../docs/decisions.md)).
+pub const SPRITE_FRAME: Duration = Duration::from_millis(250);
+pub const SPRITE_PLAYS: usize = 2;
 /// A primary press held at least this long is a long press: it plays with the island, but the
 /// item's action and popover don't fire on release.
 pub const LONG_PRESS: Duration = Duration::from_millis(400);

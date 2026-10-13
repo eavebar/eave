@@ -102,6 +102,14 @@ pub enum Kind<M> {
         tint: bool,
         tone: Option<Tone>,
     },
+    Sprite {
+        frames: &'static [&'static [u8]],
+        /// Indices into `frames`, in the order they play.
+        order: &'static [u8],
+        /// Plays for as long as it shows, not only when it shows up or changes.
+        looping: bool,
+        tone: Option<Tone>,
+    },
     Cover {
         url: String,
         /// Shown until the picture is loaded, and instead of it if it can't be.
@@ -270,6 +278,20 @@ pub fn symbol<M>(file: &'static [u8]) -> Node<M> {
     Node(Kind::Image {
         file,
         tint: true,
+        tone: None,
+    })
+}
+
+/// A little animation the plugin ships, like a mascot: `frames` are PNG or SVG files compiled in
+/// with `include_bytes!`, each drawn like an [`image`], and `order` lists which frame shows when,
+/// by index into `frames`. The host shows a frame for a quarter of a second. It plays the loop a
+/// couple of times when it shows up or changes, then rests on the first frame of `order`;
+/// [`Node::looping`] keeps it going. A tone only dims it.
+pub fn sprite<M>(frames: &'static [&'static [u8]], order: &'static [u8]) -> Node<M> {
+    Node(Kind::Sprite {
+        frames,
+        order,
+        looping: false,
         tone: None,
     })
 }
@@ -689,6 +711,16 @@ impl<M> Node<M> {
         self
     }
 
+    /// For a [`sprite`]: plays for as long as it shows, not only when it shows up or changes.
+    /// Every frame redraws the bar, so keep it for what wants your eye, or for popovers. Other
+    /// nodes ignore it.
+    pub fn looping(mut self) -> Self {
+        if let Kind::Sprite { looping, .. } = &mut self.0 {
+            *looping = true;
+        }
+        self
+    }
+
     /// For a [`cover`]: drawn big, as the main picture of a popover, not as an icon. Other nodes
     /// ignore it.
     pub fn large(mut self) -> Self {
@@ -722,6 +754,7 @@ impl<M> Node<M> {
             | Kind::Icon { tone, .. }
             | Kind::AppIcon { tone, .. }
             | Kind::Image { tone, .. }
+            | Kind::Sprite { tone, .. }
             | Kind::Counter { tone, .. }
             | Kind::Meter { tone, .. }
             | Kind::TextInput { tone, .. }
@@ -796,6 +829,17 @@ impl<M> Node<M> {
             Kind::Icon { icon, tone } => Kind::Icon { icon, tone },
             Kind::AppIcon { app_id, tone } => Kind::AppIcon { app_id, tone },
             Kind::Image { file, tint, tone } => Kind::Image { file, tint, tone },
+            Kind::Sprite {
+                frames,
+                order,
+                looping,
+                tone,
+            } => Kind::Sprite {
+                frames,
+                order,
+                looping,
+                tone,
+            },
             Kind::Cover {
                 url,
                 fallback,

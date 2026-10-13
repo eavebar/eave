@@ -23,6 +23,7 @@ use crate::label::Label;
 use crate::markdown;
 use crate::meter::Meter;
 use crate::slider::Slider;
+use crate::sprite::Sprite;
 use crate::switcher::Switcher;
 use crate::tabs::Tabs;
 use crate::text_area::TextArea;
@@ -266,6 +267,7 @@ pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
     match node.into_kind() {
         Kind::AppIcon { app_id, .. } => out.apps.push(app_id),
         Kind::Image { file, .. } => out.files.push(file),
+        Kind::Sprite { frames, .. } => out.files.extend(frames),
         Kind::Cover { url, fallback, .. } => {
             out.covers.push(url);
             wanted(*fallback, out);
@@ -435,6 +437,35 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 .height(theme::ICON_SIZE)
                 .into(),
         },
+        Kind::Sprite {
+            frames,
+            order,
+            looping,
+            tone,
+        } => {
+            let drawn: Option<Vec<_>> = frames
+                .iter()
+                .map(|file| match icons.files.get(&FileKey::of(file)) {
+                    Some(Some(icon)) => Some(icon.handle()),
+                    _ => None,
+                })
+                .collect();
+            match drawn {
+                Some(drawn) => Sprite {
+                    key: frames.as_ptr() as usize ^ (order.as_ptr() as usize).rotate_left(32),
+                    frames: drawn,
+                    order,
+                    looping,
+                    opacity: dim_opacity(tone.unwrap_or(ctx.tone)),
+                }
+                .into(),
+                // Its room, until every frame is drawn.
+                None => Space::new()
+                    .width(theme::ICON_SIZE)
+                    .height(theme::ICON_SIZE)
+                    .into(),
+            }
+        }
         Kind::Cover {
             url,
             fallback,
@@ -1089,5 +1120,24 @@ fn scrollable_style(_: &Theme, status: scrollable::Status) -> scrollable::Style 
         horizontal_rail: rail,
         gap: None,
         ..default
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_sprite_wants_every_frame() {
+        static A: &[u8] = b"<svg/>";
+        static B: &[u8] = b"<svg></svg>";
+        static FRAMES: [&[u8]; 2] = [A, B];
+        let node: Node<()> = eave_api::ui::row([
+            eave_api::ui::sprite(&FRAMES, &[0, 1, 1]),
+            eave_api::ui::image(A),
+        ]);
+        let mut out = Wanted::default();
+        wanted(node, &mut out);
+        assert_eq!(out.files, [A, B, A]);
     }
 }

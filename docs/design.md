@@ -70,6 +70,7 @@ All motion is driven by the compositor's frame callbacks, and stops asking for f
 | Count | counters | `COUNTER_COUNT`, through every value in between |
 | Ease | toggle knob, meter fill, slider line | `TOGGLE_SLIDE`, `METER_EASE`, `SLIDER_GROW`, `SLIDER_EASE` |
 | Gulp | charging battery, something filling | `BATTERY_GULP`, `GULP`, at 30 fps |
+| Flipbook | a plugin's sprite (eave-claude's mascot) | `SPRITE_FRAME` a frame, `SPRITE_PLAYS` loops when it changes, then rests; a frame only when the picture changes |
 
 Springs are for shapes and things the hand moves; they may overshoot a little. Eases are for values and marks; they never overshoot.
 

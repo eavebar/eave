@@ -141,6 +141,11 @@ impl FileIcon {
         AppIcon(self.image.clone()).view(opacity)
     }
 
+    /// The file in its own colors, to draw yourself.
+    pub fn handle(&self) -> image::Handle {
+        self.image.clone()
+    }
+
     /// The file's shape, filled with `color`.
     pub fn symbol<'a, M: 'a>(&self, color: Color) -> Element<'a, M> {
         let mut tinted = self.tinted.borrow_mut();
