@@ -1,7 +1,7 @@
 //! Networking for eave plugins, straight from the kernel over netlink: rtnetlink for links,
 //! addresses and routes, nl80211 for Wi-Fi. It works the same under NetworkManager, iwd,
 //! systemd-networkd, dhcpcd or anything else, because they all configure the same kernel
-//! ([D-23](https://github.com/francescomengarelli/eave/blob/main/docs/decisions.md)).
+//! ([D-23](https://github.com/eavebar/eave/blob/main/docs/decisions.md)).
 //!
 //! One thread serves every widget. It blocks on rtnetlink's multicast groups, so a change
 //! shows at once, and re-reads the Wi-Fi signal every few seconds while the primary connection

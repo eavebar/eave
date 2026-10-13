@@ -40,7 +40,7 @@ Unknown widgets and invalid options are reported on stderr and skipped. They nev
 | `~/code/eave-weather`, `./weather`, `/abs/path` | a local directory, for working on a plugin | `weather` |
 | `someone/tools#cpu` | `github.com/someone/tools` | `cpu`: picks one plugin of a repository that has several |
 
-Built-in widgets come with eave, so they take no `@rev`. The same plugin can appear many times, but always at one revision. An optional top-level `eave = "<source>[@rev]"` says where eave itself comes from. It defaults to `francescomengarelli/eave`, and `eave = "~/code/eave"` builds from a local checkout.
+Built-in widgets come with eave, so they take no `@rev`. The same plugin can appear many times, but always at one revision. An optional top-level `eave = "<source>[@rev]"` says where eave itself comes from. It defaults to `eavebar/eave`, and `eave = "~/code/eave"` builds from a local checkout.
 
 ### Compiling plugins in
 

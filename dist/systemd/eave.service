@@ -4,7 +4,7 @@
 
 [Unit]
 Description=eave status bar
-Documentation=https://github.com/francescomengarelli/eave/blob/main/docs/running.md
+Documentation=https://github.com/eavebar/eave/blob/main/docs/running.md
 PartOf=graphical-session.target
 After=graphical-session.target
 Requisite=graphical-session.target
