@@ -251,10 +251,11 @@ impl<Message> Program<Message> for Panel {
                 );
                 frame.fill(
                     &squircle(mark, ROW / 2.0, theme::ISLAND_SMOOTHING),
-                    faded(theme::SWITCHER_MARK, open_by),
+                    faded(theme::SELECTED_BG, open_by),
                 );
 
                 let mut y = PADDING;
+                let mut rows = 0;
                 for (line, value) in &self.lines {
                     match line {
                         Line::Heading(heading) => {
@@ -270,14 +271,21 @@ impl<Message> Program<Message> for Panel {
                             y += HEADING;
                         }
                         Line::Row(row) => {
+                            // The selected row is white and semibold, like a list's current row;
+                            // the rest sit back.
+                            let (tone, font) = if rows == self.selected {
+                                (eave_api::ui::Tone::Accent, theme::STRONG_FONT)
+                            } else {
+                                (eave_api::ui::Tone::Dim, Font::DEFAULT)
+                            };
                             let middle = y + ROW / 2.0;
                             text(
                                 frame,
                                 row.label(),
                                 left,
                                 middle,
-                                faded(theme::tone(eave_api::ui::Tone::Normal), shown),
-                                Font::DEFAULT,
+                                faded(theme::tone(tone), shown),
+                                font,
                                 iced::alignment::Horizontal::Left.into(),
                             );
                             text(
@@ -285,10 +293,11 @@ impl<Message> Program<Message> for Panel {
                                 value,
                                 right,
                                 middle,
-                                faded(theme::tone(eave_api::ui::Tone::Accent), shown),
-                                theme::STRONG_FONT,
+                                faded(theme::tone(tone), shown),
+                                font,
                                 iced::alignment::Horizontal::Right.into(),
                             );
+                            rows += 1;
                             y += ROW;
                         }
                     }

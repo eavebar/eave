@@ -38,7 +38,9 @@ struct Calibrator {
     editing: Editing,
     selected: Row,
     hidden: bool,
-    pattern: image::Handle,
+    /// The pattern on screen: allocated, so it draws on the very next frame. `None` until the
+    /// first one is.
+    pattern: Option<iced_runtime::image::Allocation>,
     /// Counts the patterns asked for, so one that's late for a newer model is dropped.
     drawing: u64,
 }
@@ -48,8 +50,8 @@ struct Calibrator {
 enum Message {
     /// A key: as pressed, and with Shift applied, and the modifiers.
     Key(Key, Key, Modifiers),
-    /// The pattern for the `drawing`th model.
-    Drawn(u64, image::Handle),
+    /// The pattern for the `drawing`th model, ready to draw.
+    Drawn(u64, iced_runtime::image::Allocation),
 }
 
 /// Runs the calibrator on the focused output until it's saved or left.
@@ -92,19 +94,16 @@ pub fn run() -> Result<(), iced_layershell::Error> {
     let target = output.name.clone();
     iced_layershell::application(
         move || {
-            let pattern = image::Handle::from_rgba(
-                output.width,
-                output.height,
-                shape::pattern(&editing.shape, output.width, output.height),
-            );
-            Calibrator {
+            let mut calibrator = Calibrator {
                 output: output.clone(),
                 editing,
                 selected: Row::Corners,
                 hidden: false,
-                pattern,
+                pattern: None,
                 drawing: 0,
-            }
+            };
+            let task = draw(&mut calibrator);
+            (calibrator, task)
         },
         || "eave-calibrate".to_string(),
         update,
@@ -163,8 +162,9 @@ fn update(calibrator: &mut Calibrator, message: Message) -> Task<Message> {
     match message {
         Message::Key(key, modified, modifiers) => key_pressed(calibrator, key, modified, modifiers),
         Message::Drawn(drawing, pattern) => {
+            // The one before stays on screen until this one is ready, then lets its memory go.
             if drawing == calibrator.drawing {
-                calibrator.pattern = pattern;
+                calibrator.pattern = Some(pattern);
             }
             Task::none()
         }
@@ -227,7 +227,13 @@ fn key_pressed(
     if calibrator.editing.shape == before {
         return Task::none();
     }
-    // The pattern is redrawn off the UI thread: a few milliseconds for a whole screen.
+    draw(calibrator)
+}
+
+/// Draws the pattern for the model as it is now, off the UI thread (a few milliseconds for a
+/// whole screen), and has the renderer take it in before it's shown: an image it hasn't loaded
+/// yet may not show until something else redraws the screen.
+fn draw(calibrator: &mut Calibrator) -> Task<Message> {
     calibrator.drawing += 1;
     let drawing = calibrator.drawing;
     let shape = calibrator.editing.shape;
@@ -238,8 +244,16 @@ fn key_pressed(
                 .await
                 .unwrap_or_default()
         },
-        move |rgba| Message::Drawn(drawing, image::Handle::from_rgba(width, height, rgba)),
+        move |rgba| image::Handle::from_rgba(width, height, rgba),
     )
+    .then(iced_runtime::image::allocate)
+    .then(move |allocated| match allocated {
+        Ok(pattern) => Task::done(Message::Drawn(drawing, pattern)),
+        Err(error) => {
+            eprintln!("eave calibrate: the pattern couldn't be drawn: {error}");
+            Task::none()
+        }
+    })
 }
 
 fn subscription(_: &Calibrator) -> Subscription<Message> {
@@ -279,15 +293,15 @@ fn view(calibrator: &Calibrator) -> Element<'_, Message> {
         selected,
         hidden: calibrator.hidden,
     };
+    let panel = canvas(panel).width(Length::Fill).height(Length::Fill);
+    let Some(pattern) = &calibrator.pattern else {
+        return panel.into();
+    };
     // One pattern pixel to each of the screen's: drawn at its full size, without filtering.
-    let pattern = image(calibrator.pattern.clone())
+    let pattern = image(pattern.handle().clone())
         .width(Length::Fill)
         .height(Length::Fill)
         .content_fit(ContentFit::Fill)
         .filter_method(image::FilterMethod::Nearest);
-    stack![
-        pattern,
-        canvas(panel).width(Length::Fill).height(Length::Fill)
-    ]
-    .into()
+    stack![pattern, panel].into()
 }

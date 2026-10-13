@@ -771,6 +771,7 @@ dependencies = [
  "eave-workspaces",
  "iced",
  "iced_layershell",
+ "iced_runtime",
  "pulldown-cmark",
  "resvg",
  "rustix 1.1.5",
