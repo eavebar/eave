@@ -469,7 +469,8 @@ impl Bar {
         let Some(instance) = self.find(id) else {
             return Hooks::new();
         };
-        if !instance.has_popover {
+        // One in the dormer has no island to grow it out of.
+        if !instance.has_popover || instance.entry.zone == Zone::Dormer {
             return Hooks::new();
         }
         // Opened from a notification or a signal, before its item was ever clicked: on the bar
@@ -557,7 +558,7 @@ impl Bar {
                     keywords: action.keywords,
                 });
             }
-            if instance.has_popover {
+            if instance.has_popover && instance.entry.zone != Zone::Dormer {
                 entries.push(dormer::Entry {
                     instance: instance.id,
                     source: Source::Popover,
@@ -1399,7 +1400,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             // On the side facing the middle of the screen; a center island's on its right.
             let side = match island.zone {
                 Zone::Right => Horizontal::Left,
-                Zone::Left | Zone::Center => Horizontal::Right,
+                Zone::Left | Zone::Center | Zone::Dormer => Horizontal::Right,
             };
             // Hovering shows it; while the items are out, it stays to put them back.
             let toggle = collapsible.then(|| Toggle {
@@ -2696,5 +2697,17 @@ mod tests {
         assert!(rows(&bar).is_empty());
         // A row picked from before goes nowhere.
         dormer(&mut bar, dormer::Event::Run(0));
+    }
+
+    #[test]
+    fn a_widget_in_the_dormer_lists_its_actions_but_has_no_popover() {
+        let mut registry = Registry::new();
+        registry.widget::<Acting>("acting");
+        let (mut bar, _) = Bar::new(registry, config("[[dormer]]\nwidget = \"acting\""));
+        let _ = update(&mut bar, Message::WindowOpened(window::Id::unique()));
+        dormer(&mut bar, dormer::Event::Opened(200.0));
+        assert_eq!(rows(&bar), ["Mute", "Show it"]);
+        dormer(&mut bar, dormer::Event::Run(1));
+        assert!(!bar.is_open(), "no island to grow a popover out of");
     }
 }

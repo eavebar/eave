@@ -18,6 +18,9 @@
 //! island = true   # the next items are another island, beside this one
 //! live = true     # optional: a live island, snug around its items
 //! attach = ["top", "right"]   # optional: flush with these screen edges (D-70)
+//!
+//! [[dormer]]
+//! widget = "apps"   # only in the dormer, with its actions: not in the bar (D-83)
 //! ```
 //!
 //! Four keys sit above the zones. `renderer = "gpu"` (the default) or `"cpu"` (D-67), read when
@@ -50,16 +53,19 @@ pub enum Zone {
     Left,
     Center,
     Right,
+    /// Not in the bar: widgets that are there only for their actions, in the dormer (D-83).
+    Dormer,
 }
 
 impl Zone {
-    pub const ALL: [Zone; 3] = [Zone::Left, Zone::Center, Zone::Right];
+    pub const ALL: [Zone; 4] = [Zone::Left, Zone::Center, Zone::Right, Zone::Dormer];
 
     fn key(self) -> &'static str {
         match self {
             Zone::Left => "left",
             Zone::Center => "center",
             Zone::Right => "right",
+            Zone::Dormer => "dormer",
         }
     }
 }
@@ -576,6 +582,15 @@ fn islands(value: toml::Value, warnings: &mut Vec<String>) -> Islands {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn widgets_can_live_in_the_dormer_alone() {
+        let config = parse("[[dormer]]\nwidget = \"apps\"\nterminal = \"foot\"").unwrap();
+        assert!(config.warnings.is_empty());
+        assert_eq!(config.entries.len(), 1);
+        assert_eq!(config.entries[0].zone, Zone::Dormer);
+        assert_eq!(config.entries[0].options.get("terminal"), Some(&"foot".into()));
+    }
 
     #[test]
     fn the_renderer_is_the_gpu_unless_it_says_cpu() {
