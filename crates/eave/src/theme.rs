@@ -83,24 +83,24 @@ pub const DRAG_RESISTANCE: f32 = 0.5;
 
 /// What the hand moves: the press's squeeze and the drag's stretch, after the pointer and back.
 /// Damped enough that letting go only overshoots a little.
-pub const HAND_RESPONSE: f32 = 0.32;
-pub const HAND_DAMPING: f32 = 0.6;
+pub const HAND_RESPONSE: f32 = 0.26;
+pub const HAND_DAMPING: f32 = 0.75;
 /// What an event kicks out and back: a nudge's push and lift, the nudged item's kick, the jelly's
 /// pokes, a popover's squish and splat. Just under critical, so it comes back without a swing you
 /// can see.
-pub const REACT_RESPONSE: f32 = 0.26;
-pub const REACT_DAMPING: f32 = 0.85;
+pub const REACT_RESPONSE: f32 = 0.20;
+pub const REACT_DAMPING: f32 = 0.92;
 /// The shape and items of an island when its content changes, or it turns into a popover and
 /// back. Damped close to critical, so it settles without wobbling: the squish rides on top.
-pub const MORPH_RESPONSE: f32 = 0.32;
-pub const MORPH_DAMPING: f32 = 0.9;
+pub const MORPH_RESPONSE: f32 = 0.28;
+pub const MORPH_DAMPING: f32 = 0.95;
 /// An island's items fading out as it turns into a popover, and the popover's content fading in
 /// (and back). Quicker than the morph, and critically damped, so a fade never overshoots. Not part
 /// of the language: it's a value, not a shape.
 pub const FADE_RESPONSE: f32 = 0.16;
 pub const FADE_DAMPING: f32 = 1.0;
 /// How far every reaction goes, all together: 1 is as the peaks below say.
-pub const REACT_SIZE: f32 = 1.0;
+pub const REACT_SIZE: f32 = 0.8;
 /// How hard each piece of an island's outline is pulled toward its neighbors, as a share of how
 /// hard REACT pulls it back where it belongs. That pull is what spreads a poke into a smooth curve
 /// ([`crate::jelly`]): higher spreads it wider, and softer.
