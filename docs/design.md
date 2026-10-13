@@ -72,10 +72,10 @@ All motion is driven by the compositor's frame callbacks, and stops asking for f
 
 | Motion | Where | How |
 |---|---|---|
-| Morph | an island's shape and items, a popover opening | `MORPH_*` spring, close to critical: settles without wobbling |
-| Press, drag | an island under the hand | `SPRING_*`, `DRAG_*`: overshoots a little when let go |
-| Squish, splat | a popover setting off, landing back | `SQUISH_*` on top of the morph |
-| Nudge, push, jelly | a volume change, a workspace switch, a pushed neighbor | `NUDGE_*`, `PUSH_*`, `JELLY_*`: the outline is jelly, poked and settling |
+| Morph | an island's shape and items, a popover opening | `MORPH`, close to critical: settles without wobbling |
+| Press, drag | an island under the hand | `HAND`: overshoots a little when let go |
+| Squish, splat | a popover setting off, landing back | `REACT`, on top of the morph: `SQUISH_OPEN`, `SPLAT_*` |
+| Nudge, push, jelly | a volume change, a workspace switch, a pushed neighbor | `REACT`: `NUDGE_*`, `PUSH_*`, `JELLY_*`; the outline is jelly, poked and settling |
 | Mark slide | switcher, tabs | `SWITCHER_SLIDE`, eased |
 | Hand-over | tabs' pages, alternates | `TAB_FADE` / `ALTERNATE_FADE`, sliding out the old way and in the new |
 | Count | counters, a count badge's number | `COUNTER_COUNT`, through every value in between |
@@ -87,10 +87,12 @@ All motion is driven by the compositor's frame callbacks, and stops asking for f
 
 Springs are for shapes and things the hand moves; they may overshoot a little. Eases are for values and marks; they never overshoot.
 
+The springs speak one motion language ([D-83](decisions.md)), so everything that moves feels like the same stuff. There are three feels, each a response (how long one swing takes) and a damping ratio, in `theme.rs`. Anything the hand moves rides `HAND`. Anything an event kicks out and back rides `REACT`. Anything going somewhere rides `MORPH`. A motion says how far it goes, in pixels, and the feel works out the kick. `REACT_SIZE` scales every reaction at once, and `BULGE` is how much a squish along one axis pulls the other in, wherever something squishes.
+
 ## Adding something new
 
 - Start from black and white. Show a state with brightness first. Use a signal color only when the state is news (failing, low, charging). Use the content color only when the content has one.
 - Mark "current" the way the table above does. Don't invent a new way.
-- Animate any change of shape or value, and reuse an existing spring or duration from `theme.rs`. Add a new constant only if none of them fits, and say why next to it.
+- Animate any change of shape or value, and reuse an existing spring or duration from `theme.rs`. A new reaction rides `HAND`, `REACT` or `MORPH`, says how far it goes rather than how fast, and never gets a feel of its own. Add a new constant only if none of them fits, and say why next to it.
 - Keep it thin at rest. Let it grow under the pointer, not before.
 - Plugins never see any of this. They name a `Tone` or a primitive, and the host draws it ([D-11](decisions.md), [D-13](decisions.md)).

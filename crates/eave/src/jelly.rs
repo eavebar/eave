@@ -9,13 +9,21 @@
 
 use iced::{Point, Rectangle};
 
-use crate::spring::{REST_DISTANCE, REST_SPEED, SUBSTEP};
+use crate::spring::{REACT, REST_DISTANCE, REST_SPEED, SUBSTEP};
 use crate::theme;
 
 /// Springs across the top and the bottom, and down each side.
 const ACROSS: usize = 24;
 const DOWN: usize = 6;
 const RING: usize = 2 * (ACROSS + DOWN);
+
+/// How fast to poke a piece of the ring so the edge goes out about `peak` there, at its furthest
+/// (`REACT_SIZE` included). A poke is shared with the neighbors as it goes, so the ring goes out
+/// less far than one spring alone: by about `SHARED`, for pokes as wide as a nudge's.
+pub fn poke(peak: f32) -> f32 {
+    const SHARED: f32 = 1.3;
+    REACT.kick(peak * theme::REACT_SIZE) * SHARED
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
@@ -81,9 +89,10 @@ impl Jelly {
     }
 
     pub fn advance(&mut self, seconds: f32) {
-        let stiffness = theme::JELLY_STIFFNESS;
-        let damping = 2.0 * theme::JELLY_DAMPING * stiffness.sqrt();
-        let coupling = theme::JELLY_COUPLING;
+        // Each piece rides REACT, like everything else an event kicks.
+        let stiffness = REACT.stiffness;
+        let damping = 2.0 * REACT.damping * stiffness.sqrt();
+        let coupling = theme::JELLY_SPREAD * stiffness;
         let mut left = seconds;
         while left > 0.0 {
             let dt = left.min(SUBSTEP);
