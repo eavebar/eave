@@ -1,0 +1,5 @@
+# Plugin manifest, beside the crate's Cargo.toml.
+[plugin]
+name = "apps"
+description = "Installed apps in the dormer: type a name to launch it"
+api = "0.1"
