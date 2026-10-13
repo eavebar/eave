@@ -6,7 +6,7 @@
 //! things to the end. The bar has no width to give, so those collapse to their content.
 
 use eave_api::erased::AnyMessage;
-use eave_api::ui::{Kind, Node, Tone};
+use eave_api::ui::{Kind, Node, NoticeParts, Tone, Urgency};
 use iced::widget::scrollable::{self, Scrollbar};
 use iced::widget::{
     Space, button, column, container, mouse_area, row, rule, slider, text, text_input,
@@ -35,6 +35,104 @@ pub fn node<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage
 /// A popover's content, laid out at the panel's width.
 pub fn panel<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage> {
     render(node, Ctx::new(Place::Panel), icons)
+}
+
+/// The line height of a notification's body, relative to its size: iced's default.
+const LINE_HEIGHT: f32 = 1.3;
+
+/// A notification's card, laid out at the panel's width: where it's from and a close button, the
+/// summary, the body cut off after a few lines, then its actions. A click anywhere else on it
+/// sends its `on_press`.
+pub fn notice<'a>(notice: NoticeParts<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage> {
+    let tone = match notice.urgency {
+        Urgency::Critical => Tone::Critical,
+        Urgency::Normal | Urgency::Low => Tone::Dim,
+    };
+    let ctx = Ctx::new(Place::Panel);
+    let from = notice.app_icon.as_deref().or(notice.app.as_deref());
+    let app = from
+        .map(|app_id| container(app_icon(app_id, Tone::Normal, icons)).center(theme::ICON_SIZE));
+    let name = notice.app.map(|name| {
+        Clip::new(
+            text(name)
+                .size(theme::SMALL_SIZE)
+                .font(theme::STRONG_FONT)
+                .color(theme::tone(tone))
+                .wrapping(text::Wrapping::None),
+            theme::ISLAND_BG,
+        )
+    });
+    let close = notice.on_dismiss.map(|message| {
+        button(
+            container(icon::view(
+                eave_api::ui::Icon::Close,
+                theme::tone(Tone::Dim),
+            ))
+            .center(Length::Fixed(theme::NOTICE_CLOSE)),
+        )
+        .on_press(message)
+        .padding(0)
+        .style(icon_button_style)
+    });
+    let top = row![]
+        .push(app)
+        .push(name)
+        .push(fill(ctx))
+        .push(close)
+        .spacing(theme::SPACING)
+        .align_y(alignment::Vertical::Center);
+
+    let summary_tone = if notice.urgency == Urgency::Low {
+        Tone::Dim
+    } else {
+        Tone::Normal
+    };
+    let summary = text(notice.summary)
+        .size(theme::TEXT_SIZE)
+        .font(theme::STRONG_FONT)
+        .color(theme::tone(summary_tone))
+        .wrapping(text::Wrapping::WordOrGlyph);
+    let body = notice.body.filter(|body| !body.is_empty()).map(|body| {
+        let line = (theme::TEXT_SIZE * LINE_HEIGHT).ceil();
+        container(
+            text(body)
+                .size(theme::TEXT_SIZE)
+                .line_height(LINE_HEIGHT)
+                .color(theme::tone(Tone::Dim))
+                .wrapping(text::Wrapping::WordOrGlyph),
+        )
+        .max_height(line * theme::NOTICE_BODY_LINES)
+        .clip(true)
+    });
+    let actions = (!notice.actions.is_empty()).then(|| {
+        let buttons = notice
+            .actions
+            .into_iter()
+            .enumerate()
+            .map(|(index, (label, message))| {
+                let button = eave_api::ui::button(eave_api::ui::label(label), message);
+                // The first is the main action.
+                let button = if index == 0 {
+                    button.prominent()
+                } else {
+                    button
+                };
+                render(button, ctx, icons)
+            });
+        row![fill(ctx)].extend(buttons).spacing(theme::SPACING)
+    });
+    let card = column![top, summary]
+        .push(body)
+        .push(actions)
+        .spacing(4)
+        .width(Length::Fill);
+    match notice.on_press {
+        Some(message) => mouse_area(card)
+            .on_press(message)
+            .interaction(iced::mouse::Interaction::Pointer)
+            .into(),
+        None => card.into(),
+    }
 }
 
 /// Every app id `node` shows an icon for, so the host can load the ones it doesn't have.

@@ -10,6 +10,11 @@
 //! and reports when it's done. The panel lives in an overlay, so it's laid out against the whole
 //! surface, drawn over the other islands, and sees events first.
 //!
+//! Notification cards (toasts) grow out of an island too, from its underside, while the island
+//! stays itself. Each card is its own squircle, stacked down below the island newest first. Its
+//! edges spring out from the island to the card's place, then its content fades in. Leaving, it
+//! fades and folds back up into the island, and the cards below slide up into its place.
+//!
 //! It only watches pointer events on the items and never captures them, so the items work exactly
 //! as they would without it. Like the switcher, it steps one frame at a time when the compositor
 //! asks, and stops asking once everything is at rest.
@@ -44,6 +49,8 @@ pub struct Island<'a, M> {
     nudges: Vec<(u64, (u64, NudgeRequest))>,
     /// Each item's width group: items in the same one are as wide as the widest of them.
     groups: Vec<Option<&'a str>>,
+    /// Notification cards growing out of it, newest first. Not while it has a popover.
+    toasts: Vec<Toast<'a, M>>,
 }
 
 /// What an island turns into while it's a popover.
@@ -56,6 +63,20 @@ pub struct Popover<'a, M> {
     pub on_closed: M,
 }
 
+/// A notification card that grows out of the island.
+pub struct Toast<'a, M> {
+    /// Tells cards apart from one view to the next.
+    pub key: (u64, u64),
+    pub content: Element<'a, M>,
+    /// Going away: it fades and folds back into the island, then sends `on_gone`.
+    pub leaving: bool,
+    /// Where the card goes, in surface coordinates, whenever that changes.
+    pub on_placed: Box<dyn Fn(Rectangle) -> M + 'a>,
+    /// The pointer came onto the card (true) or left it (false).
+    pub on_hover: Box<dyn Fn(bool) -> M + 'a>,
+    pub on_gone: M,
+}
+
 impl<'a, M> Island<'a, M> {
     pub fn new(items: impl IntoIterator<Item = (u64, Element<'a, M>)>) -> Self {
         let (keys, items) = items.into_iter().unzip();
@@ -66,6 +87,7 @@ impl<'a, M> Island<'a, M> {
             popover: None,
             nudges: Vec::new(),
             groups: Vec::new(),
+            toasts: Vec::new(),
         }
     }
 
@@ -86,6 +108,12 @@ impl<'a, M> Island<'a, M> {
         self
     }
 
+    /// Notification cards to grow out of the island, newest first.
+    pub fn toasts(mut self, toasts: Vec<Toast<'a, M>>) -> Self {
+        self.toasts = toasts;
+        self
+    }
+
     /// Each item's width group, in the order of the items.
     pub fn width_groups(mut self, groups: Vec<Option<&'a str>>) -> Self {
         self.groups = groups;
@@ -102,6 +130,14 @@ struct State {
     shape_bent: Cell<bool>,
     /// The popover panel's widget state, while there is one.
     panel: Option<Tree>,
+    /// Each notification card's motion and widget state, in the order of the cards.
+    toasts: Vec<ToastState>,
+}
+
+struct ToastState {
+    key: (u64, u64),
+    tree: Tree,
+    motion: ToastMotion,
 }
 
 /// How a spring moves: how hard it pulls toward its target, and its damping ratio (below 1 it
@@ -1037,6 +1073,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             shape: Cache::new(),
             shape_bent: Cell::new(false),
             panel: None,
+            toasts: Vec::new(),
         })
     }
 
@@ -1127,6 +1164,26 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             (Some(popover), None) => *panel = Some(Tree::new(&popover.content)),
             (None, _) => *panel = None,
         }
+        let state = tree.state.downcast_mut::<State>();
+        let mut old = std::mem::take(&mut state.toasts);
+        state.toasts = self
+            .toasts
+            .iter()
+            .map(
+                |toast| match old.iter().position(|old| old.key == toast.key) {
+                    Some(index) => {
+                        let mut kept = old.swap_remove(index);
+                        kept.tree.diff(&toast.content);
+                        kept
+                    }
+                    None => ToastState {
+                        key: toast.key,
+                        tree: Tree::new(&toast.content),
+                        motion: ToastMotion::default(),
+                    },
+                },
+            )
+            .collect();
     }
 
     fn operate(
@@ -1258,14 +1315,33 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         translation: Vector,
     ) -> Option<overlay::Element<'b, M, iced::Theme, iced::Renderer>> {
         if self.popover.is_none() {
-            return overlay::from_children(
-                &mut self.items,
-                tree,
-                layout,
-                renderer,
-                viewport,
-                translation,
-            );
+            // The items' own overlays, and the notification cards above them.
+            let Tree {
+                state, children, ..
+            } = tree;
+            let mut overlays: Vec<_> = self
+                .items
+                .iter_mut()
+                .zip(children)
+                .zip(layout.children())
+                .filter_map(|((item, tree), layout)| {
+                    item.as_widget_mut()
+                        .overlay(tree, layout, renderer, viewport, translation)
+                })
+                .collect();
+            if !self.toasts.is_empty() {
+                overlays.push(overlay::Element::new(Box::new(Toasts {
+                    toasts: &mut self.toasts,
+                    states: &mut state.downcast_mut::<State>().toasts,
+                    island: layout.bounds() + translation,
+                    align: self.align,
+                })));
+            }
+            return match overlays.len() {
+                0 => None,
+                1 => overlays.pop(),
+                _ => Some(overlay::Group::with_children(overlays).overlay()),
+            };
         }
         Some(overlay::Element::new(Box::new(Morph {
             island: self,
@@ -1481,6 +1557,427 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
         } else {
             inner
         }
+    }
+}
+
+/// One notification card's motion. Positions are in surface coordinates; the fade goes from 0
+/// (hidden) to 1 (shown).
+#[derive(Debug)]
+struct ToastMotion {
+    /// Where the card goes, once laid out.
+    rect: Option<Rectangle>,
+    /// Whether the surface is tall enough to show it. Until it is, the card waits in the island.
+    fits: bool,
+    /// The drawn shape's edges. They start at the island's underside.
+    edges: Option<Edges>,
+    /// Squeezed in from the sides as it sets off, like a popover.
+    stretch_x: Spring,
+    content: Spring,
+    leaving: bool,
+    squished: bool,
+    /// Whether the host has been told it's gone.
+    gone: bool,
+    /// The last place reported to the host.
+    reported: Option<Rectangle>,
+    hovered: bool,
+    last: Option<Instant>,
+}
+
+impl Default for ToastMotion {
+    fn default() -> Self {
+        Self {
+            rect: None,
+            fits: false,
+            edges: None,
+            stretch_x: Spring::new(0.0, SQUISH),
+            content: Spring::new(0.0, FADE),
+            leaving: false,
+            squished: false,
+            gone: false,
+            reported: None,
+            hovered: false,
+            last: None,
+        }
+    }
+}
+
+/// Where a card grows from and folds back to: a sliver along the island's underside.
+fn underside(island: Rectangle) -> Rectangle {
+    Rectangle::new(
+        Point::new(island.x, island.y + island.height),
+        Size::new(island.width, 0.0),
+    )
+}
+
+impl ToastMotion {
+    /// Points the shape and the fade where they should go now, given where the island is. The
+    /// content comes in once the shape is more than halfway out.
+    fn aim(&mut self, island: Rectangle) {
+        let origin = underside(island);
+        let edges = self.edges.get_or_insert_with(|| Edges::at(origin));
+        match self.rect.filter(|_| self.fits && !self.leaving) {
+            Some(rect) => {
+                edges.aim(rect);
+                if !self.squished {
+                    self.squished = true;
+                    self.stretch_x.velocity = -theme::SQUISH_OPEN_SQUEEZE * rect.width;
+                }
+                self.content.target = if edges.progress(origin, rect) > 0.5 {
+                    1.0
+                } else {
+                    0.0
+                };
+            }
+            None => {
+                edges.aim(origin);
+                self.content.target = 0.0;
+            }
+        }
+    }
+
+    fn springs(&mut self) -> impl Iterator<Item = &mut Spring> {
+        let edges = self.edges.as_mut().map(|edges| {
+            [
+                &mut edges.left,
+                &mut edges.top,
+                &mut edges.right,
+                &mut edges.bottom,
+            ]
+        });
+        [&mut self.stretch_x, &mut self.content]
+            .into_iter()
+            .chain(edges.into_iter().flatten())
+    }
+
+    fn at_rest(&mut self) -> bool {
+        self.springs().all(|spring| spring.at_rest())
+    }
+
+    /// Advances to `now`. Returns whether another frame is needed.
+    fn step(&mut self, now: Instant, island: Rectangle) -> bool {
+        self.aim(island);
+        if self.at_rest() {
+            self.last = None;
+            return false;
+        }
+        let elapsed = self
+            .last
+            .map_or(Duration::ZERO, |last| now.saturating_duration_since(last))
+            .min(MAX_FRAME)
+            .as_secs_f32();
+        self.last = Some(now);
+        for spring in self.springs() {
+            spring.advance(elapsed);
+        }
+        self.aim(island);
+        if self.at_rest() {
+            self.springs().for_each(Spring::settle);
+            self.last = None;
+            return false;
+        }
+        true
+    }
+
+    /// Whether a leaving card is all the way back in the island, and nobody's been told yet.
+    fn gone(&mut self) -> bool {
+        if self.leaving && !self.gone && self.at_rest() {
+            self.gone = true;
+            return true;
+        }
+        false
+    }
+
+    /// The shape as it's drawn: its edges, squeezed about their center.
+    fn shape(&self) -> Option<Rectangle> {
+        let edges = self.edges?.rect();
+        let width = (edges.width + self.stretch_x.value).max(0.0);
+        Some(Rectangle::new(
+            Point::new(edges.center_x() - width / 2.0, edges.y),
+            Size::new(width, edges.height),
+        ))
+    }
+}
+
+/// Where each card goes: as wide as a popover, stacked down from the island newest first, lined
+/// up with the island's left edge, right edge or center, and clear of the surface's sides. Cards
+/// on their way out keep their place and take none from the others.
+fn stack(
+    island: Rectangle,
+    contents: &[(Size, bool)],
+    align: Horizontal,
+    surface_width: f32,
+) -> Vec<Rectangle> {
+    let padding = 2.0 * f32::from(theme::PANEL_PADDING);
+    let gap = f32::from(theme::EDGE_GAP);
+    let mut y = island.y + island.height + theme::NOTICE_GAP;
+    contents
+        .iter()
+        .map(|&(content, leaving)| {
+            let width = theme::PANEL_WIDTH.max(island.width).ceil();
+            let height = (content.height + padding).ceil();
+            let x = match align {
+                Horizontal::Left => island.x,
+                Horizontal::Right => island.x + island.width - width,
+                Horizontal::Center => island.center_x() - width / 2.0,
+            };
+            let x = x.min(surface_width - gap - width).max(gap).round();
+            let rect = Rectangle::new(Point::new(x, y), Size::new(width, height));
+            if !leaving {
+                y += height + theme::NOTICE_GAP;
+            }
+            rect
+        })
+        .collect()
+}
+
+/// An island's notification cards, drawn over everything else.
+struct Toasts<'a, 'b, M> {
+    toasts: &'b mut Vec<Toast<'a, M>>,
+    states: &'b mut Vec<ToastState>,
+    /// The island, in surface coordinates.
+    island: Rectangle,
+    align: Horizontal,
+}
+
+impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Toasts<'_, '_, M> {
+    fn layout(&mut self, renderer: &iced::Renderer, bounds: Size) -> layout::Node {
+        let width = theme::PANEL_WIDTH - 2.0 * f32::from(theme::PANEL_PADDING);
+        let limits = layout::Limits::with_compression(
+            Size::new(width, 0.0),
+            Size::new(width, f32::INFINITY),
+            Size::new(false, true),
+        );
+        let contents: Vec<_> = self
+            .toasts
+            .iter_mut()
+            .zip(self.states.iter_mut())
+            .map(|(toast, state)| {
+                state.motion.leaving = toast.leaving;
+                toast
+                    .content
+                    .as_widget_mut()
+                    .layout(&mut state.tree, renderer, &limits)
+            })
+            .collect();
+        let sizes: Vec<_> = contents
+            .iter()
+            .zip(self.toasts.iter())
+            .map(|(content, toast)| (content.size(), toast.leaving))
+            .collect();
+        let rects = stack(self.island, &sizes, self.align, bounds.width);
+        let children = contents
+            .into_iter()
+            .zip(rects)
+            .zip(self.states.iter_mut())
+            .map(|((content, rect), state)| {
+                let motion = &mut state.motion;
+                // A leaving card stays where it was, and goes back from there.
+                let rect = match motion.rect {
+                    Some(old) if motion.leaving => old,
+                    _ => rect,
+                };
+                motion.rect = Some(rect);
+                motion.fits = rect.y + rect.height <= bounds.height;
+                let offset = panel_offset(rect.size(), content.size());
+                let content = content.move_to(Point::ORIGIN + offset);
+                layout::Node::with_children(rect.size(), vec![content]).move_to(rect.position())
+            })
+            .collect();
+        layout::Node::with_children(bounds, children)
+    }
+
+    fn draw(
+        &self,
+        renderer: &mut iced::Renderer,
+        theme: &iced::Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+    ) {
+        use iced::advanced::Renderer as _;
+
+        // Oldest first, so newer cards sit on top; leaving ones under all of them.
+        let mut cards: Vec<_> = self
+            .toasts
+            .iter()
+            .zip(self.states.iter())
+            .zip(layout.children())
+            .collect();
+        cards.reverse();
+        cards.sort_by_key(|((toast, _), _)| !toast.leaving);
+        for ((toast, state), card) in cards {
+            let motion = &state.motion;
+            let Some(shape) = motion.shape() else {
+                continue;
+            };
+            if shape.width < 1.0 || shape.height < 1.0 {
+                continue;
+            }
+            let bounds = shape.expand(1.0);
+            renderer.with_layer(bounds, |renderer| {
+                let mut frame = iced::widget::canvas::Frame::new(renderer, bounds.size());
+                let outline = Rectangle::new(Point::new(1.0, 1.0), shape.size());
+                let (radius, smoothing) = (theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING);
+                frame.fill(&squircle(outline, radius, smoothing), theme::ISLAND_BG);
+                let inset = Rectangle::new(
+                    Point::new(1.5, 1.5),
+                    Size::new(shape.width - 1.0, shape.height - 1.0),
+                );
+                frame.stroke(
+                    &squircle(inset, radius - 0.5, smoothing),
+                    Stroke::default()
+                        .with_color(theme::ISLAND_BORDER)
+                        .with_width(1.0),
+                );
+                renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
+                    renderer.draw_geometry(frame.into_geometry());
+                });
+
+                let shown = motion.content.value;
+                let content = card.children().next().expect("a card has its content");
+                if shown >= REST_DISTANCE
+                    && let Some(visible) = content.bounds().intersection(&shape)
+                {
+                    renderer.with_layer(shape, |renderer| {
+                        toast.content.as_widget().draw(
+                            &state.tree,
+                            renderer,
+                            theme,
+                            style,
+                            content,
+                            cursor,
+                            &visible,
+                        );
+                        fade(renderer, content.bounds(), shape, shown);
+                    });
+                }
+            });
+        }
+    }
+
+    fn update(
+        &mut self,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &iced::Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, M>,
+    ) {
+        let island = self.island;
+        let mut moving = false;
+        for ((toast, state), card) in self
+            .toasts
+            .iter_mut()
+            .zip(self.states.iter_mut())
+            .zip(layout.children())
+        {
+            let motion = &mut state.motion;
+            let rect = card.bounds();
+            if motion.reported != Some(rect) && !toast.leaving {
+                motion.reported = Some(rect);
+                shell.publish((toast.on_placed)(rect));
+            }
+            let shape = motion.shape().unwrap_or(rect);
+            let content = card.children().next().expect("a card has its content");
+            if !toast.leaving && motion.content.target > 0.0 {
+                toast.content.as_widget_mut().update(
+                    &mut state.tree,
+                    event,
+                    content,
+                    cursor,
+                    renderer,
+                    clipboard,
+                    shell,
+                    &shape,
+                );
+            }
+            let hovered = !toast.leaving
+                && !matches!(event, Event::Mouse(mouse::Event::CursorLeft))
+                && cursor.is_over(shape);
+            if hovered != motion.hovered {
+                motion.hovered = hovered;
+                shell.publish((toast.on_hover)(hovered));
+            }
+            if let Event::Window(window::Event::RedrawRequested(now)) = event {
+                motion.step(*now, island);
+            } else {
+                motion.aim(island);
+            }
+            if motion.gone() {
+                shell.publish(toast.on_gone.clone());
+            }
+            // A press anywhere on a card is the card's, handled or not: it isn't a click on the bar.
+            if let Event::Mouse(mouse::Event::ButtonPressed(_)) = event
+                && cursor.is_over(shape)
+            {
+                shell.capture_event();
+            }
+            moving |= !motion.at_rest();
+        }
+        if moving {
+            shell.request_redraw();
+        }
+    }
+
+    fn operate(
+        &mut self,
+        layout: Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        for ((toast, state), card) in self
+            .toasts
+            .iter_mut()
+            .zip(self.states.iter_mut())
+            .zip(layout.children())
+        {
+            let content = card.children().next().expect("a card has its content");
+            toast
+                .content
+                .as_widget_mut()
+                .operate(&mut state.tree, content, renderer, operation);
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &iced::Renderer,
+    ) -> mouse::Interaction {
+        for ((toast, state), card) in self
+            .toasts
+            .iter()
+            .zip(self.states.iter())
+            .zip(layout.children())
+        {
+            let Some(shape) = state.motion.shape() else {
+                continue;
+            };
+            if !cursor.is_over(shape) {
+                continue;
+            }
+            let content = card.children().next().expect("a card has its content");
+            let inner = if toast.leaving {
+                mouse::Interaction::None
+            } else {
+                toast.content.as_widget().mouse_interaction(
+                    &state.tree,
+                    content,
+                    cursor,
+                    &shape,
+                    renderer,
+                )
+            };
+            // Anything but `None`, so whatever is under the card doesn't see the pointer.
+            return if inner == mouse::Interaction::None {
+                ARROW
+            } else {
+                inner
+            };
+        }
+        mouse::Interaction::None
     }
 }
 
@@ -1994,5 +2491,82 @@ mod tests {
             [30.0, 50.0, 30.0, 10.0]
         );
         assert_eq!(slots(&[30.0, 20.0], &[]), [30.0, 20.0]);
+    }
+    /// Steps a card frame by frame until it rests; returns the frames taken.
+    fn run_toast(
+        motion: &mut ToastMotion,
+        island: Rectangle,
+        mut each: impl FnMut(&ToastMotion),
+    ) -> usize {
+        let mut now = Instant::now();
+        for frame in 0..1000 {
+            if !motion.step(now, island) {
+                return frame;
+            }
+            each(motion);
+            now += FRAME;
+        }
+        panic!("never came to rest");
+    }
+
+    #[test]
+    fn a_card_grows_out_of_the_island_then_shows_its_content() {
+        let island = rect(900.0, 120.0);
+        let card = Rectangle::new(Point::new(700.0, 46.0), Size::new(320.0, 90.0));
+        let mut motion = ToastMotion {
+            rect: Some(card),
+            ..ToastMotion::default()
+        };
+        // Not room for it yet: stays in the island.
+        assert!(!motion.step(Instant::now(), island));
+        assert_eq!(motion.shape(), Some(underside(island)));
+
+        motion.fits = true;
+        let mut content_before_halfway = false;
+        run_toast(&mut motion, island, |motion| {
+            let progress = motion.edges.unwrap().progress(underside(island), card);
+            content_before_halfway |= motion.content.value > REST_DISTANCE && progress < 0.5;
+        });
+        assert!(!content_before_halfway, "content waits for the shape");
+        assert_eq!(motion.shape(), Some(card));
+        assert_eq!(motion.content.value, 1.0);
+        assert!(!motion.gone(), "only a leaving card goes");
+
+        motion.leaving = true;
+        run_toast(&mut motion, island, |_| {});
+        assert_eq!(motion.shape(), Some(underside(island)));
+        assert_eq!(motion.content.value, 0.0);
+        assert!(motion.gone());
+        assert!(!motion.gone(), "told once");
+    }
+
+    #[test]
+    fn cards_stack_down_from_the_island_and_leaving_ones_make_room() {
+        let island = rect(900.0, 120.0);
+        let content = Size::new(296.0, 50.0);
+        let rects = stack(
+            island,
+            &[(content, false), (content, true), (content, false)],
+            Horizontal::Right,
+            1100.0,
+        );
+        let top = island.y + island.height + theme::NOTICE_GAP;
+        let height = 50.0 + 2.0 * f32::from(theme::PANEL_PADDING);
+        assert_eq!(rects[0].y, top);
+        assert_eq!(
+            rects[2].y,
+            top + height + theme::NOTICE_GAP,
+            "the leaving one takes no room"
+        );
+        // Lined up with the island's right edge.
+        assert_eq!(rects[0].x + rects[0].width, island.x + island.width);
+        // Kept clear of the surface's side.
+        let rects = stack(
+            rect(10.0, 60.0),
+            &[(content, false)],
+            Horizontal::Right,
+            1100.0,
+        );
+        assert_eq!(rects[0].x, f32::from(theme::EDGE_GAP));
     }
 }

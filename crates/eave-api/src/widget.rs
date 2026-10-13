@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use serde::de::DeserializeOwned;
 
-use crate::ui::{Item, Panel};
+use crate::ui::{Item, Notice, Panel};
 use crate::{Effect, Subscription, Task};
 
 /// Something that sits in the bar, with an optional popover.
@@ -34,5 +34,14 @@ pub trait Widget: Sized + 'static {
     /// closes the popover. Returning `None` while the popover is open closes it.
     fn popover(&self) -> Option<Panel<Self::Message>> {
         None
+    }
+
+    /// Notifications to show on screen now, newest first.
+    ///
+    /// The host shows them as cards that grow out of the bar, and takes each one away once its
+    /// key is no longer in the list. Keep the notices you mean to show in your state, and drop
+    /// one when it's dismissed or expires.
+    fn notices(&self) -> Vec<Notice<Self::Message>> {
+        Vec::new()
     }
 }

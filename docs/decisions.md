@@ -855,3 +855,27 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 **Why:** one name means one crate means one widget. That makes every reference checkable at build time, and the errors can say what to write instead. Each crate's manifest sits beside its Cargo.toml, so the manifest doesn't need to say where the crate is.
 
 **Cost:** existing manifests have to drop `crate` and `path`. Only eave's own plugins existed. A crate can no longer offer several widgets under one plugin: split it, or put the shared code in a library crate of the collection. Pinning `eave = "…@rev"` to a commit before this change no longer builds with the new eave-build, since that checkout has no collection. The bar itself is unchanged: `config::widget_name` already gave the name, and the bar still reports a widget a plugin didn't register.
+
+---
+
+## D-47: Notices: plugins list notifications, the host draws them as cards
+
+**Status:** accepted (2026-10-13)
+
+**What:** a widget can list notifications to show on screen: `Widget::notices() -> Vec<Notice<Message>>`, newest first, next to `item()` and `popover()`. The host draws each one as a card that grows out of the right island.
+- **A notice is structured, not a node:** a `key`, a summary, and optionally the app's name and icon, a plain-text body, an `Urgency` (`Low`, `Normal`, `Critical`), actions (label and message), `on_press` (a click on the card), `on_dismiss` (its close button) and `expires(after, message)`. The host lays out the card (`kit::notice`): app icon and name with a close button, the summary, the body cut off after four lines, and the actions, with the first one prominent. Critical names the app in the critical tone, and Low dims the summary.
+- **Declarative, diffed by key:** after each of a widget's messages, the host compares its notices with the cards it shows. A new key comes in on top, a changed one updates in place (its time starts over if its text changed), and a missing key leaves. A card that leaves before it was ever on screen just goes. One that was on screen fades and folds back into the island, and the cards below slide up.
+- **The host owns time:** a card's clock runs only while it's on screen, staying and not pointed at. When it runs out, the widget gets the `expires` message, and dropping the notice is up to the widget. Pointing at a card stops its clock, and leaving it gives it at least a second back. One timer is set, for the next card to expire. Nothing ticks.
+- **Where:** cards grow out of the right zone's island (`island::Toast`, its own overlay next to the items' overlays), stacked down from it at popover width, lined up with its right edge. Each is its own squircle. Its edges spring out from a sliver along the island's underside to the card's place, with the popover's opening squish, and its content fades in once the shape is halfway. The bar surface grows to fit the cards, and takes input over them, as for popovers (`fit`). The cards never take the keyboard.
+- **One thing at a time:** while the right island is a popover, or turning back from one, the cards wait off screen with their clocks stopped, and come back once it's closed. Notices that arrive meanwhile wait too.
+- **Which bar:** the focused monitor's. The bar only opens on the active output for now (`StartMode` default), so that's the first bar surface. With a bar per output it will follow Hyprland's `focusedmonv2`.
+
+**Alternatives:**
+- commands on `Effect` (`notify`, `withdraw`): the host would hold state the widget also holds, and the two could drift apart. Declaring them, like `popover()`, keeps one source of truth.
+- a `Node` as the card's content: plugins would lay out notification cards each their own way, which breaks "plugins describe, the host draws".
+- leaving notifications to an external daemon (mako, dunst, swaync): its popups would look nothing like eave and couldn't grow out of an island. With notices, eave works with any engine: eave's own (D-48), or a bridge plugin for another engine that can run without drawing.
+- cards waiting below an open popover: both overlays at once, for an island that would be doing two things.
+
+**Why:** it keeps eave engine-agnostic: whatever receives notifications, the host shows them, in eave's style, with eave's motion. And the plugin only says what a notification is.
+
+**Cost:** no dependencies. Tokio's `time` feature in the host, already in the build through eave-api. With no notices, nothing runs: no timer, no overlay.

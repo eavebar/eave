@@ -1,8 +1,12 @@
 //! The host: holds the widget instances, routes their messages, and owns the bar surfaces. A
 //! popover isn't a surface of its own: the island holding its item morphs into it, and the bar
-//! surface grows to make room while it's there.
+//! surface grows to make room while it's there. Notification cards grow out of the right island
+//! the same way, below it, while it stays itself.
+
+use std::time::{Duration, Instant};
 
 use eave_api::erased::{AnyMessage, ErasedWidget, PopoverRequest};
+use eave_api::ui::{Notice, NoticeParts};
 use eave_api::{NudgeRequest, Registry};
 use iced::alignment::Horizontal;
 use iced::widget::{Space, container, row};
@@ -43,6 +47,14 @@ pub struct Bar {
     icons: Icons,
     /// App ids whose icons are being loaded.
     loading: Vec<String>,
+    /// Notification cards on screen or waiting to be, newest first.
+    toasts: Vec<Toast>,
+    /// Bar surfaces, in the order they opened.
+    windows: Vec<window::Id>,
+    /// Numbers the expiry timer, so only the one set last counts.
+    timer: u64,
+    /// When that timer goes off, if one is set.
+    alarm: Option<Instant>,
 }
 
 struct Instance {
@@ -81,6 +93,34 @@ struct Popover {
     rect: Option<Rectangle>,
 }
 
+/// A notification card: a widget's [`Notice`], as the host keeps it.
+struct Toast {
+    /// The id of the instance it belongs to.
+    instance: u64,
+    /// The notice as the widget last gave it. Kept after the widget drops it, to draw it leaving.
+    notice: NoticeParts<AnyMessage>,
+    /// How long it has left on screen while its clock is stopped. `None` once it has expired, or
+    /// if it never does.
+    left: Option<Duration>,
+    /// When it expires, while its clock runs.
+    deadline: Option<Instant>,
+    hovered: bool,
+    /// The widget dropped it: it's folding back into its island.
+    leaving: bool,
+    /// Where the island put it, in surface coordinates. `None` while it waits to be shown.
+    rect: Option<Rectangle>,
+}
+
+impl Toast {
+    fn key(&self) -> (u64, u64) {
+        (self.instance, self.notice.key)
+    }
+}
+
+/// The time a card gets back when the pointer leaves it, if it had less: enough to read the last
+/// words or reach for its close button.
+const TOAST_GRACE: Duration = Duration::from_secs(1);
+
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -104,6 +144,14 @@ pub enum Message {
     PopoverPlaced(u64, Rectangle),
     /// An island finished turning back from a popover.
     PopoverClosed(u64),
+    /// An island placed a notification card: its instance and key, and where it goes.
+    ToastPlaced(u64, u64, Rectangle),
+    /// The pointer came onto a notification card, or left it.
+    ToastHovered(u64, u64, bool),
+    /// A leaving notification card is back in its island.
+    ToastGone(u64, u64),
+    /// The expiry timer with this number went off.
+    ToastTimer(u64),
     /// A bar surface opened: it takes the pointer only over its strip.
     WindowOpened(window::Id),
     WindowClosed(window::Id),
@@ -126,6 +174,10 @@ impl Bar {
             nudges: 0,
             icons: Icons::new(),
             loading: Vec::new(),
+            toasts: Vec::new(),
+            windows: Vec::new(),
+            timer: 0,
+            alarm: None,
         };
         let task = bar.apply(config);
         (bar, task)
@@ -174,6 +226,21 @@ impl Bar {
             }
         }
 
+        // Cards of an instance that's gone go with it; those of a new one come in.
+        let instances = &self.instances;
+        self.toasts.retain(|toast| {
+            instances
+                .iter()
+                .any(|instance| instance.id == toast.instance)
+        });
+        let ids: Vec<_> = self.instances.iter().map(|instance| instance.id).collect();
+        for id in ids {
+            self.sync_notices(id);
+        }
+        if let Some(window) = self.toast_window() {
+            tasks.push(self.fit(window));
+        }
+
         // A popover whose instance is gone has no island left to morph back into.
         let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.popovers)
             .into_iter()
@@ -198,6 +265,10 @@ impl Bar {
                 kit::app_ids(panel.into_node(), &mut wanted);
             }
         }
+        let notices = self.toasts.iter().map(|toast| &toast.notice);
+        wanted.extend(
+            notices.filter_map(|notice| notice.app_icon.as_ref().or(notice.app.as_ref()).cloned()),
+        );
         let mut tasks = Vec::new();
         for app_id in wanted {
             if self.icons.contains_key(&app_id) || self.loading.contains(&app_id) {
@@ -301,11 +372,17 @@ impl Bar {
     /// Sizes a bar surface to fit its popovers, and lets the pointer through everywhere else: the
     /// bar itself takes input across its whole strip, a popover only over its shape.
     fn fit(&self, window: window::Id) -> Task<Message> {
+        let toasts = self
+            .toasts
+            .iter()
+            .filter(|_| self.toast_window() == Some(window))
+            .filter_map(|toast| toast.rect);
         let rects: Vec<Rectangle> = self
             .popovers
             .iter()
             .filter(|popover| popover.window == window)
             .filter_map(|popover| popover.rect)
+            .chain(toasts)
             .collect();
         let height = rects
             .iter()
@@ -338,6 +415,145 @@ impl Bar {
             }),
         ])
     }
+
+    /// The bar notification cards grow out of: the focused monitor's. The bar only opens on the
+    /// active output for now, so that's the first one; with a bar per output, it will follow
+    /// Hyprland's focused monitor.
+    fn toast_window(&self) -> Option<window::Id> {
+        self.windows.first().copied()
+    }
+
+    /// Whether the cards wait: the right island is a popover, or turning back from one, and an
+    /// island does one thing at a time.
+    fn toasts_held(&self) -> bool {
+        self.popovers.iter().any(|popover| {
+            self.find(popover.instance)
+                .is_some_and(|instance| instance.entry.zone == Zone::Right)
+        })
+    }
+
+    /// Takes in `id`'s notices: new ones come in on top, changed ones are updated in place, and
+    /// ones it no longer lists leave.
+    fn sync_notices(&mut self, id: u64) {
+        let Some(instance) = self.find(id) else {
+            return;
+        };
+        let fresh: Vec<_> = instance
+            .widget
+            .notices()
+            .into_iter()
+            .map(Notice::into_parts)
+            .collect();
+        for toast in self.toasts.iter_mut().filter(|toast| toast.instance == id) {
+            if !fresh.iter().any(|notice| notice.key == toast.notice.key) {
+                toast.leaving = true;
+                toast.left = None;
+                toast.deadline = None;
+            }
+        }
+        // One that never made it on screen has nothing to fold back.
+        self.toasts
+            .retain(|toast| !(toast.leaving && toast.rect.is_none()));
+
+        let mut new = Vec::new();
+        for notice in fresh {
+            let expires = notice.expires.as_ref().map(|(after, _)| *after);
+            let shown = self
+                .toasts
+                .iter_mut()
+                .find(|toast| toast.instance == id && toast.notice.key == notice.key);
+            match shown {
+                Some(toast) => {
+                    // Replaced with something new to read, or brought back: its time starts over.
+                    let changed =
+                        toast.notice.summary != notice.summary || toast.notice.body != notice.body;
+                    if changed || toast.leaving {
+                        toast.left = expires;
+                        toast.deadline = None;
+                    }
+                    toast.leaving = false;
+                    toast.notice = notice;
+                }
+                None => new.push(Toast {
+                    instance: id,
+                    notice,
+                    left: expires,
+                    deadline: None,
+                    hovered: false,
+                    leaving: false,
+                    rect: None,
+                }),
+            }
+        }
+        new.append(&mut self.toasts);
+        self.toasts = new;
+    }
+
+    /// While the cards wait, they're off screen, and a leaving one is simply gone.
+    fn hold_toasts(&mut self) {
+        if self.toasts_held() {
+            self.toasts.retain(|toast| !toast.leaving);
+            for toast in &mut self.toasts {
+                toast.rect = None;
+                toast.hovered = false;
+            }
+        }
+    }
+
+    /// Starts and stops each card's clock: it runs while the card is on screen, staying and not
+    /// pointed at. Then sets the timer for the next card to expire, unless it's already set.
+    fn run_clocks(&mut self, now: Instant) -> Task<Message> {
+        let held = self.toasts_held();
+        for toast in &mut self.toasts {
+            let running = !held && !toast.leaving && !toast.hovered && toast.rect.is_some();
+            match (running, toast.deadline) {
+                (true, None) => toast.deadline = toast.left.map(|left| now + left),
+                (false, Some(deadline)) => {
+                    toast.left = Some(deadline.saturating_duration_since(now));
+                    toast.deadline = None;
+                }
+                _ => {}
+            }
+        }
+        let next = self.toasts.iter().filter_map(|toast| toast.deadline).min();
+        if next == self.alarm {
+            return Task::none();
+        }
+        self.alarm = next;
+        self.timer += 1;
+        let Some(at) = next else {
+            return Task::none();
+        };
+        let timer = self.timer;
+        // Built inside the future: a tokio timer needs the runtime, which only runs tasks.
+        let sleep = async move { tokio::time::sleep_until(at.into()).await };
+        Task::perform(sleep, move |_| Message::ToastTimer(timer))
+    }
+
+    /// The cards whose time is up by `now`: their widgets get the message they asked for.
+    fn expire(&mut self, now: Instant) -> Hooks {
+        self.alarm = None;
+        let mut hooks = Hooks::new();
+        for toast in &mut self.toasts {
+            if toast.deadline.is_some_and(|deadline| deadline <= now) {
+                toast.deadline = None;
+                toast.left = None;
+                let message = toast
+                    .notice
+                    .expires
+                    .as_ref()
+                    .map(|(_, message)| message.clone());
+                hooks.extend(message.map(|message| (toast.instance, message)));
+            }
+        }
+        hooks
+    }
+
+    fn toast_mut(&mut self, instance: u64, key: u64) -> Option<&mut Toast> {
+        self.toasts
+            .iter_mut()
+            .find(|toast| toast.key() == (instance, key))
+    }
 }
 
 pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
@@ -355,6 +571,8 @@ pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
     }
     tasks.extend(hand_keyboard(bar));
     tasks.extend(bar.load_icons());
+    bar.hold_toasts();
+    tasks.push(bar.run_clocks(Instant::now()));
     Task::batch(tasks)
 }
 
@@ -394,6 +612,13 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             let (task, request, nudge) = instance.widget.update(message).into_parts();
             instance.has_popover = instance.widget.popover().is_some();
             let has_popover = instance.has_popover;
+            let toasts = bar.toasts.len();
+            bar.sync_notices(id);
+            // Never-shown cards that left take no room, but a resize is cheap and keeps it simple.
+            let refit = match bar.toast_window() {
+                Some(window) if bar.toasts.len() != toasts => bar.fit(window),
+                _ => Task::none(),
+            };
             if let Some(nudge) = nudge {
                 bar.nudges += 1;
                 let generation = bar.nudges;
@@ -412,6 +637,7 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             Task::batch([
                 task.map(move |message| Message::Widget(id, message)),
                 send(popover),
+                refit,
             ])
         }
         Message::Pressed(window, id, on_press) => {
@@ -480,8 +706,50 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             let popover = bar.popovers.remove(position);
             bar.fit(popover.window)
         }
-        Message::WindowOpened(window) => bar.fit(window),
+        Message::ToastPlaced(instance, key, rect) => {
+            let Some(toast) = bar.toast_mut(instance, key) else {
+                return Task::none();
+            };
+            toast.rect = Some(rect);
+            match bar.toast_window() {
+                Some(window) => bar.fit(window),
+                None => Task::none(),
+            }
+        }
+        Message::ToastHovered(instance, key, hovered) => {
+            if let Some(toast) = bar.toast_mut(instance, key) {
+                toast.hovered = hovered;
+                // Its clock stopped while pointed at; give it a moment once the pointer is off.
+                if !hovered {
+                    toast.left = toast.left.map(|left| left.max(TOAST_GRACE));
+                }
+            }
+            Task::none()
+        }
+        Message::ToastGone(instance, key) => {
+            let before = bar.toasts.len();
+            bar.toasts
+                .retain(|toast| !(toast.key() == (instance, key) && toast.leaving));
+            match bar.toast_window() {
+                Some(window) if bar.toasts.len() != before => bar.fit(window),
+                _ => Task::none(),
+            }
+        }
+        Message::ToastTimer(timer) if timer == bar.timer => send(bar.expire(Instant::now())),
+        Message::WindowOpened(window) => {
+            if !bar.windows.contains(&window) {
+                bar.windows.push(window);
+            }
+            bar.fit(window)
+        }
         Message::WindowClosed(window) => {
+            if bar.toast_window() == Some(window) {
+                bar.toasts.retain(|toast| !toast.leaving);
+                for toast in &mut bar.toasts {
+                    toast.rect = None;
+                }
+            }
+            bar.windows.retain(|open| *open != window);
             bar.popovers.retain(|popover| popover.window != window);
             if bar.keyboard == Some(window) {
                 bar.keyboard = None;
@@ -529,16 +797,31 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             .filter(|popover| instances().any(|instance| instance.id == popover.instance))
             .max_by_key(|popover| popover.open);
 
-        let island: Element<'_, Message> = if items.is_empty() && popover.is_none() {
-            Space::new().into()
+        let toasts = if zone == Zone::Right
+            && popover.is_none()
+            && bar.toast_window() == Some(window)
+            && !bar.toasts_held()
+        {
+            bar.toasts
+                .iter()
+                .map(|toast| toast_view(bar, toast))
+                .collect()
         } else {
-            Island::new(items)
-                .align(align)
-                .popover(popover.map(|popover| popover_view(bar, popover)))
-                .nudges(nudges)
-                .width_groups(groups)
-                .into()
+            Vec::new()
         };
+
+        let island: Element<'_, Message> =
+            if items.is_empty() && popover.is_none() && toasts.is_empty() {
+                Space::new().into()
+            } else {
+                Island::new(items)
+                    .align(align)
+                    .popover(popover.map(|popover| popover_view(bar, popover)))
+                    .toasts(toasts)
+                    .nudges(nudges)
+                    .width_groups(groups)
+                    .into()
+            };
         container(island).width(Length::Fill).align_x(align)
     };
 
@@ -596,6 +879,19 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         open: popover.open,
         on_placed: Box::new(move |rect| Message::PopoverPlaced(id, rect)),
         on_closed: Message::PopoverClosed(id),
+    }
+}
+
+fn toast_view<'a>(bar: &'a Bar, toast: &Toast) -> island::Toast<'a, Message> {
+    let (instance, key) = toast.key();
+    let content: Element<'_, AnyMessage> = kit::notice(toast.notice.clone(), &bar.icons);
+    island::Toast {
+        key: (instance, key),
+        content: content.map(move |message| Message::Widget(instance, message)),
+        leaving: toast.leaving,
+        on_placed: Box::new(move |rect| Message::ToastPlaced(instance, key, rect)),
+        on_hover: Box::new(move |hovered| Message::ToastHovered(instance, key, hovered)),
+        on_gone: Message::ToastGone(instance, key),
     }
 }
 
@@ -912,5 +1208,149 @@ mod tests {
         assert_eq!(said(bar.close_popover()), [], "already closing");
         // Turning around while it closes opens it again.
         assert_eq!(said(bar.open_popover(1)), [(1, "opened")]);
+    }
+    /// Shows a notice per key it was told to add, each expiring after 5 s.
+    struct Notifying(Vec<u64>);
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum Note {
+        Add(u64),
+        Drop(u64),
+        Expired(u64),
+    }
+
+    impl Widget for Notifying {
+        type Config = toml::Table;
+        type Message = Note;
+
+        fn new(_: Self::Config) -> (Self, eave_api::Task<Note>) {
+            (Self(Vec::new()), eave_api::Task::none())
+        }
+
+        fn update(&mut self, message: Note) -> Effect<Note> {
+            match message {
+                Note::Add(key) => self.0.insert(0, key),
+                Note::Drop(key) | Note::Expired(key) => self.0.retain(|shown| *shown != key),
+            }
+            Effect::none()
+        }
+
+        fn item(&self) -> eave_api::ui::Item<Note> {
+            eave_api::ui::Item::new(label("bell"))
+        }
+
+        fn notices(&self) -> Vec<Notice<Note>> {
+            self.0
+                .iter()
+                .map(|&key| {
+                    Notice::new(key, format!("notice {key}"))
+                        .expires(Duration::from_secs(5), Note::Expired(key))
+                })
+                .collect()
+        }
+    }
+
+    /// A bar with a `Notifying` 0 and a `WithPopover` 1 on the right, on one surface.
+    fn notifying_bar() -> Bar {
+        let mut registry = Registry::new();
+        registry.widget::<Notifying>("n");
+        registry.widget::<WithPopover>("p");
+        let (mut bar, _) = Bar::new(
+            registry,
+            config("[[right]]\nwidget = \"n\"\n[[right]]\nwidget = \"p\""),
+        );
+        let _ = update(&mut bar, Message::WindowOpened(window::Id::unique()));
+        bar
+    }
+
+    fn tell(bar: &mut Bar, note: Note) {
+        let _ = update(bar, Message::Widget(0, AnyMessage::new(note)));
+    }
+
+    fn keys(bar: &Bar) -> Vec<(u64, bool)> {
+        bar.toasts
+            .iter()
+            .map(|toast| (toast.notice.key, toast.leaving))
+            .collect()
+    }
+
+    #[test]
+    fn notices_come_in_on_top_and_leave_when_dropped() {
+        let mut bar = notifying_bar();
+        tell(&mut bar, Note::Add(1));
+        tell(&mut bar, Note::Add(2));
+        assert_eq!(keys(&bar), [(2, false), (1, false)]);
+
+        // Never on screen: gone at once.
+        tell(&mut bar, Note::Drop(1));
+        assert_eq!(keys(&bar), [(2, false)]);
+
+        // On screen: folds back first, and is gone once its island says so.
+        let _ = update(&mut bar, Message::ToastPlaced(0, 2, placed()));
+        tell(&mut bar, Note::Drop(2));
+        assert_eq!(keys(&bar), [(2, true)]);
+        let _ = update(&mut bar, Message::ToastGone(0, 2));
+        assert!(bar.toasts.is_empty());
+    }
+
+    #[test]
+    fn a_card_expires_only_while_it_shows_and_isnt_pointed_at() {
+        let mut bar = notifying_bar();
+        let start = Instant::now();
+        tell(&mut bar, Note::Add(1));
+        // Waiting to be placed: the clock hasn't started.
+        let _ = bar.run_clocks(start);
+        assert_eq!(bar.toasts[0].deadline, None);
+
+        // `handle`, not `update`, so the clocks run only at the times given here.
+        let _ = handle(&mut bar, Message::ToastPlaced(0, 1, placed()));
+        let _ = bar.run_clocks(start);
+        assert_eq!(bar.toasts[0].deadline, Some(start + Duration::from_secs(5)));
+
+        // Pointed at after 4.5 s: stops with half a second left, and gets a second back.
+        let _ = handle(&mut bar, Message::ToastHovered(0, 1, true));
+        let _ = bar.run_clocks(start + Duration::from_millis(4500));
+        assert_eq!(bar.toasts[0].deadline, None);
+        assert_eq!(bar.toasts[0].left, Some(Duration::from_millis(500)));
+        let _ = handle(&mut bar, Message::ToastHovered(0, 1, false));
+        let later = start + Duration::from_secs(10);
+        let _ = bar.run_clocks(later);
+        assert_eq!(bar.toasts[0].deadline, Some(later + TOAST_GRACE));
+
+        let expired: Vec<(u64, Note)> = bar
+            .expire(later + TOAST_GRACE)
+            .into_iter()
+            .map(|(id, message)| (id, message.downcast().unwrap()))
+            .collect();
+        assert_eq!(expired, [(0, Note::Expired(1))]);
+        assert!(bar.expire(later + TOAST_GRACE).is_empty(), "only once");
+    }
+
+    #[test]
+    fn cards_wait_while_their_island_is_a_popover() {
+        let mut bar = notifying_bar();
+        tell(&mut bar, Note::Add(1));
+        let _ = update(&mut bar, Message::ToastPlaced(0, 1, placed()));
+        let window = bar.windows[0];
+        let _ = update(&mut bar, Message::Pressed(window, 1, None));
+        assert!(bar.toasts_held());
+        assert_eq!(bar.toasts[0].rect, None, "off screen, to come back after");
+        assert_eq!(bar.toasts[0].deadline, None, "its clock stopped");
+
+        // A notice that arrives meanwhile waits too.
+        tell(&mut bar, Note::Add(2));
+        assert_eq!(keys(&bar), [(2, false), (1, false)]);
+
+        let _ = update(&mut bar, Message::BarPressed);
+        let _ = update(&mut bar, Message::PopoverClosed(1));
+        assert!(!bar.toasts_held());
+    }
+
+    #[test]
+    fn a_reload_that_drops_the_instance_drops_its_cards() {
+        let mut bar = notifying_bar();
+        tell(&mut bar, Note::Add(1));
+        let _ = bar.apply(config("[[right]]\nwidget = \"p\""));
+        assert!(bar.toasts.is_empty());
     }
 }
