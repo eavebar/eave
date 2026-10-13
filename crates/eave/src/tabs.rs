@@ -461,7 +461,7 @@ mod tests {
             ],
         );
         let mut tree = Tree::new(&tabs as &dyn Widget<_, _, _>);
-        let renderer = iced::Renderer::new(Font::DEFAULT, Pixels(14.0));
+        let renderer = crate::test_renderer();
         let limits = layout::Limits::new(Size::ZERO, Size::new(300.0, 1000.0));
         let node = tabs.layout(&mut tree, &renderer, &limits);
         assert_eq!(node.children().len(), 1);

@@ -910,8 +910,9 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
          [[bin]]\nname = \"eave\"\npath = \"src/main.rs\"\n\n\
          [dependencies]\n",
     );
+    // Without the built-in plugins it doesn't use, but with both renderers (D-67).
     manifest += &format!(
-        "eave = {{ path = {}, default-features = false }}\n",
+        "eave = {{ path = {}, default-features = false, features = [\"gpu\"] }}\n",
         quote(&eave_dir.join("crates/eave"))
     );
     for plugin in plugins {

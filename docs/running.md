@@ -40,6 +40,7 @@ Running it again repairs an install and never updates one. `EAVE_REPO=<git URL o
 | You edit | What happens |
 |---|---|
 | `~/.config/eave/config.toml`, moving widgets or changing options | Nothing to do. The bar reloads it as soon as you save ([D-21](decisions.md)). Widgets whose entry didn't change keep their state. A file that doesn't parse is reported on stderr and the current bar stays. |
+| `~/.config/eave/config.toml`, `renderer` | Used from the bar's next start: `systemctl --user restart eave.service` ([D-67](decisions.md)). |
 | `~/.config/eave/config.toml`, using a widget that isn't compiled in yet | A rebuild: `eave-build`, run for you by the [path unit](#rebuild-automatically-when-configtoml-changes) ([D-22](decisions.md), [D-30](decisions.md)). |
 
 `eave-build` builds, and if the new binary differs from `~/.local/bin/eave`, installs it and restarts a running bar on it. It uses `systemctl --user restart eave.service` when the service runs the bar. Otherwise it stops the bar and relaunches it through Hyprland. A failed build installs nothing and leaves the running bar alone. If no bar is running, it doesn't start one.

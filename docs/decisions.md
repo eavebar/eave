@@ -41,7 +41,7 @@ Each entry records what we chose, what else we considered, and **why**. When a d
 
 ## D-4: CPU renderer (tiny-skia) by default, GPU (wgpu) optional
 
-**Status:** accepted (2026-10-12)
+**Status:** superseded by [D-67](#d-67-the-gpu-renders-by-default-renderer--cpu-in-configtoml) (2026-10-13). Accepted 2026-10-12. Its "revisit if" came true: a large popover dropped frames on the CPU.
 
 **Measured** on Asahi (aarch64), release build, idle bar with clock:
 
@@ -1393,4 +1393,35 @@ The icons are theme names (`battery-caution`, `battery-full-charged`). `notify =
 - During an animation on the bar, CPU drops by about 40% (1.27% to 0.73%). A bar frame draws in under 1 ms.
 - With the chat popover open (surface 3024×1560), tiny-skia still took **20–42 ms a frame** while it moved, peaking near 90 ms: 25–50 fps, not 120. What's left is rasterizing a large popover of text on the CPU.
 - `gpu` costs +56 MB of RSS and +4.3 MB of binary, as D-4 found. Its idle CPU is the same as tiny-skia's.
-- Which renderer to ship is up to the user's comparison of the popover. *To be filled in.*
+- The user compared the two with the chat popover open. The GPU felt much smoother, so it became the default ([D-67](#d-67-the-gpu-renders-by-default-renderer--cpu-in-configtoml)). The patch stays for `renderer = "cpu"`, and for machines where wgpu can't start.
+
+---
+
+## D-67: The GPU renders by default; `renderer = "cpu"` in config.toml
+
+**Status:** accepted (2026-10-13). Supersedes [D-4](#d-4-cpu-renderer-tiny-skia-by-default-gpu-wgpu-optional).
+
+**Why now:** D-4 picked tiny-skia because the bar was a 32 px strip. Since then, popovers have grown to a chat full of text, a surface of 3024×1560 at scale 2. Even with D-66's patch, tiny-skia took 20–42 ms per frame while that popover moved or scrolled, peaking near 90 ms. That's 25–50 fps on a 120 Hz screen, and "smooth" comes first ([vision.md](vision.md)). Side by side, the user found the GPU build much smoother.
+
+**What:**
+- `gpu` is a default feature of `crates/eave`, and `eave-build` turns it on in the bars it builds. Both renderers are compiled in. iced tries wgpu first and falls back to tiny-skia if it can't start, e.g. with no Vulkan driver.
+- `renderer = "gpu"` (the default) or `renderer = "cpu"`, at the top of config.toml, picks one. eave sets iced's `ICED_BACKEND` from it at startup (`wgpu,tiny-skia` or `tiny-skia`). An `ICED_BACKEND` already in the environment wins. The renderer can't change on a live reload, so a reload that changes it says so, and the bar uses it from its next start.
+- A build without the feature (`--no-default-features --features builtin`) is CPU-only and ignores the key.
+
+**Cost** (Asahi, release, the user's config, the same session as D-66):
+
+| Build | Binary | RSS | PSS once a popover has opened | Idle CPU |
+|---|---|---|---|---|
+| tiny-skia | 13,987,728 B | 21.4 MB | ~50 MB | 0.10% |
+| `gpu` | 18,247,680 B | 77.6 MB | ~57 MB | 0.10–0.13% |
+
+- RSS overstates the cost of the GPU. About 40 MB of it is Mesa and Vulkan libraries, shared with Hyprland and every other GPU program.
+- Once a popover has opened, the CPU renderer keeps ~15 MB of shared-memory buffers (D-28) that the GPU doesn't need. The real difference is then ~7 MB.
+- Idle CPU is the same.
+
+**Alternatives:**
+- **Keep tiny-skia and make it faster.** D-66 did the cheap part. What's left would mean scrolling by moving pixels already drawn (deep in iced, and only helps scrolling), or rewriting how text is drawn. Neither gets a full repaint of a 4.7 Mpx surface under 8 ms.
+- **The GPU only while a popover is open:** iced uses one compositor for every surface, so it's both or neither.
+- **CPU by default, GPU opt-in:** most users would never find out their popovers can be smooth.
+
+**Revisit if:** the GPU's memory grows past the numbers above, or a target's driver turns out unreliable. Then make `cpu` the default there.

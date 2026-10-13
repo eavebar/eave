@@ -21,6 +21,8 @@ units = "metric"
 
 The zones are `left`, `center` and `right`, in order. Every key except `widget`, `width_group` and `collapsible` goes to the widget's `Config`.
 
+Above the zones, `renderer = "cpu"` draws the bar on the CPU (tiny-skia) instead of the GPU (wgpu, the default). It's lighter on memory but less smooth in large popovers, and it takes effect when the bar restarts ([D-67](decisions.md)).
+
 `width_group = "name"` lines items up: items in the same island with the same group all get a slot as wide as the widest of them, each centered in its slot ([D-34](decisions.md)). For example, put `volume` and `network` in one group, so the Wi-Fi icon gets the same room as the volume item, which needs space for its percent.
 
 A zone is one island, or several side by side. Entries without a widget arrange them ([D-55](decisions.md)):

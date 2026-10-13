@@ -1050,7 +1050,12 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         Message::ConfigChanged(config) => match config {
             // Editors often fire several events per save; only a real change rebuilds anything.
             Ok(config) if config == bar.config => Task::none(),
-            Ok(config) => bar.apply(config),
+            Ok(config) => {
+                if config.renderer != bar.config.renderer {
+                    eprintln!("eave: config: the new `renderer` is used once the bar restarts");
+                }
+                bar.apply(config)
+            }
             Err(error) => {
                 eprintln!("eave: config: {error}; keeping the current bar");
                 Task::none()
