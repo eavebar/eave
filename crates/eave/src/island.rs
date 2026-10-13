@@ -66,6 +66,9 @@ pub struct Island<'a, M> {
     shoulders: Option<CornerShape>,
     /// Its corners: top left, top right, bottom right, bottom left (D-73).
     corners: [CornerShape; 4],
+    /// How far past its layout it can be seen each way, less where it can't: its items are
+    /// centered in that.
+    shows: Padding,
 }
 
 /// The control at one end of an island that shows and hides its collapsible items: there while
@@ -119,6 +122,7 @@ impl<'a, M> Island<'a, M> {
             notch: None,
             shoulders: None,
             corners: [CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING); 4],
+            shows: Padding::ZERO,
         }
     }
 
@@ -139,6 +143,13 @@ impl<'a, M> Island<'a, M> {
     /// reach on past it, if it's attached to the top: it hangs from the edge as the notch does.
     pub fn shoulders(mut self, shoulders: Option<CornerShape>) -> Self {
         self.shoulders = shoulders;
+        self
+    }
+
+    /// Seen this far past its layout each way: up to the screen's edges it's attached to, and short
+    /// of what the notch hides (a negative side). Its items sit in the middle of what's seen.
+    pub fn shows(mut self, shows: Padding) -> Self {
+        self.shows = shows;
         self
     }
 
@@ -1411,9 +1422,14 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             Horizontal::Right => room - width,
         };
         tree.state.downcast_mut::<State>().own = (offset, width);
+        // In the middle of what's seen of it, which an edge or the notch moves off its layout's.
+        let centered = Vector::new(
+            ((self.shows.right - self.shows.left) / 2.0).round(),
+            ((self.shows.bottom - self.shows.top) / 2.0).round(),
+        );
         let children = children
             .into_iter()
-            .map(|child| child.translate(Vector::new(offset, 0.0)))
+            .map(|child| child.translate(Vector::new(offset, 0.0) + centered))
             .collect();
         layout::Node::with_children(Size::new(room, height), children)
     }

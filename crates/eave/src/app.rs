@@ -1201,6 +1201,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                     .toggle(toggle)
                     .live(instances().any(|instance| instance.entry.live))
                     .bleed(bleed(attach))
+                    .shows(shows(attach))
                     .notch(bar.screen.notch.map(|notch| notch.width))
                     .shoulders(shoulders)
                     .corners(bar.screen.island_corners(Place::default())),
@@ -1316,11 +1317,34 @@ fn beside_notch<'a>(
     let mut bleed = bleed(attach);
     let island_bottom = f32::from(style::EDGE_GAP) + style::ISLAND_HEIGHT as f32;
     bleed.bottom = notch.top + notch.height - top - island_bottom;
+    // What reaches under the notch is out of sight; so is what a shorter notch leaves below it.
+    let shows = Padding {
+        bottom: bleed.bottom,
+        ..shows(attach)
+    };
     match side {
         Side::Right => bleed.right = notch.width / 2.0,
         Side::Left => bleed.left = notch.width / 2.0,
     }
-    island.bleed(bleed)
+    island.bleed(bleed).shows(shows)
+}
+
+/// How far an island attached to `edges` can be seen past its layout: across the gap to each edge,
+/// and no further.
+fn shows(edges: config::Edges) -> Padding {
+    let gap = |attached: bool| {
+        if attached {
+            f32::from(style::EDGE_GAP)
+        } else {
+            0.0
+        }
+    };
+    Padding {
+        top: gap(edges.top),
+        right: gap(edges.right),
+        bottom: 0.0,
+        left: gap(edges.left),
+    }
 }
 
 /// How far an island attached to `edges` reaches past its layout: across the gap to each edge,
