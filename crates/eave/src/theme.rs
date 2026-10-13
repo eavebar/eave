@@ -173,6 +173,40 @@ pub const SCROLL_MAX_HEIGHT: f32 = 520.0;
 pub const CODE_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.07);
 pub const QUOTE_BAR: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
 pub const BLOCK_SPACING: u32 = 6;
+/// Code is content, so it's colored (D-65): soft hues, all about as light, so none of them
+/// shouts and none reads as a signal. Comments and punctuation sit back.
+pub const CODE_PLAIN: Color = Color::from_rgb8(0xD8, 0xDA, 0xE0);
+pub const CODE_KEYWORD: Color = Color::from_rgb8(0xC7, 0xAE, 0xF0);
+pub const CODE_TYPE: Color = Color::from_rgb8(0x9F, 0xD3, 0xDC);
+pub const CODE_FUNCTION: Color = Color::from_rgb8(0xE9, 0xD7, 0xA6);
+pub const CODE_STRING: Color = Color::from_rgb8(0xB7, 0xD2, 0xA6);
+pub const CODE_NUMBER: Color = Color::from_rgb8(0xE8, 0xB8, 0x8F);
+pub const CODE_COMMENT: Color = Color::from_rgb8(0x6C, 0x74, 0x80);
+pub const CODE_PUNCTUATION: Color = Color::from_rgb8(0x8B, 0x8F, 0x98);
+/// A code block's line numbers, and the marks in a diff's margin.
+pub const CODE_GUTTER: Color = Color::from_rgb8(0x4A, 0x4A, 0x4A);
+/// A code block numbers its lines once it has this many.
+pub const CODE_NUMBERED: usize = 4;
+/// Behind a diff's added and removed lines: the signal colors, faint, so the code on them reads.
+pub const DIFF_ADDED_BG: Color = Color::from_rgba(0.188, 0.820, 0.345, 0.12);
+pub const DIFF_REMOVED_BG: Color = Color::from_rgba(1.0, 0.271, 0.227, 0.12);
+pub const DIFF_ADDED: Color = Color::from_rgb8(0x30, 0xD1, 0x58);
+pub const DIFF_REMOVED: Color = Color::from_rgb8(0xFF, 0x45, 0x3A);
+
+/// A timeline: the room left of its steps where the line runs, the line, and the marks on it.
+/// Marks sit level with the middle of a step's first line of text.
+pub const RAIL_GUTTER: f32 = 22.0;
+pub const RAIL_LINE: f32 = 1.0;
+pub const RAIL_MARK: f32 = 9.0;
+pub const RAIL_NOTE: f32 = 5.0;
+pub const RAIL_MARK_Y: f32 = 9.5;
+/// Below each step, before the next.
+pub const RAIL_STEP_GAP: f32 = 10.0;
+/// A mark under way: a ring, with a faint halo around it. It doesn't pulse: a loop redraws the
+/// whole popover (D-64).
+pub const RAIL_HALO: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.12);
+/// A done mark and a note: on the line, a little brighter than it.
+pub const RAIL_DONE: Color = Color::from_rgb(0.33, 0.33, 0.33);
 /// A notification card's close button: smaller than a popover's icon buttons, to sit beside the
 /// app's name.
 pub const NOTICE_CLOSE: f32 = 22.0;

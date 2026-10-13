@@ -2,14 +2,13 @@
 //!
 //! pulldown-cmark reads the text into events, and they become plain iced widgets: a paragraph is a
 //! rich text of styled spans, lists and quotes are rows with a marker or a bar, code blocks are
-//! monospace on a tinted box that scrolls sideways. Everything is owned, so nothing borrows from
+//! monospace on a tinted box that scrolls sideways, colored for their language ([`crate::code`]). Everything is owned, so nothing borrows from
 //! the plugin's view. Parsing runs on each view, which is after a message, not on every frame.
 
-use iced::widget::scrollable::{self, Scrollbar};
 use iced::widget::text::{Rich, Span};
 use iced::widget::{Space, column, container, row, rule, text};
 use iced::{Background, Border, Color, Element, Font, Length, Padding, alignment, font};
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::theme;
 
@@ -53,8 +52,9 @@ struct Builder<'a, M> {
     frames: Vec<Frame<'a, M>>,
     spans: Vec<Span<'static>>,
     style: Style,
-    /// Inside a code block: its text so far.
+    /// Inside a code block: its text so far, and the language its fence names.
     code: Option<String>,
+    language: String,
     /// Inside a table: its rows, each a list of cells' text, and whether the first is the head.
     table: Option<Vec<Vec<String>>>,
     cell: Option<String>,
@@ -71,6 +71,7 @@ impl<'a, M: 'a> Builder<'a, M> {
             spans: Vec::new(),
             style: Style::default(),
             code: None,
+            language: String::new(),
             table: None,
             cell: None,
         }
@@ -128,9 +129,18 @@ impl<'a, M: 'a> Builder<'a, M> {
                 self.style.heading = Some(level);
             }
             Tag::BlockQuote(_) => self.open(FrameKind::Quote),
-            Tag::CodeBlock(_) => {
+            Tag::CodeBlock(kind) => {
                 self.flush();
                 self.code = Some(String::new());
+                self.language = match kind {
+                    // The first word of the fence's info: "rust" of "rust,ignore".
+                    CodeBlockKind::Fenced(info) => info
+                        .split(|c: char| c == ',' || c.is_whitespace())
+                        .next()
+                        .unwrap_or_default()
+                        .to_string(),
+                    CodeBlockKind::Indented => String::new(),
+                };
             }
             Tag::List(start) => self.open(FrameKind::List(start)),
             Tag::Item => {
@@ -180,10 +190,8 @@ impl<'a, M: 'a> Builder<'a, M> {
             TagEnd::BlockQuote(_) | TagEnd::List(_) | TagEnd::Item => self.close(),
             TagEnd::CodeBlock => {
                 let code = self.code.take().unwrap_or_default();
-                self.push(code_block(
-                    code.trim_end_matches('\n').to_string(),
-                    self.color,
-                ));
+                let language = std::mem::take(&mut self.language);
+                self.push(crate::code::block(code.trim_end_matches('\n'), &language));
             }
             TagEnd::Table => {
                 if let Some(rows) = self.table.take() {
@@ -340,29 +348,6 @@ fn separator<'a, M: 'a>() -> Element<'a, M> {
             radius: 0.0.into(),
             fill_mode: rule::FillMode::Full,
             snap: true,
-        })
-        .into()
-}
-
-/// Monospace on a tinted box. Long lines don't wrap: the box scrolls sideways.
-fn code_block<'a, M: 'a>(code: String, color: Color) -> Element<'a, M> {
-    let code = text(code)
-        .font(theme::MONO_FONT)
-        .size(theme::SMALL_SIZE)
-        .line_height(1.35)
-        .color(color)
-        .wrapping(text::Wrapping::None);
-    let scroll = scrollable::Scrollable::new(container(code).padding([8, 10]))
-        .direction(scrollable::Direction::Horizontal(
-            Scrollbar::new().width(3).scroller_width(3).margin(1),
-        ))
-        .width(Length::Fill);
-    container(scroll)
-        .width(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(Background::Color(theme::CODE_BG)),
-            border: Border::default().rounded(theme::BUTTON_RADIUS),
-            ..container::Style::default()
         })
         .into()
 }

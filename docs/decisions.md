@@ -1233,7 +1233,7 @@ A marker before the zone's first item sets the first island, so no island has to
 
 **Status:** accepted (2026-10-13). Replaces the blue accent used since the first popovers (D-40). The rules are in [design.md](design.md).
 
-**What:** the bar is black and white. Brightness, not hue, says what's current, and color appears only as a signal or when it comes from the content.
+**What:** the bar is black and white. Brightness, not hue, says what's current, and color appears only as a signal or when it comes from the content. Code counts as content since [D-65](#d-65-code-is-content-colored-code-diffs-and-timelines).
 - **Ink.** `Tone::Normal` is white at 94 % and `Tone::Dim` white at 50 %. Both are neutral; they used to have a blue cast. They're written as the opaque grey they make on black, so overlapping icon strokes don't show seams. `Tone::Accent` is plain white: the thing to notice is the brightest thing there. Plugins keep the same `Tone`s. Only what they look like changed.
 - **Current is lit.** The selected list row gets a 10 % white fill, a semibold title and white icons. The workspace mark is a 14 % white pill. Tabs get a 16 % pill on their track, with the current label white and semibold and the others dim. Today in the calendar is a 1.5 px white ring. The toggle is a white pill with a black knob when on. A prominent button is filled white with black text, and a prominent icon button (play/pause) is now drawn as a 36 px white disc; before, `prominent` was ignored for icon buttons. A focused field's edge is 50 % white.
 - **Signals are vivid:** good `#30D158`, warning `#FFB020`, critical `#FF453A`, up from pastels. They're now the only color on screen, so they should be seen when they show up.
@@ -1325,3 +1325,29 @@ The icons are theme names (`battery-caution`, `battery-full-charged`). `notify =
 - a change of mood playing out (laptop, 2 loops): 4 ticks over the 4 s it plays, then rest.
 - RSS: 15.7 → 16.2 MB, for 19 frames drawn at 32 px and the PNG decoding.
 - binary: 10,448,384 → 10,448,544 bytes; the frames are ~380 bytes each.
+
+## D-65: Code is content: colored code, diffs and timelines
+
+**Status:** accepted (2026-10-13). Amends [D-61](#d-61-black-and-white-and-color-only-as-a-signal): code joins covers as content that brings its own color.
+
+**Why now:** eave-claude's chat is mostly code, commands and changes to files, and Claude's steps. Set in one grey, a code block was a wall: keywords, strings and comments all looked alike, an edit showed only as its file's name, and every tool call took a full line with a section header for each speaker. The chat was compared in four prototypes; this is the "rail" one, with muted hues.
+
+**What:**
+- **Colored code.** Markdown code blocks keep their fence's language, and the host colors them: keywords, types, calls, strings, numbers, comments and punctuation, in soft hues of about the same lightness (`CODE_*` in `theme.rs`). Comments and punctuation sit back, at 45–55 %. Blocks of four or more lines number their lines. Everywhere Markdown shows, notifications too.
+- **The highlighter is ours** (`highlight.rs`): one pass with a table per language (Rust, shell, Python, JS/TS, C/C++, Go, Lua, TOML, JSON, YAML; anything else gets strings, numbers and comments). It doesn't parse, so a keyword used as a name gets the keyword's color now and then.
+- **`ui::diff(title, lines)`**: a change to a file, `Change::{Added, Removed, Context, Hunk}` per line. The host counts the `+`/`−` for its header, colors the code by the file's extension, and lays the added and removed lines on faint green and red. Those two are signals (gained, lost), so they're the signal colors, faint. Diff lines wrap, so each line's color reaches the box's edge.
+- **`ui::timeline(steps)` and `ui::step(mark, content)`**: steps strung on a thin line (`TRACK`), each marked with where it stands, `Mark::{You, Note, Running, Done, Failed, Waiting}`. Brightness first: you are a white dot, a note a small grey one, done grey, under way a white ring. Only news is colored: failed is critical, waiting for you is a warning ring. `.leading(node)` puts a small picture on the line instead of the mark (the mascot). Nothing pulses: a running mark is a still ring with a faint halo (D-64).
+- **`ui::literal(text)`**: text as typed (a path, a command), monospace, one line, its end fading out when it doesn't fit.
+- **`ui::divider(text)`**: a separator with a caption in its middle, like the time a turn started.
+
+**Alternatives:**
+- **Brightness only** for code: keywords white and bold, strings mid-grey, comments dim. It follows D-61 to the letter, and it was a prototype. But code has more than three kinds of things in it, and brightness ran out: strings, calls and types blurred together. Code isn't a state, but like a cover it's content with structure of its own, and the hues come from it, not from the bar.
+- **iced's `highlighter` feature** (syntect): real grammars for hundreds of languages, but megabytes of syntax and theme dumps in every bar (D-5), and its own colors.
+- **tree-sitter**: exact, but a C library and a grammar per language.
+- **Plugins coloring code** (spans with colors in the API): breaks D-11. The host knows it's code, so the host colors it.
+- **New `Label` and `Separator` fields** (`.mono()`, `.label()`) instead of `literal` and `divider`: plugins match on `Kind::Label { text, tone }` and `Kind::Separator` in their tests, so changing those variants would break them. New kinds are additions.
+
+**Why:** reading code and edits is most of what the chat is for, and colors are how people read code everywhere else. The timeline shows the shape of a turn at a glance: what you asked, what it did, what failed, what waits for you.
+
+**Cost:** *Measured* (release, built-in plugins, `cargo build --release`): binary 12,611,072 → 12,676,608 bytes (+64 KiB) for the highlighter, the timeline and diffs. No new dependency. Nothing animates, so nothing asks for frames; idle CPU and RSS are unchanged with no chat open. A code block is lexed on each view, like Markdown is parsed (D-62), after a message, never per frame.
+

@@ -11,7 +11,7 @@ How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs
 1. **Black islands, white ink.** Islands and popovers are black. What's in them is white. Hierarchy comes from brightness: full white for the thing to notice, 94 % for text, 50 % for secondary text. There are no tinted greys.
 2. **Color is a signal.** Color shows up only when it tells you something:
    - **state:** charging (good), low (warning), critical, a failed connection;
-   - **content:** an app's icon, a track's cover, and the color taken from that cover.
+   - **content:** an app's icon, a track's cover, the color taken from that cover, and code, colored by what each piece of it is ([D-65](decisions.md)).
 
    Color never means "this is selected" or "you can press this". When everything is black and white, the one green bolt or red number gets noticed.
 3. **What's current is brighter.** The workspace you're on, the row in use, the open tab and today in the calendar are all marked the same way: with light, as a soft white fill, a white ring or a heavier weight. Never with a hue.
@@ -35,6 +35,9 @@ How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs
 | `Tone::Warning` | `#FFB020` | low, attention |
 | `Tone::Critical` | `#FF453A` | critical, failed, a critical notification |
 | content | from the cover | a media popover's slider and play button |
+| `CODE_KEYWORD`, `CODE_TYPE`, `CODE_FUNCTION`, `CODE_STRING`, `CODE_NUMBER` | soft lavender, cyan, sand, sage, apricot, all about as light | code: keywords, types, calls, strings, numbers |
+| `CODE_PLAIN`, `CODE_COMMENT`, `CODE_PUNCTUATION` | near white, slate grey (italic), grey | the rest of the code, and what sits back |
+| `DIFF_ADDED_BG`, `DIFF_REMOVED_BG` | `Tone::Good`, `Tone::Critical` at 12 % | behind a diff's added and removed lines |
 
 `Tone::Normal` and `Tone::Dim` are written as the grey they make on black, not as translucent white, so the strokes of an icon that overlap don't show seams. Islands are always black, so it's the same color.
 
@@ -54,6 +57,8 @@ How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs
 | Mark (today) | a 1.5 px white ring, semibold | | |
 | Meter | a 6 px bar in its tone (white unless it's a signal) | eases to a new value | |
 | Text field | 6 % fill, 10 % edge | 50 % white edge when focused; a signal color on error | |
+| Timeline | a 1 px line at 14 % white, a mark per step: you a white dot, a note a small grey one, done grey | under way: a white ring with a faint halo, still; failed: a red dot; waiting for you: an amber ring | |
+| Code block, diff | 7 % fill, monospace, colored for the language; four lines or more are numbered | a diff's added and removed lines on faint green and red, its header counting them | |
 
 ## Motion
 
