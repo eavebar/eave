@@ -90,6 +90,35 @@ For smoothness: watch animations with Hyprland's debug overlay (`hyprctl keyword
 - **Both arches build.** If you touch anything platform-dependent, note whether it was tested on x86_64 too.
 - Match the surrounding code style. `cargo fmt` and `cargo clippy` should be clean.
 
+## Versions, publishing and releases
+
+Three things get versions, each by hand and only when the user asks for it:
+
+- **The crates on crates.io:** `eave-api` and the services (`eave-dbus`, `eave-hyprland`, `eave-iwd`, `eave-net`, `eave-pulse`), so plugins in other repositories build and test on their own ([D-50](decisions.md)). The host, `eave-build` and the built-in plugins aren't published.
+- **eave's release tags:** `vX.Y.Z` on `main`. The AUR package builds `eave-build` from a tag, and a packaged eave-build builds the bar from that same tag ([D-54](decisions.md)).
+- **Plugin repositories** (`eaveshell/eave-claude`, `eaveshell/eave-notifications`, …): they depend on the published crates, and their CI builds with `--locked`.
+
+### Publishing a crate
+
+A plugin repository can only use what the published crates have. When a change in eave adds API a plugin needs (a new `ui` primitive, a new service call), publish before pushing the plugin, or its CI fails:
+
+1. Bump `version` in the crate's `Cargo.toml` **and** its entry in the root `[workspace.dependencies]`. While we're on `0.x`, an addition is a patch bump (`0.1.0 → 0.1.1`). A breaking change bumps the minor (`0.1 → 0.2`), and every crate that depends on it needs a release too.
+2. Commit the bump on `main`, with the tree clean. `cargo publish` refuses a dirty tree, and the published crate should match a commit.
+3. `cargo publish -p <crate> --dry-run`, then `cargo publish -p <crate>`. A published version can't be replaced, only yanked, so dry-run first.
+4. Push `main`.
+
+Then, in the plugin repository: `cargo update -p <crate>`, raise its requirement to the version that has the feature (`eave-api = "0.1.1"`, not `"0.1"`), and run what its CI runs before pushing: `cargo build --workspace --locked --all-targets`, `cargo test --workspace --locked`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo fmt --all --check`. Inside a bar this doesn't matter, since `eave-build` patches the crates to the eave checkout it builds against. But the plugin's own CI only sees crates.io.
+
+### Releasing eave
+
+Bump the versions, tag `main` with an annotated `vX.Y.Z` (`git tag -a vX.Y.Z -m "eave X.Y.Z"`), and push the tag. Then update the AUR package: [dist/aur/README.md](../dist/aur/README.md) has the steps. Never move or delete a pushed tag, since the AUR package's checksum is of its tarball. A fix is a new tag.
+
+### Merging and pushing
+
+- Merge into `main` and push only when the user asks. Before pushing `main`, run `cargo test --workspace` on the merged tree.
+- Branches that each add a decision often pick the same `D-` number. Keep the number of the branch merged first, renumber the other, and update every link to it (`grep -rn 'D-<n>'`: docs, `AGENTS.md`, code comments, CI, `dist/`).
+- When several repositories change together, push in dependency order: eave (and any crate it publishes) first, then the plugins that need it.
+
 ## Docs
 
 `AGENTS.md` is the entry point. `docs/` holds the reasoning. When behavior or a decision changes, update the relevant doc in the same change.
