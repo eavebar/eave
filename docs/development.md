@@ -91,6 +91,7 @@ For smoothness: watch animations with Hyprland's debug overlay (`hyprctl keyword
 - **Dependencies:** `default-features = false` unless there's a reason. Every new crate gets one line in the PR or commit explaining why. Non-obvious ones get a `decisions.md` entry.
 - **Tolerant parsing** of anything external (Hyprland events, D-Bus properties). Unknown is ignored and logged at debug level, never a panic.
 - **Both arches build.** If you touch anything platform-dependent, note whether it was tested on x86_64 too.
+- **config.toml may be a symlink** (a dotfiles manager's). Write through it to its target, by renaming a temporary file in the target's directory, never over the link.
 - Match the surrounding code style. `cargo fmt` and `cargo clippy` should be clean.
 
 ## Versions, publishing and releases
