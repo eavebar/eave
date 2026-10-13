@@ -67,6 +67,21 @@ pub struct Keyboard {
     pub main: bool,
 }
 
+/// From `monitors`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Monitor {
+    /// The connector, like `eDP-1`.
+    pub name: String,
+    /// The mode, in physical pixels, before the transform.
+    pub width: u32,
+    pub height: u32,
+    pub scale: f32,
+    /// 0 is upright; the rest rotate or flip it, like `wl_output`'s.
+    pub transform: u32,
+    pub focused: bool,
+}
+
 impl Devices {
     /// The main keyboard, or the first one if none is marked main.
     pub fn main_keyboard(self) -> Option<Keyboard> {
@@ -97,6 +112,19 @@ mod tests {
             (clients[0].address.as_str(), clients[0].workspace.id),
             ("0x5d1f2a0", 3)
         );
+
+        let monitors: Vec<Monitor> = serde_json::from_str(
+            r#"[{"id":0,"name":"eDP-1","width":3024,"height":1964,"refreshRate":120.0,"x":0,"y":0,
+                 "reserved":[0,84,0,0],"scale":2.00,"transform":0,"focused":true}]"#,
+        )
+        .unwrap();
+        let monitor = &monitors[0];
+        assert_eq!(
+            (monitor.name.as_str(), monitor.width, monitor.height),
+            ("eDP-1", 3024, 1964)
+        );
+        assert_eq!((monitor.scale, monitor.transform), (2.0, 0));
+        assert!(monitor.focused);
 
         let none: Window = serde_json::from_str("{}").unwrap();
         assert!(none.title.is_empty());
