@@ -1112,7 +1112,7 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 | dancing, 10 fps | ~45 |
 | the icon alone on an empty bar, 30 fps | ~34 |
 
-The host redraws the whole surface every frame, so the cost grows with everything else on the bar, not with the icon. It would also last as long as music plays, on battery power too. The user chose the cover in the bar instead, and the bars are now still: uneven while playing, low and level while paused. They show only when a player has no cover and doesn't name its app.
+The host redraws the whole surface every frame, so the cost grows with everything else on the bar, not with the icon. (Overstated: only what changed is rasterized, but the whole tree is drawn and, until D-66, the whole surface was handed to the compositor. See [D-66](#d-66-a-patched-iced_tiny_skia-and-less-work-per-message).) It would also last as long as music plays, on battery power too. The user chose the cover in the bar instead, and the bars are now still: uneven while playing, low and level while paused. They show only when a player has no cover and doesn't name its app.
 
 **Alternatives:**
 - **Dancing in bursts** (a few seconds when a track starts, then still): it was offered, but the user preferred cover art.
@@ -1352,3 +1352,45 @@ The icons are theme names (`battery-caution`, `battery-full-charged`). `notify =
 
 **Cost:** *Measured* (release, built-in plugins, `cargo build --release`): binary 12,611,072 → 12,676,608 bytes (+64 KiB) for the highlighter, the timeline and diffs. No new dependency. Nothing animates, so nothing asks for frames; idle CPU and RSS are unchanged with no chat open. A code block is lexed on each view, like Markdown is parsed (D-62), after a message, never per frame.
 
+
+---
+
+## D-66: A patched iced_tiny_skia, and less work per message
+
+**Status:** proposed (2026-10-13). Corrects what D-56 and D-64 say about redrawing "the whole surface".
+
+**Why now:** eave-claude's chat popover felt like 10 fps: opening and closing, scrolling, and while the chat updated. The popover is the largest thing eave has drawn so far (a few megapixels at scale 2, full of text), so costs that didn't show on a 32 px bar now did.
+
+**What a frame cost, as found:**
+- iced_tiny_skia already redraws only what changed: it diffs each frame's layers against the ones the buffer last held and rasterizes only inside the damage. D-56 and D-64 overstated it.
+- But it **cleared and refilled a surface-sized clip mask** once per layer for every damage rectangle, and twice more per group of primitives, whether or not anything drawn needed clipping. With a popover open that's several MB of memory written per layer, per frame. It's likely also why D-37 found 15 fps and 30 fps cost the same.
+- And it **told the compositor the whole surface changed** (`present()`), so Hyprland took the whole buffer every frame.
+- Apart from the renderer, every message rebuilds every view. A chat that keeps its latest 200 entries dropped its first one on each new one, so every step's widget state moved to the step below and **all its text was shaped again** on every update. The clock sent one such message a second, and the host built each widget's view several times per message.
+
+**What:**
+- `vendor/iced_tiny_skia` is iced_tiny_skia 0.14.1 with three changes, each marked `eave patch`, used through `[patch.crates-io]`. `eave-build` writes the same patch when the eave checkout has it:
+  - the clip mask is set lazily: a new clip is only recorded, the mask is filled when a draw needs it, and only the old rectangle's pixels are cleared;
+  - `present_with_damage`, with the damaged rectangles in physical pixels. With an older buffer, the change since the frame on screen is added, since that's what the compositor shows;
+  - `EAVE_FRAMES=1` prints once a second: frames, draw time, damaged pixels, layers.
+- A timeline's steps carry a key, a hash of what they say, and their state follows them when the oldest ones are dropped (`timeline.rs`). No API change.
+- A still icon draws through a canvas cache, so it isn't rebuilt and doesn't count as damage when something else moves (`icon.rs`).
+- After a widget's message, icons are looked for only in that widget's views, and its popover isn't built twice (`app.rs`).
+- The clock checks the time every second off the UI thread, but sends a message only when its text changes: once a minute with the default format.
+
+**Alternatives:**
+- **The `gpu` renderer.** Large surfaces are what GPUs are for, and it doesn't touch the per-message costs, which show while the chat updates. It costs ~60 MB of RSS for the whole session (D-4). Compared by hand against this before choosing; see the measurements.
+- **Upstreaming the patch**: worth doing. Drop `vendor/iced_tiny_skia` when a release has lazy clipping and damage-aware presents.
+
+**Measured** (Asahi, release, the user's config with eave-claude, scale 2, 120 Hz). Three bars side by side, untouched, three 30 s windows after a 60 s warm-up. The middle window had an animation on every bar (eave-claude's island changing as a session worked):
+
+| Build | Binary | RSS | CPU (quiet, busy, quiet) |
+|---|---|---|---|
+| `main` | 13,987,728 B | 21.4 MB | 0.33%, 1.27%, 0.33% |
+| this, tiny-skia | 13,987,728 B (same pages) | 21.4 MB | 0.10%, 0.73%, 0.10% |
+| this, `gpu` | 18,247,680 B | 77.6 MB | 0.10%, 1.00%, 0.13% |
+
+- Idle CPU drops from 0.33% to 0.10%: the clock no longer rebuilds the bar every second.
+- During an animation on the bar, CPU drops by about 40% (1.27% to 0.73%). A bar frame draws in under 1 ms.
+- With the chat popover open (surface 3024×1560), tiny-skia still took **20–42 ms a frame** while it moved, peaking near 90 ms: 25–50 fps, not 120. What's left is rasterizing a large popover of text on the CPU.
+- `gpu` costs +56 MB of RSS and +4.3 MB of binary, as D-4 found. Its idle CPU is the same as tiny-skia's.
+- Which renderer to ship is up to the user's comparison of the popover. *To be filled in.*

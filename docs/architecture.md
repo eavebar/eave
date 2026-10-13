@@ -142,6 +142,7 @@ plugins/battery/           battery from sysfs (eave-battery)
 plugins/network/           primary connection, via eave-net; Wi-Fi to join via eave-iwd (eave-network)
 plugins/volume/            output volume and switching (eave-volume)
 vendor/softbuffer/         softbuffer 0.4.8 with an alpha-carrying Wayland buffer (D-25)
+vendor/iced_tiny_skia/     iced_tiny_skia 0.14.1: lazy clip mask, damage-aware present, EAVE_FRAMES (D-66)
 dist/systemd/              user units: the bar, and the rebuild-on-config.toml pair
 dist/config.toml           the starter config `eave-build init` writes
 install.sh                 the curl | sh installer
