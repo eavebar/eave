@@ -1732,5 +1732,5 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 - actions right-aligned as before: one button looked lost, three cramped.
 - the close button always there: one more thing at rest on every card.
 
-**Measured:** see the table in [development.md](development.md#measuring).
+**Measured** (CachyOS x86_64, release, the user's config, both renderers built in, run on tiny-skia on a session bus of its own, two alternating runs against main): binary +128 KiB (18.40 → 18.53 MiB); RSS unchanged within noise, ~23.4 MB idle and ~27.7 MB with one notification shown, against ~23.6 and ~27.3 on main. No dependency. The time in a card's corner moves on with a one-minute subscription, only while the panel shows a notice with a time.
 
