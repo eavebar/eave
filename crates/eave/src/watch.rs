@@ -11,7 +11,7 @@
 use std::ffi::CStr;
 use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use iced::Subscription;
 use iced::futures::channel::mpsc::{self, UnboundedSender};
@@ -162,14 +162,32 @@ fn arm(fd: &impl rustix::fd::AsFd, dir: &Path, parent: &Path) -> Result<Watching
 /// Watches the directory `file` resolves into, if it's a symlink out of `dir`. inotify hands back
 /// the same watch for a directory it already watches, so a link within `dir` is no extra watch.
 fn follow(fd: &impl rustix::fd::AsFd, file: &Path, dir: &Path) -> Option<Target> {
-    let resolved = std::fs::canonicalize(file).ok()?;
-    let into = resolved.parent()?;
+    let resolved = resolve(file);
+    let into = std::fs::canonicalize(resolved.parent()?).ok()?;
     if std::fs::canonicalize(dir).is_ok_and(|dir| dir == into) {
         return None;
     }
-    let wd = inotify::add_watch(fd, into, DIR_EVENTS).ok()?;
+    let wd = inotify::add_watch(fd, &into, DIR_EVENTS).ok()?;
     let name = resolved.file_name()?.as_bytes().to_vec();
     Some(Target { wd, name })
+}
+
+/// Where `file` ends up through its symlinks, even when that's nowhere yet: an editor that moves
+/// the old file away before writing the new one leaves the link dangling for a moment, and the
+/// new file has to be seen arriving.
+fn resolve(file: &Path) -> PathBuf {
+    let mut path = file.to_path_buf();
+    // The kernel's own limit on links followed in one lookup.
+    for _ in 0..40 {
+        let Ok(next) = std::fs::read_link(&path) else {
+            break;
+        };
+        path = match path.parent() {
+            Some(parent) => parent.join(next),
+            None => next,
+        };
+    }
+    path
 }
 
 #[cfg(test)]
@@ -277,6 +295,13 @@ mod tests {
         std::fs::write(&temp, "[[left]]\nwidget = \"c\"").unwrap();
         std::fs::rename(&temp, &target).unwrap();
         assert_eq!(widgets(settle(&mut receiver)), ["c"]);
+
+        // A save that moves the old file away first, then writes a new one (vim's backup), leaves
+        // the link pointing at nothing for a moment: it's still followed.
+        std::fs::rename(&target, real.join("config.toml~")).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        std::fs::write(&target, "[[left]]\nwidget = \"c2\"").unwrap();
+        assert_eq!(widgets(settle(&mut receiver)), ["c2"]);
 
         // Other files beside it are ignored.
         std::fs::write(real.join("hyprland.conf"), "").unwrap();
