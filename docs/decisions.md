@@ -1097,6 +1097,7 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
   - `show = "hover"` shows the text only while hovered, and `show = "icon"` never shows it.
   - Right click plays or pauses, and the status changes at once, before the player confirms it. Scrolling skips tracks, and a skip nudges `Right` or `Left` when the player reports the new track, not when the request is sent.
   - The popover has a large cover, the title, artist and album, a seek bar, previous, play/pause and next, and a list of players when there are several.
+  - *Later:* players go stopped with no track for a moment between songs, and the item used to vanish for that moment. Now the last track stays on screen for `GAP` (1 s) after the player has nothing to show, and the next track takes over from it. A player that really stops hides a second later.
   - *Later* ([D-59](#d-59-uicenter-and-a-centered-media-popover)): the popover is centered. The cover, title and "artist · album" sit in the middle, cut rather than wrapped, and play/pause is a filled circle between previous and next.
 - **New `Icon`s:** `Media { playing }` (three level bars), `Play`, `Pause`, `Previous`, `Next`.
 

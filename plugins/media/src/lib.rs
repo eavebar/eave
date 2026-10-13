@@ -6,11 +6,15 @@
 
 use std::time::Instant;
 
-use eave_api::time::{Duration, every};
+use eave_api::time::{Duration, every, sleep};
 use eave_api::ui::{self, Icon, Item, Panel, Tone};
 use eave_api::{Effect, Nudge, Registry, Subscription, Task, Widget};
 use eave_mpris::{Player, Status};
 use serde::Deserialize;
+
+/// How long the last track stays on screen once its player has nothing to show. Players go
+/// stopped with no track for a moment between songs, and that gap shouldn't hide the item.
+const GAP: Duration = Duration::from_millis(1000);
 
 pub fn register(registry: &mut Registry) {
     registry.widget::<Media>("media");
@@ -60,6 +64,10 @@ pub struct Media {
     dragging: Option<Duration>,
     /// Asked to skip on this player, and which way: the next track it reports nudges that way.
     skipping: Option<(String, Nudge)>,
+    /// The player as it last showed, kept on screen for a `GAP` after it stopped showing.
+    held: Option<Player>,
+    /// Counts the holds, so only the last one's timer lets go.
+    holds: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +85,8 @@ pub enum Message {
     Tick(Instant),
     Opened,
     Closed,
+    /// The hold with this number is up.
+    Release(u64),
 }
 
 impl Widget for Media {
@@ -96,6 +106,8 @@ impl Widget for Media {
             now: Instant::now(),
             dragging: None,
             skipping: None,
+            held: None,
+            holds: 0,
         };
         (media, Task::none())
     }
@@ -152,6 +164,12 @@ impl Widget for Media {
                 self.now = now;
                 Effect::none()
             }
+            Message::Release(hold) => {
+                if hold == self.holds {
+                    self.held = None;
+                }
+                Effect::none()
+            }
             Message::Opened => {
                 self.open = true;
                 self.now = Instant::now();
@@ -176,7 +194,7 @@ impl Widget for Media {
     }
 
     fn item(&self) -> Item<Message> {
-        let Some(player) = self.current().filter(|p| shown(p)) else {
+        let Some(player) = self.showing() else {
             return Item::hidden();
         };
         let icon = || picture(player);
@@ -197,7 +215,7 @@ impl Widget for Media {
     }
 
     fn popover(&self) -> Option<Panel<Message>> {
-        let player = self.current().filter(|p| shown(p))?;
+        let player = self.showing()?;
         let mut lines = vec![ui::header(player.identity.clone())];
         // The track, centered under its cover. The header already names the player, so a track
         // with no title has no heading.
@@ -261,6 +279,12 @@ impl Media {
         self.players.iter().find(|p| &p.bus_name == current)
     }
 
+    /// The player on screen: the one followed while it has something to show, or for a `GAP`
+    /// after, as it last was.
+    fn showing(&self) -> Option<&Player> {
+        self.current().filter(|p| shown(p)).or(self.held.as_ref())
+    }
+
     fn current_mut(&mut self) -> Option<&mut Player> {
         let current = self.current.as_ref()?;
         self.players.iter_mut().find(|p| &p.bus_name == current)
@@ -282,12 +306,25 @@ impl Media {
             self.chosen = None;
         }
         let before = self.current().map(|p| (p.bus_name.clone(), identify(p)));
+        let was = self.current().filter(|p| shown(p)).cloned();
         self.current = pick(&players, self.chosen.as_deref(), self.current.as_deref());
         if self.chosen.as_ref() != self.current.as_ref() {
             self.chosen = None;
         }
         self.players = players;
         self.now = Instant::now();
+
+        // Gone with nothing to show: keep the last of it on screen for a moment, in case it's
+        // only between tracks.
+        let mut effect = Effect::none();
+        if self.current().is_some_and(shown) {
+            self.held = None;
+        } else if let Some(was) = was {
+            self.held = Some(was);
+            self.holds += 1;
+            let hold = self.holds;
+            effect = Effect::task(Task::future(sleep(GAP)).map(move |()| Message::Release(hold)));
+        }
 
         let after = self.current().map(|p| (p.bus_name.clone(), identify(p)));
         match (&self.skipping, before, after) {
@@ -296,9 +333,9 @@ impl Media {
             {
                 let nudge = *nudge;
                 self.skipping = None;
-                Effect::none().nudge(nudge)
+                effect.nudge(nudge)
             }
-            _ => Effect::none(),
+            _ => effect,
         }
     }
 
@@ -485,6 +522,33 @@ mod tests {
         media.update(Message::Players(vec![player("mpv", Status::Stopped, "")]));
         assert!(media.item().into_parts().content.is_none());
         assert!(media.popover().is_none());
+    }
+
+    #[test]
+    fn a_gap_between_tracks_keeps_the_last_one_on_screen() {
+        let mut media = media(Config::default());
+        media.update(Message::Players(vec![player("a", Status::Playing, "One")]));
+        media.update(Message::Players(vec![player("a", Status::Stopped, "")]));
+        assert!(media.item().into_parts().content.is_some(), "held");
+        assert_eq!(media.showing().unwrap().title, "One");
+        // The next track comes before the hold is up: no gap, and the old timer does nothing.
+        media.update(Message::Players(vec![player("a", Status::Playing, "Two")]));
+        media.update(Message::Release(1));
+        assert_eq!(media.showing().unwrap().title, "Two");
+        // Really stopped: hidden once the hold is up.
+        media.update(Message::Players(vec![player("a", Status::Stopped, "")]));
+        media.update(Message::Release(1));
+        assert!(media.item().into_parts().content.is_some(), "a stale timer");
+        media.update(Message::Release(2));
+        assert!(media.item().into_parts().content.is_none());
+        // The player leaving altogether is held the same way.
+        media.update(Message::Players(vec![player(
+            "a",
+            Status::Playing,
+            "Three",
+        )]));
+        media.update(Message::Players(Vec::new()));
+        assert!(media.item().into_parts().content.is_some());
     }
 
     #[test]
