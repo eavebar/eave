@@ -18,6 +18,12 @@ resvg = { version = "0.45", default-features = false }
 # iced's tokio backend.
 tokio = { version = "1", default-features = false, features = ["rt", "time"] }
 iced_layershell = "0.19"
+# Cover art (D-55): JPEG, the format most covers come in. PNG goes through tiny-skia, like icons.
+zune-jpeg = { version = "0.5", default-features = false, features = ["std", "neon", "x86"] }
+# Cover art over https (D-55), fetched on the blocking pool. Checked against the system's CA
+# certificates, not a bundled list; rustls on ring.
+ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 toml.workspace = true
 # inotify for config hot reload (D-21); already in the tree through the Wayland stack.
 rustix = { version = "1", default-features = false, features = ["std", "fs"] }

@@ -223,11 +223,6 @@ pub const GULP_SWELL: f32 = 0.08;
 /// How often the charging battery is redrawn: 30 frames a second, cheaper than the compositor's
 /// rate and smooth enough for motion this small.
 pub const BATTERY_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
-/// How often the media icon's bars are redrawn while they dance: the battery's rate, for the same
-/// reason. Paused, they're not redrawn at all.
-pub const MEDIA_FRAME: Duration = BATTERY_FRAME;
-/// How long the media icon's bars take to settle when playback pauses, or to rise when it plays.
-pub const MEDIA_SETTLE: Duration = Duration::from_millis(350);
 /// A primary press held at least this long is a long press: it plays with the island, but the
 /// item's action and popover don't fire on release.
 pub const LONG_PRESS: Duration = Duration::from_millis(400);
@@ -239,6 +234,11 @@ pub const TEXT_SIZE: f32 = 14.0;
 pub const ICON_SIZE: f32 = 16.0;
 /// The battery lies on its side, so it is wider than the others.
 pub const BATTERY_ICON_WIDTH: f32 = 24.0;
+/// A cover's side when it's a popover's main picture, and its corner radius. At icon size its
+/// corners are rounded like this, but less.
+pub const COVER_SIZE: f32 = 128.0;
+pub const COVER_RADIUS: f32 = 12.0;
+pub const COVER_ICON_RADIUS: f32 = 3.0;
 pub const ICON_STROKE: f32 = 1.5;
 /// How visible the parts of an icon that are off stay, against the parts that are on.
 pub const ICON_OFF_ALPHA: f32 = 0.3;

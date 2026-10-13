@@ -37,6 +37,8 @@ pub struct Player {
     /// The artists, joined with commas.
     pub artist: String,
     pub album: String,
+    /// The track's cover art, as a URL: `file://` or `https://` mostly. Empty when there's none.
+    pub art_url: String,
     /// The track's length, when the player knows it.
     pub length: Option<Duration>,
     /// The track's id, which seeking needs. `None` when the player gives none.
@@ -64,6 +66,7 @@ impl PartialEq for Player {
             && self.title == other.title
             && self.artist == other.artist
             && self.album == other.album
+            && self.art_url == other.art_url
             && self.length == other.length
             && self.track_id == other.track_id
             && self.position == other.position
@@ -259,6 +262,7 @@ fn parse(bus_name: String, root: &Properties, player: &Properties, read_at: Inst
         title: get::<String>(&metadata, "xesam:title").trim().to_string(),
         artist: artists(&metadata),
         album: get::<String>(&metadata, "xesam:album").trim().to_string(),
+        art_url: get::<String>(&metadata, "mpris:artUrl").trim().to_string(),
         length: micros(metadata.get("mpris:length")).filter(|length| !length.is_zero()),
         track_id: track_id(&metadata),
         position: micros(player.get("Position")).unwrap_or_default(),
@@ -424,6 +428,7 @@ mod tests {
                     ("xesam:album", Value::from("Hurry Up, We're Dreaming")),
                     ("mpris:length", Value::I64(243_000_000)),
                     ("mpris:trackid", Value::ObjectPath(track)),
+                    ("mpris:artUrl", Value::from("file:///tmp/cover.jpg")),
                 ]),
             ),
         ]);
@@ -443,6 +448,7 @@ mod tests {
         assert_eq!(parsed.title, "Midnight City");
         assert_eq!(parsed.artist, "M83, Someone");
         assert_eq!(parsed.album, "Hurry Up, We're Dreaming");
+        assert_eq!(parsed.art_url, "file:///tmp/cover.jpg");
         assert_eq!(parsed.length, Some(Duration::from_secs(243)));
         assert_eq!(parsed.position, Duration::from_secs(12));
         assert_eq!(parsed.track_id.unwrap().as_str(), "/com/spotify/track/1");

@@ -1,8 +1,8 @@
-//! What's playing, from any MPRIS player: three bars that dance while it plays and rest when it
-//! pauses, and the title and artist beside them. Right click plays or pauses, scrolling skips
-//! tracks, and the island is nudged the way the track changed. The popover has the track, a seek
-//! bar, the controls, and the players to choose from when there's more than one. Hidden when
-//! nothing is playing or paused.
+//! What's playing, from any MPRIS player: the track's cover art, or the player's icon when it has
+//! none, and the title and artist beside it, dimmed while paused. Right click plays or pauses,
+//! scrolling skips tracks, and the island is nudged the way the track changed. The popover has the
+//! cover, the track, a seek bar, the controls, and the players to choose from when there's more
+//! than one. Hidden when nothing is playing or paused.
 
 use std::time::Instant;
 
@@ -19,7 +19,7 @@ pub fn register(registry: &mut Registry) {
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// What the bar item shows beside the bars.
+    /// What the bar item shows beside the cover.
     show: Show,
     /// Longer titles are cut, with an ellipsis.
     max_chars: usize,
@@ -37,11 +37,11 @@ impl Default for Config {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Show {
-    /// The bars, then the title and artist.
+    /// The cover, then the title and artist.
     Title,
-    /// The bars, and the title and artist while hovered.
+    /// The cover, and the title and artist while hovered.
     Hover,
-    /// Only the bars.
+    /// Only the cover.
     Icon,
 }
 
@@ -179,11 +179,7 @@ impl Widget for Media {
         let Some(player) = self.current().filter(|p| shown(p)) else {
             return Item::hidden();
         };
-        let icon = || {
-            ui::icon(Icon::Media {
-                playing: player.playing(),
-            })
-        };
+        let icon = || picture(player);
         let text = || ui::label(shorten(&track(player), self.config.max_chars));
         let content = match self.config.show {
             Show::Title => ui::row([icon(), text()]),
@@ -203,6 +199,9 @@ impl Widget for Media {
     fn popover(&self) -> Option<Panel<Message>> {
         let player = self.current().filter(|p| shown(p))?;
         let mut lines = vec![ui::header(player.identity.clone())];
+        if !player.art_url.is_empty() {
+            lines.push(ui::cover(player.art_url.clone(), ui::empty()).large());
+        }
         let title = if player.title.is_empty() {
             player.identity.clone()
         } else {
@@ -357,6 +356,23 @@ fn pick(players: &[Player], chosen: Option<&str>, current: Option<&str>) -> Opti
         .map(|p| p.bus_name.clone())
 }
 
+/// The track's cover, or until it's there and when there's none, the player's icon; the media
+/// bars for a player that doesn't say which app it is.
+fn picture(player: &Player) -> ui::Node<Message> {
+    let placeholder = if player.desktop_entry.is_empty() {
+        ui::icon(Icon::Media {
+            playing: player.playing(),
+        })
+    } else {
+        ui::app_icon(player.desktop_entry.clone())
+    };
+    if player.art_url.is_empty() {
+        placeholder
+    } else {
+        ui::cover(player.art_url.clone(), placeholder)
+    }
+}
+
 /// A player is shown while it has something to show: anything but stopped with no track.
 fn shown(player: &Player) -> bool {
     player.status != Status::Stopped || !player.title.is_empty()
@@ -432,6 +448,7 @@ mod tests {
             title: title.to_owned(),
             artist: "Artist".to_owned(),
             album: String::new(),
+            art_url: String::new(),
             length: Some(Duration::from_secs(200)),
             track_id: None,
             position: Duration::ZERO,
@@ -516,20 +533,23 @@ mod tests {
     }
 
     #[test]
-    fn shows_the_bars_then_the_track() {
+    fn shows_the_cover_then_the_track() {
         let mut media = media(Config::default());
-        media.update(Message::Players(vec![player("a", Status::Playing, "Song")]));
+        let mut playing = player("a", Status::Playing, "Song");
+        playing.art_url = "file:///tmp/cover.jpg".into();
+        media.update(Message::Players(vec![playing]));
         let ui::Kind::Row(children) = content(&media) else {
             panic!("a row");
         };
         let mut children = children.into_iter().map(ui::Node::into_kind);
-        assert!(matches!(
-            children.next(),
-            Some(ui::Kind::Icon {
-                icon: Icon::Media { playing: true },
-                ..
-            })
-        ));
+        let Some(ui::Kind::Cover { url, fallback, .. }) = children.next() else {
+            panic!("the cover first");
+        };
+        assert_eq!(url, "file:///tmp/cover.jpg");
+        assert!(
+            matches!(fallback.into_kind(), ui::Kind::AppIcon { app_id, .. } if app_id == "a"),
+            "the player's icon until it's there"
+        );
         assert!(matches!(
             children.next(),
             Some(ui::Kind::Label { text, .. }) if text == "Song · Artist"
@@ -553,9 +573,27 @@ mod tests {
         icon.update(Message::Players(players));
         assert!(matches!(
             content(&icon),
-            ui::Kind::Icon {
-                icon: Icon::Media { playing: false },
+            ui::Kind::AppIcon {
                 tone: Some(Tone::Dim),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_player_that_says_nothing_of_itself_shows_the_bars() {
+        let mut media = media(Config {
+            show: Show::Icon,
+            ..Config::default()
+        });
+        let mut anonymous = player("a", Status::Playing, "Song");
+        anonymous.desktop_entry.clear();
+        media.update(Message::Players(vec![anonymous]));
+        assert!(matches!(
+            content(&media),
+            ui::Kind::Icon {
+                icon: Icon::Media { playing: true },
+                ..
             }
         ));
     }

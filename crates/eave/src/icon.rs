@@ -6,10 +6,6 @@
 //! times, like a bottle being emptied, the whole icon swelling with each gulp. It moves at 30
 //! frames a second, not the compositor's rate, to keep it cheap
 //! ([D-37](../../../docs/decisions.md)).
-//!
-//! The media icon's bars dance while something plays, each to its own pair of slow waves, at the
-//! same 30 frames a second. When it pauses they settle low and ask for no more frames
-//! ([D-55](../../../docs/decisions.md)).
 
 use std::f32::consts::{PI, TAU};
 use std::time::Instant;
@@ -122,74 +118,11 @@ fn swell(t: f32) -> f32 {
     (PI * (t / length - index)).sin().powi(2) * (1.0 - 0.2 * index)
 }
 
-/// The media icon's bars: a low rest, how high they can dance, and each one's two waves, in
-/// cycles a second. Frequencies that don't share a beat, so the dance never visibly repeats.
-const BAR_REST: f32 = 3.0;
-const BAR_TOP: f32 = 12.0;
-const BAR_WAVES: [(f32, f32); 3] = [(1.3, 2.9), (1.9, 0.7), (1.1, 2.3)];
-
-/// How far a media icon's bars are into their dance.
-#[derive(Default)]
-struct Dance {
-    /// The first frame drawn while playing; the waves count from it.
-    start: Option<Instant>,
-    /// The last frame, to ease `level` by the time since.
-    last: Option<Instant>,
-    /// Seconds into the dance, as of the last frame.
-    t: f32,
-    /// From 0 (at rest) to 1 (dancing fully): rises when it plays, falls when it pauses.
-    level: f32,
-}
-
-impl Dance {
-    /// Advances to `now`. Returns when the next frame is needed: one [`theme::MEDIA_FRAME`]
-    /// later while playing or still settling, never once at rest.
-    fn step(&mut self, playing: bool, now: Instant) -> Option<Instant> {
-        if !playing && self.level == 0.0 {
-            *self = Self::default();
-            return None;
-        }
-        let since = self.last.map_or(0.0, |last| {
-            now.saturating_duration_since(last)
-                .as_secs_f32()
-                .min(theme::MEDIA_FRAME.as_secs_f32() * 3.0)
-        });
-        self.last = Some(now);
-        let change = since / theme::MEDIA_SETTLE.as_secs_f32();
-        self.level = if playing {
-            (self.level + change).min(1.0)
-        } else {
-            (self.level - change).max(0.0)
-        };
-        let start = *self.start.get_or_insert(now);
-        self.t = now.saturating_duration_since(start).as_secs_f32();
-        if !playing && self.level == 0.0 {
-            *self = Self::default();
-            return None;
-        }
-        Some(now + theme::MEDIA_FRAME)
-    }
-
-    /// Each bar's height, in grid units.
-    fn heights(&self) -> [f32; 3] {
-        // Smoothstep, so the bars start and finish settling gently.
-        let level = self.level * self.level * (3.0 - 2.0 * self.level);
-        BAR_WAVES.map(|(slow, fast)| {
-            // Two waves, a third of a cycle apart at the start, between 0 and 1.
-            let wave = 0.5
-                + 0.3 * (TAU * slow * self.t).sin()
-                + 0.2 * (TAU * fast * self.t + TAU / 3.0).sin();
-            BAR_REST + (BAR_TOP - BAR_REST) * level * wave.clamp(0.0, 1.0)
-        })
-    }
-}
-
-/// What moves in an icon, kept between frames.
-#[derive(Default)]
-struct Motion {
-    pour: Pour,
-    dance: Dance,
-}
+/// The media icon's bars, in grid units: uneven while playing, low and level while not. They
+/// don't dance: that would redraw the bar for as long as music plays
+/// ([D-55](../../../docs/decisions.md)).
+const BARS_PLAYING: [f32; 3] = [6.5, 11.0, 8.5];
+const BARS_PAUSED: [f32; 3] = [3.0; 3];
 
 struct Glyph {
     icon: Icon,
@@ -197,11 +130,11 @@ struct Glyph {
 }
 
 impl<M> canvas::Program<M> for Glyph {
-    type State = Motion;
+    type State = Pour;
 
     fn update(
         &self,
-        motion: &mut Motion,
+        pour: &mut Pour,
         event: &Event,
         _bounds: Rectangle,
         _cursor: mouse::Cursor,
@@ -209,17 +142,13 @@ impl<M> canvas::Program<M> for Glyph {
         let Event::Window(window::Event::RedrawRequested(now)) = event else {
             return None;
         };
-        let next = match self.icon {
-            Icon::Battery { charging, .. } => motion.pour.step(charging, *now),
-            Icon::Media { playing } => motion.dance.step(playing, *now),
-            _ => None,
-        };
-        next.map(Action::request_redraw_at)
+        let charging = matches!(self.icon, Icon::Battery { charging: true, .. });
+        pour.step(charging, *now).map(Action::request_redraw_at)
     }
 
     fn draw(
         &self,
-        motion: &Motion,
+        pour: &Pour,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -236,7 +165,7 @@ impl<M> canvas::Program<M> for Glyph {
             frame
         };
         frame.scale(theme::ICON_SIZE / GRID);
-        let gulp = motion.pour.gulp();
+        let gulp = pour.gulp();
         if let Icon::Battery { charging: true, .. } = self.icon {
             // Swells from its middle.
             let middle = Vector::new(battery_width() / 2.0, GRID / 2.0);
@@ -288,7 +217,8 @@ impl<M> canvas::Program<M> for Glyph {
             Icon::Headphones => pen.headphones(),
             Icon::Display => pen.display(),
             Icon::Bell { muted } => pen.bell(muted),
-            Icon::Media { .. } => pen.bars(motion.dance.heights()),
+            Icon::Media { playing: true } => pen.bars(BARS_PLAYING),
+            Icon::Media { playing: false } => pen.bars(BARS_PAUSED),
             Icon::Play => pen
                 .frame
                 .fill(&polygon(&[(4.5, 2.5), (13.0, 8.0), (4.5, 13.5)]), pen.on),
@@ -715,56 +645,6 @@ mod tests {
         pour.step(true, start);
         assert_eq!(pour.step(false, start + theme::BATTERY_GULP), None);
         assert_eq!(pour.gulp(), Gulp::default());
-    }
-
-    #[test]
-    fn paused_media_rests_without_frames() {
-        let mut dance = Dance::default();
-        assert_eq!(dance.step(false, Instant::now()), None);
-        assert_eq!(dance.heights(), [BAR_REST; 3]);
-    }
-
-    #[test]
-    fn playing_media_dances_inside_the_grid() {
-        let mut dance = Dance::default();
-        let start = Instant::now();
-        assert_eq!(dance.step(true, start), Some(start + theme::MEDIA_FRAME));
-        let mut now = start;
-        let mut moved = false;
-        for _ in 0..300 {
-            now += theme::MEDIA_FRAME;
-            assert!(dance.step(true, now).is_some());
-            let heights = dance.heights();
-            assert!(
-                heights.iter().all(|h| (BAR_REST..=BAR_TOP).contains(h)),
-                "{heights:?}"
-            );
-            moved |= heights.iter().any(|h| *h > BAR_REST + 3.0);
-        }
-        assert!(moved, "the bars rise");
-        assert!(dance.level > 0.99);
-    }
-
-    #[test]
-    fn media_that_pauses_settles_then_stops_asking_for_frames() {
-        let mut dance = Dance::default();
-        let mut now = Instant::now();
-        for _ in 0..30 {
-            dance.step(true, now);
-            now += theme::MEDIA_FRAME;
-        }
-        let mut frames = 0;
-        while dance.step(false, now).is_some() {
-            now += theme::MEDIA_FRAME;
-            frames += 1;
-            assert!(frames < 100, "never settles");
-        }
-        let expected = theme::MEDIA_SETTLE.as_secs_f32() / theme::MEDIA_FRAME.as_secs_f32();
-        assert!(
-            (frames as f32) <= expected + 2.0,
-            "{frames} frames to settle"
-        );
-        assert_eq!(dance.heights(), [BAR_REST; 3]);
     }
 
     #[test]
