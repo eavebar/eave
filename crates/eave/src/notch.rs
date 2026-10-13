@@ -11,10 +11,18 @@ use std::path::Path;
 use crate::config;
 
 /// The notch, in logical pixels, centered at the top of the output.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Notch {
     pub width: f32,
     pub height: f32,
+    /// Its lower corners'.
+    pub radius: f32,
+    /// 0 rounds its corners and shoulders like a circle, up to 1 like a squircle.
+    pub smoothing: f32,
+    /// How much it's rounded outwards where it meets the top edge.
+    pub shoulder: f32,
+    /// How far below the top edge it starts: 0 hangs from it.
+    pub top: f32,
 }
 
 /// The notch as the hardware has it, in physical pixels.
@@ -51,10 +59,17 @@ pub async fn resolve(setting: config::Notch) -> Option<Notch> {
     let bar_height = f32::from(crate::theme::EDGE_GAP) + crate::theme::ISLAND_HEIGHT as f32;
     match setting {
         config::Notch::Off => None,
-        config::Notch::Fixed { width, height } => Some(Notch {
-            width,
-            height: height.unwrap_or(bar_height),
-        }),
+        config::Notch::Fixed(shape) => {
+            let scale = focused().await.map_or(1.0, |monitor| monitor.scale);
+            Some(Notch {
+                width: shape.width / scale,
+                height: shape.height.map_or(bar_height, |height| height / scale),
+                radius: shape.radius / scale,
+                smoothing: shape.smoothing,
+                shoulder: shape.shoulder / scale,
+                top: shape.top / scale,
+            })
+        }
         config::Notch::Auto => detect().await,
     }
 }
@@ -64,12 +79,9 @@ async fn detect() -> Option<Notch> {
     let found = tokio::task::spawn_blocking(|| find(Path::new("/")))
         .await
         .ok()??;
-    let monitors: Vec<eave_hyprland::types::Monitor> =
-        eave_hyprland::query("monitors").await.ok()?;
-    // The bar opens on the focused output (one surface for now). Only the built-in panel has the
-    // notch, and only upright is it at the top.
-    let monitor = monitors.iter().find(|monitor| monitor.focused)?;
-    if !monitor.name.starts_with("eDP") || monitor.transform != 0 || monitor.scale <= 0.0 {
+    // Only the built-in panel has the notch, and only upright is it at the top.
+    let monitor = focused().await?;
+    if !monitor.name.starts_with("eDP") || monitor.transform != 0 {
         return None;
     }
     let width = match found.width {
@@ -85,7 +97,17 @@ async fn detect() -> Option<Notch> {
     Some(Notch {
         width,
         height: found.height as f32 / monitor.scale,
+        ..Notch::default()
     })
+}
+
+/// The output the bar opens on: the focused one (one surface for now).
+pub async fn focused() -> Option<eave_hyprland::types::Monitor> {
+    let monitors: Vec<eave_hyprland::types::Monitor> =
+        eave_hyprland::query("monitors").await.ok()?;
+    monitors
+        .into_iter()
+        .find(|monitor| monitor.focused && monitor.scale > 0.0)
 }
 
 /// The notch under `root` (`/`, or a fake tree in tests), if the kernel shows it.

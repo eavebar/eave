@@ -20,9 +20,21 @@
 //! attach = ["top", "right"]   # optional: flush with these screen edges (D-70)
 //! ```
 //!
-//! Two keys sit above the zones. `renderer = "gpu"` (the default) or `"cpu"` (D-67), read when
-//! the bar starts. And `notch`: `"auto"` (the default) finds a MacBook's, `false` ignores it, and
-//! `{ width = 190, height = 37 }` says how big it is, in logical pixels (D-69).
+//! Three keys sit above the zones. `renderer = "gpu"` (the default) or `"cpu"` (D-67), read when
+//! the bar starts. `notch`: `"auto"` (the default) finds a MacBook's, `false` ignores it, and a
+//! table says what it is (D-69). And `screen`, how the screen's edges are rounded or hidden. Both
+//! are in physical pixels, and `eave calibrate` measures and writes them (D-71):
+//!
+//! ```toml
+//! notch = { width = 370, height = 66, radius = 20, smoothing = 0.6, shoulder = 8, top = 0 }
+//! screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
+//! ```
+//!
+//! A notch's `radius` rounds its lower corners, `shoulder` rounds it outwards where it meets the
+//! top edge, and `top` above 0 makes it a cut-out that far down instead. `smoothing` 0 is a
+//! circle's corner, up to 1 a squircle's. A screen's `corners` go top left, top right, bottom
+//! right, bottom left, and its `inset` top, right, bottom, left: the rows and columns hidden under
+//! the bezel. Either takes one number for all four.
 
 use std::path::{Path, PathBuf};
 
@@ -82,9 +94,36 @@ pub enum Notch {
     Auto,
     /// No notch, whatever the screen has.
     Off,
-    /// This big, in logical pixels, centered at the top. Without a height, as tall as the bar's
-    /// islands reach.
-    Fixed { width: f32, height: Option<f32> },
+    /// This one, as measured.
+    Fixed(NotchShape),
+}
+
+/// A notch as config.toml has it, in physical pixels, centered at the top of the screen.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct NotchShape {
+    pub width: f32,
+    /// Without one, as tall as the bar's islands reach.
+    pub height: Option<f32>,
+    /// Its lower corners'.
+    pub radius: f32,
+    /// 0 rounds its corners and shoulders like a circle, up to 1 like a squircle.
+    pub smoothing: f32,
+    /// How much it's rounded outwards where it meets the top edge.
+    pub shoulder: f32,
+    /// 0 hangs from the top edge; more is a cut-out this far below it, rounded all round.
+    pub top: f32,
+}
+
+/// How the screen's own edges are shaped, in physical pixels (D-71). All zero is a plain
+/// rectangle, every pixel of it shown.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Screen {
+    /// Each corner's radius: top left, top right, bottom right, bottom left.
+    pub corners: [f32; 4],
+    /// 0 rounds the corners like a circle, up to 1 like a squircle.
+    pub smoothing: f32,
+    /// The rows and columns hidden under the bezel: top, right, bottom, left.
+    pub inset: [f32; 4],
 }
 
 /// What draws the bar (D-67).
@@ -113,6 +152,7 @@ pub struct Config {
     pub entries: Vec<Entry>,
     pub renderer: Renderer,
     pub notch: Notch,
+    pub screen: Screen,
     pub warnings: Vec<String>,
 }
 
@@ -183,6 +223,9 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
     }
     if let Some(value) = table.remove("notch") {
         config.notch = notch(value, &mut config.warnings);
+    }
+    if let Some(value) = table.remove("screen") {
+        config.screen = screen(value, &mut config.warnings);
     }
 
     for zone in Zone::ALL {
@@ -357,36 +400,103 @@ fn edges(value: &toml::Value, at: &str, warnings: &mut Vec<String>) -> Edges {
     edges
 }
 
-/// `notch = "auto"`, `false`, or `{ width = 190, height = 37 }`.
+/// A size in pixels: an integer or a float, at least 0.
+fn pixels(value: &toml::Value) -> Option<f32> {
+    match value {
+        toml::Value::Integer(size) if *size >= 0 => Some(*size as f32),
+        toml::Value::Float(size) if *size >= 0.0 && size.is_finite() => Some(*size as f32),
+        _ => None,
+    }
+}
+
+/// A smoothing: 0 to 1.
+fn smoothing(value: &toml::Value) -> Option<f32> {
+    pixels(value).filter(|smoothing| *smoothing <= 1.0)
+}
+
+/// Four sizes, or one for all four.
+fn four(value: &toml::Value) -> Option<[f32; 4]> {
+    match value {
+        toml::Value::Array(sizes) if sizes.len() == 4 => {
+            let mut four = [0.0; 4];
+            for (size, value) in four.iter_mut().zip(sizes) {
+                *size = pixels(value)?;
+            }
+            Some(four)
+        }
+        size => pixels(size).map(|size| [size; 4]),
+    }
+}
+
+/// `notch = "auto"`, `false`, or `{ width = 370, height = 66, … }`.
 fn notch(value: toml::Value, warnings: &mut Vec<String>) -> Notch {
-    let size = |value: Option<&toml::Value>| match value {
-        Some(toml::Value::Integer(size)) if *size > 0 => Some(Some(*size as f32)),
-        Some(toml::Value::Float(size)) if *size > 0.0 => Some(Some(*size as f32)),
-        Some(_) => None,
-        None => Some(None),
-    };
     match value {
         toml::Value::String(name) if name == "auto" => return Notch::Auto,
         toml::Value::Boolean(false) => return Notch::Off,
-        toml::Value::Table(table)
-            if table
-                .keys()
-                .all(|key| matches!(key.as_str(), "width" | "height")) =>
-        {
-            if let (Some(Some(width)), Some(height)) =
-                (size(table.get("width")), size(table.get("height")))
-            {
-                return Notch::Fixed { width, height };
+        toml::Value::Table(table) => {
+            let mut shape = NotchShape::default();
+            let read = table.iter().all(|(key, value)| {
+                let field = match key.as_str() {
+                    "width" => &mut shape.width,
+                    "height" => shape.height.insert(0.0),
+                    "radius" => &mut shape.radius,
+                    "shoulder" => &mut shape.shoulder,
+                    "top" => &mut shape.top,
+                    "smoothing" => {
+                        return smoothing(value)
+                            .map(|value| shape.smoothing = value)
+                            .is_some();
+                    }
+                    _ => return false,
+                };
+                pixels(value).map(|value| *field = value).is_some()
+            });
+            // Everything else may be left out, but not how wide it is.
+            if read && shape.width > 0.0 {
+                return Notch::Fixed(shape);
             }
         }
         _ => {}
     }
     warnings.push(
-        "`notch` must be \"auto\", false or { width = 190, height = 37 } in logical pixels, \
-         using \"auto\""
+        "`notch` must be \"auto\", false or { width = 370, height = 66 } in physical pixels, \
+         with radius, smoothing, shoulder and top if you like, using \"auto\""
             .into(),
     );
     Notch::Auto
+}
+
+/// `screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = 0 }`.
+fn screen(value: toml::Value, warnings: &mut Vec<String>) -> Screen {
+    let mut screen = Screen::default();
+    let toml::Value::Table(table) = value else {
+        warnings.push("`screen` must be a table, like { corners = 20 }, ignoring it".into());
+        return screen;
+    };
+    for (key, value) in &table {
+        let read = match key.as_str() {
+            "corners" => four(value).map(|corners| screen.corners = corners),
+            "inset" => four(value).map(|inset| screen.inset = inset),
+            "smoothing" => smoothing(value).map(|value| screen.smoothing = value),
+            _ => {
+                warnings.push(format!(
+                    "`screen` takes corners, smoothing and inset, ignoring `{key}`"
+                ));
+                continue;
+            }
+        };
+        if read.is_none() {
+            warnings.push(format!(
+                "`screen.{key}` must be {}, ignoring it",
+                if key == "smoothing" {
+                    "a number from 0 to 1"
+                } else {
+                    "a size in pixels, or four of them"
+                }
+            ));
+        }
+    }
+    screen
 }
 
 #[cfg(test)]
@@ -410,19 +520,26 @@ mod tests {
         assert_eq!(parse("notch = false").unwrap().notch, Notch::Off);
         assert_eq!(
             parse("notch = { width = 190 }").unwrap().notch,
-            Notch::Fixed {
+            Notch::Fixed(NotchShape {
                 width: 190.0,
-                height: None
-            }
+                ..NotchShape::default()
+            })
         );
         assert_eq!(
-            parse("notch = { width = 187.5, height = 37 }")
-                .unwrap()
-                .notch,
-            Notch::Fixed {
-                width: 187.5,
-                height: Some(37.0)
-            }
+            parse(
+                "notch = { width = 370.5, height = 66, radius = 20, smoothing = 0.6, \
+                 shoulder = 8, top = 0 }"
+            )
+            .unwrap()
+            .notch,
+            Notch::Fixed(NotchShape {
+                width: 370.5,
+                height: Some(66.0),
+                radius: 20.0,
+                smoothing: 0.6,
+                shoulder: 8.0,
+                top: 0.0,
+            })
         );
         for odd in [
             "notch = true",
@@ -430,11 +547,31 @@ mod tests {
             "notch = { height = 37 }",
             "notch = { width = -1 }",
             "notch = { width = 190, depth = 2 }",
+            "notch = { width = 190, smoothing = 2 }",
         ] {
             let config = parse(odd).unwrap();
             assert_eq!(config.notch, Notch::Auto, "{odd}");
             assert_eq!(config.warnings.len(), 1, "{odd}");
         }
+    }
+
+    #[test]
+    fn the_screen_is_a_plain_rectangle_unless_it_says_otherwise() {
+        assert_eq!(parse("").unwrap().screen, Screen::default());
+        let config =
+            parse("screen = { corners = [20, 20.5, 0, 0], smoothing = 0.6, inset = 2 }").unwrap();
+        assert_eq!(
+            config.screen,
+            Screen {
+                corners: [20.0, 20.5, 0.0, 0.0],
+                smoothing: 0.6,
+                inset: [2.0; 4],
+            }
+        );
+        assert!(config.warnings.is_empty());
+        let odd = parse("screen = { corners = [1, 2], smoothing = 3, edge = 1 }").unwrap();
+        assert_eq!(odd.screen, Screen::default());
+        assert_eq!(odd.warnings.len(), 3, "{:?}", odd.warnings);
     }
 
     #[test]
