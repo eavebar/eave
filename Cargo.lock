@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "eave-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "iced_futures",
  "iced_runtime",
