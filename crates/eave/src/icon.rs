@@ -359,19 +359,19 @@ impl Pen<'_> {
 
     /// A dome flaring out to a rim, and the clapper under it.
     fn bell(&mut self, muted: bool) {
+        // From the dome's left, over its top: iced starts every arc with a move, so the path
+        // starts with the arc, or closing it would cut across the bell.
         let body = Path::new(|path| {
-            path.move_to(Point::new(2.5, 11.75));
-            path.line_to(Point::new(13.5, 11.75));
-            path.quadratic_curve_to(Point::new(12.0, 10.5), Point::new(12.0, 8.0));
-            path.line_to(Point::new(12.0, 6.5));
             path.arc(Arc {
                 center: Point::new(8.0, 6.5),
                 radius: 4.0,
-                start_angle: Radians(0.0),
-                end_angle: Radians(-PI),
+                start_angle: Radians(PI),
+                end_angle: Radians(TAU),
             });
-            path.line_to(Point::new(4.0, 8.0));
-            path.quadratic_curve_to(Point::new(4.0, 10.5), Point::new(2.5, 11.75));
+            path.line_to(Point::new(12.0, 8.0));
+            path.quadratic_curve_to(Point::new(12.0, 10.5), Point::new(13.5, 11.75));
+            path.line_to(Point::new(2.5, 11.75));
+            path.quadratic_curve_to(Point::new(4.0, 10.5), Point::new(4.0, 8.0));
             path.close();
         });
         self.line(&body, self.on);

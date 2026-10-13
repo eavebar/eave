@@ -133,6 +133,13 @@ pub const PANEL_WIDTH: f32 = 320.0;
 pub const NOTICE_CLOSE: f32 = 22.0;
 /// How many lines of a notification's body show before it's cut off.
 pub const NOTICE_BODY_LINES: f32 = 4.0;
+/// The bar across the top of a notification that shows its time left on screen.
+pub const COUNTDOWN_HEIGHT: f32 = 2.0;
+pub const COUNTDOWN: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.35);
+/// The shortest time between two frames of that bar: it moves a pixel at a time, but no faster
+/// than this. 30 fps, like the battery's gulp: smooth enough for motion this slow, and half the
+/// redraws of 60 (D-47).
+pub const COUNTDOWN_STEP: Duration = Duration::from_nanos(1_000_000_000 / 30);
 /// The room above and below the line between two notifications.
 pub const NOTICE_SPACING: u32 = 10;
 /// A list row with one line, and with a subtitle under it.

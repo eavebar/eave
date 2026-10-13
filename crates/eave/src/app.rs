@@ -20,6 +20,7 @@ use iced_layershell::to_layer_message;
 
 use crate::apps::{self, AppIcon, Icons};
 use crate::config::{self, Config, Entry, Zone};
+use crate::countdown::Countdown;
 use crate::island::{self, Island};
 use crate::slot::Slot;
 use crate::{kit, theme as style, watch};
@@ -917,7 +918,12 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
             .filter(|toast| toast.leaving != panel.open)
             .map(|toast| {
                 let instance = toast.instance;
-                kit::notice(toast.notice.clone(), &bar.icons)
+                let countdown = toast.notice.expires.as_ref().map(|(total, _)| Countdown {
+                    total: *total,
+                    left: toast.left.unwrap_or_default(),
+                    ends: toast.deadline,
+                });
+                kit::notice(toast.notice.clone(), countdown, &bar.icons)
                     .map(move |message| Message::Widget(instance, message))
             }),
     );

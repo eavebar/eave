@@ -59,6 +59,8 @@ pub struct Notifications {
     unread: Vec<u32>,
     quiet: bool,
     open: bool,
+    /// The one the popover's list shows all of, with its actions.
+    expanded: Option<u32>,
     /// The time the popover's "ago"s are counted from.
     now: SystemTime,
 }
@@ -72,8 +74,10 @@ pub enum Message {
     Dismiss(u32),
     /// One of its actions, by key.
     Action(u32, String),
-    /// A click on it: its default action, or else dismissing it.
+    /// A click on it in the island: its default action, or else dismissing it.
     Press(u32),
+    /// A click on it in the popover's list: shows all of it, and its actions, or hides them again.
+    Expand(u32),
     Clear,
     ToggleQuiet,
     Opened,
@@ -94,6 +98,7 @@ impl Widget for Notifications {
             unread: Vec::new(),
             quiet: false,
             open: false,
+            expanded: None,
             now: SystemTime::now(),
         };
         (notifications, Task::none())
@@ -137,6 +142,10 @@ impl Widget for Notifications {
                     None => self.update(Message::Dismiss(id)),
                 }
             }
+            Message::Expand(id) => {
+                self.expanded = (self.expanded != Some(id)).then_some(id);
+                Effect::none()
+            }
             Message::Clear => {
                 let ids: Vec<_> = self.history.drain(..).map(|n| n.id).collect();
                 self.shown.clear();
@@ -167,6 +176,7 @@ impl Widget for Notifications {
             }
             Message::Closed => {
                 self.open = false;
+                self.expanded = None;
                 Effect::none()
             }
             Message::Tick => {
@@ -367,11 +377,34 @@ impl Notifications {
             ui::label(ago(notification.received, self.now)),
             ui::button(ui::icon(Icon::Close), Message::Dismiss(id)),
         ]);
-        ui::list_item(&notification.summary)
+        let row = ui::list_item(&notification.summary)
             .subtitle(subtitle)
             .leading(leading)
             .trailing(trailing)
-            .on_press(Message::Press(id))
+            .on_press(Message::Expand(id));
+        if self.expanded != Some(id) {
+            return row;
+        }
+        // All of the body, then a button per action, the default one first and main.
+        let body =
+            (!notification.body.is_empty()).then(|| ui::label(&notification.body).tone(Tone::Dim));
+        let mut actions: Vec<_> = notification.actions.iter().collect();
+        actions.sort_by_key(|(key, _)| key != "default");
+        let buttons = actions.into_iter().map(|(key, label)| {
+            let label = match label.as_str() {
+                "" | "default" => "Open",
+                label => label,
+            };
+            let button = ui::button(ui::label(label), Message::Action(id, key.clone()));
+            if key == "default" {
+                button.prominent()
+            } else {
+                button
+            }
+        });
+        let buttons = (!notification.actions.is_empty())
+            .then(|| ui::row(std::iter::once(ui::fill()).chain(buttons)));
+        ui::column([Some(row), body, buttons].into_iter().flatten())
     }
 }
 
@@ -506,6 +539,20 @@ mod tests {
         // Left alone until it went by itself.
         let _ = widget.update(Message::Expired(4));
         assert_eq!(widget.unread, [4]);
+    }
+
+    #[test]
+    fn a_click_in_the_list_expands_and_collapses_without_removing() {
+        let mut widget = notifications();
+        arrive(&mut widget, 1);
+        arrive(&mut widget, 2);
+        let _ = widget.update(Message::Expand(1));
+        assert_eq!(widget.expanded, Some(1));
+        let _ = widget.update(Message::Expand(2));
+        assert_eq!(widget.expanded, Some(2), "one at a time");
+        let _ = widget.update(Message::Expand(2));
+        assert_eq!(widget.expanded, None);
+        assert_eq!(widget.history.len(), 2);
     }
 
     #[test]

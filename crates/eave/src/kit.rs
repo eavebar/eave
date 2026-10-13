@@ -16,6 +16,7 @@ use iced::{Background, Border, Color, Element, Font, Length, Padding, Theme, ali
 use crate::alternate::Alternate;
 use crate::apps::Icons;
 use crate::clip::Clip;
+use crate::countdown::Countdown;
 use crate::counter::Counter;
 use crate::field::Field;
 use crate::gulp::Gulp;
@@ -65,10 +66,14 @@ fn separator<'a, M: 'a>() -> Element<'a, M> {
 /// The line height of a notification's body, relative to its size: iced's default.
 const LINE_HEIGHT: f32 = 1.3;
 
-/// One notification, laid out at the panel's width: where it's from and a close button, the
-/// summary, the body cut off after a few lines, then its actions. A click anywhere else on it
-/// sends its `on_press`.
-pub fn notice<'a>(notice: NoticeParts<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage> {
+/// One notification, laid out at the panel's width: the time it has left on screen, if it
+/// expires, where it's from and a close button, the summary, the body cut off after a few lines,
+/// then its actions. A click anywhere else on it sends its `on_press`.
+pub fn notice<'a>(
+    notice: NoticeParts<AnyMessage>,
+    countdown: Option<Countdown>,
+    icons: &Icons,
+) -> Element<'a, AnyMessage> {
     let tone = match notice.urgency {
         Urgency::Critical => Tone::Critical,
         Urgency::Normal | Urgency::Low => Tone::Dim,
@@ -77,16 +82,21 @@ pub fn notice<'a>(notice: NoticeParts<AnyMessage>, icons: &Icons) -> Element<'a,
     let from = notice.app_icon.as_deref().or(notice.app.as_deref());
     let app = from
         .map(|app_id| container(app_icon(app_id, Tone::Normal, icons)).center(theme::ICON_SIZE));
-    let name = notice.app.map(|name| {
-        Clip::new(
+    // Takes the free room, so the close button is at the far end. A `Clip` is only as wide as
+    // its text, even when given more.
+    let name: Element<'a, AnyMessage> = match notice.app {
+        Some(name) => container(Clip::new(
             text(name)
                 .size(theme::SMALL_SIZE)
                 .font(theme::STRONG_FONT)
                 .color(theme::tone(tone))
                 .wrapping(text::Wrapping::None),
             theme::ISLAND_BG,
-        )
-    });
+        ))
+        .width(Length::Fill)
+        .into(),
+        None => fill(ctx),
+    };
     let close = notice.on_dismiss.map(|message| {
         button(
             container(icon::view(
@@ -102,7 +112,6 @@ pub fn notice<'a>(notice: NoticeParts<AnyMessage>, icons: &Icons) -> Element<'a,
     let top = row![]
         .push(app)
         .push(name)
-        .push(fill(ctx))
         .push(close)
         .spacing(theme::SPACING)
         .align_y(alignment::Vertical::Center);
@@ -146,7 +155,10 @@ pub fn notice<'a>(notice: NoticeParts<AnyMessage>, icons: &Icons) -> Element<'a,
             });
         row![fill(ctx)].extend(buttons).spacing(theme::SPACING)
     });
-    let card = column![top, summary]
+    let card = column![]
+        .push(countdown)
+        .push(top)
+        .push(summary)
         .push(body)
         .push(actions)
         .spacing(4)
