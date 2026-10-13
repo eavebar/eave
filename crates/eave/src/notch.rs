@@ -29,17 +29,17 @@ struct Found {
 /// device tree's `compatible`. Only measured ones: a guess would put islands over the screen or
 /// under the notch.
 ///
-/// The 14" and 16" panels are both 254 ppi, and macOS measures their notch at 185 × 32 points in
-/// the native-scale mode (`NSScreen`'s frame minus its auxiliary top areas, and its top safe area
-/// inset): 370 × 64 pixels (notchbay.com/blog/macbook-notch-size,
-/// crestnotch.app/macbook-notch-dimensions). On a 14" the 64 fits the panel; the kernel's
-/// `apple,notch-height` says 74, which hangs below it.
+/// The 14" and 16" panels are both 254 ppi, and macOS measures their notch at 185 points wide in
+/// the native-scale mode (`NSScreen`'s frame minus its auxiliary top areas): 370 pixels
+/// (notchbay.com/blog/macbook-notch-size, crestnotch.app/macbook-notch-dimensions). The height is
+/// fitted by eye on a 14": 66, where the kernel's `apple,notch-height` says 74, which hangs below
+/// it, and macOS's top safe area inset says 64.
 const MODELS: &[(&str, u32, u32)] = &[
     // MacBook Pro 14" and 16" (M1 Pro, M1 Max).
-    ("apple,j314s", 370, 64),
-    ("apple,j314c", 370, 64),
-    ("apple,j316s", 370, 64),
-    ("apple,j316c", 370, 64),
+    ("apple,j314s", 370, 66),
+    ("apple,j314c", 370, 66),
+    ("apple,j316s", 370, 66),
+    ("apple,j316c", 370, 66),
 ];
 
 /// For a notch whose width nobody has measured: wide enough to clear any MacBook's, in logical
@@ -173,7 +173,7 @@ mod tests {
             find(&root),
             Some(Found {
                 width: Some(370),
-                height: 64
+                height: 66
             })
         );
         std::fs::remove_dir_all(root).unwrap();
