@@ -63,6 +63,17 @@ pub enum Icon {
     Display,
     /// A bell: notifications, struck through when they're silenced.
     Bell { muted: bool },
+    /// Three level bars, like an equalizer: media. They dance while `playing` and rest low when
+    /// not.
+    Media { playing: bool },
+    /// A triangle pointing right: play.
+    Play,
+    /// Two upright bars: pause.
+    Pause,
+    /// A triangle pointing left against a bar: back to the previous track.
+    Previous,
+    /// A triangle pointing right against a bar: on to the next track.
+    Next,
 }
 
 /// A piece of UI. Build it with the functions in this module.

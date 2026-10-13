@@ -223,6 +223,11 @@ pub const GULP_SWELL: f32 = 0.08;
 /// How often the charging battery is redrawn: 30 frames a second, cheaper than the compositor's
 /// rate and smooth enough for motion this small.
 pub const BATTERY_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
+/// How often the media icon's bars are redrawn while they dance: the battery's rate, for the same
+/// reason. Paused, they're not redrawn at all.
+pub const MEDIA_FRAME: Duration = BATTERY_FRAME;
+/// How long the media icon's bars take to settle when playback pauses, or to rise when it plays.
+pub const MEDIA_SETTLE: Duration = Duration::from_millis(350);
 /// A primary press held at least this long is a long press: it plays with the island, but the
 /// item's action and popover don't fire on release.
 pub const LONG_PRESS: Duration = Duration::from_millis(400);
