@@ -490,7 +490,7 @@ Both new watchers publish through a `tokio::sync::watch` channel, so every widge
 
 **Status:** accepted (2026-10-12). Replaces `plugins.toml` from [D-12](#d-12-third-party-plugins-compiled-in-by-eave-build).
 
-**What:** `widget = "…"` in config.toml both places a widget and says where it comes from: `<source>[@rev][#widget]`. No `/` is a built-in (`plugins/<name>` of the eave checkout; *since [D-46](#d-46-collections-several-plugins-per-repository-one-widget-per-plugin), the plugin of that name in the eave checkout's collection*), `owner/repo` is GitHub, `host/path` and anything with a `:` are git URLs, and a path starting with `/`, `~` or `.` is a local directory. The widget is the repository's name without `.git` and a leading `eave-`, unless `#widget` names it. *(Since [D-46](#d-46-collections-several-plugins-per-repository-one-widget-per-plugin), that name also picks the plugin, and eave-build checks it against the manifests.)* A top-level `eave = "<source>[@rev]"` picks eave's own source, and defaults to `eavebar/eave`. `eave-build` reads the same file: it compiles in exactly the widgets the config uses, built-ins included, and errors when one source is asked for at two revisions. The bar looks widgets up by the name part (`config::widget_name`). eave-build has its own copy of the grammar, because depending on `eave-api` would pull iced into a CLI. Both copies are tested against the same cases. `eave-rebuild.path` now watches config.toml.
+**What:** `widget = "…"` in config.toml both places a widget and says where it comes from: `<source>[@rev][#widget]`. No `/` is a built-in (`plugins/<name>` of the eave checkout; *since [D-46](#d-46-collections-several-plugins-per-repository-one-widget-per-plugin), the plugin of that name in the eave checkout's collection*), `owner/repo` is GitHub, `host/path` and anything with a `:` are git URLs, and a path starting with `/`, `~` or `.` is a local directory. The widget is the repository's name without `.git` and a leading `eave-`, unless `#widget` names it. *(Since [D-46](#d-46-collections-several-plugins-per-repository-one-widget-per-plugin), that name also picks the plugin, and eave-build checks it against the manifests.)* A top-level `eave = "<source>[@rev]"` picks eave's own source, and defaults to `eaveshell/eave`. `eave-build` reads the same file: it compiles in exactly the widgets the config uses, built-ins included, and errors when one source is asked for at two revisions. The bar looks widgets up by the name part (`config::widget_name`). eave-build has its own copy of the grammar, because depending on `eave-api` would pull iced into a CLI. Both copies are tested against the same cases. `eave-rebuild.path` now watches config.toml.
 
 **Alternatives:**
 - keep `plugins.toml` beside config.toml: two files to keep in step, and a built-in had to be listed in one before it could be used in the other.
@@ -886,7 +886,7 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 
 ## D-48: eave-notify: eave's own notification server
 
-**Status:** accepted (2026-10-13)
+**Status:** accepted (2026-10-13). Moved to its own repository, [eaveshell/eave-notifications](https://github.com/eaveshell/eave-notifications), with its plugin ([D-50](#d-50-notifications-in-their-own-repository-eave-api-and-the-services-on-cratesio)); its decisions continue there.
 
 **What:** `crates/eave-notify` serves the freedesktop notification spec (`org.freedesktop.Notifications`, 1.2) on the session bus, inside the bar. `plugins/notifications` shows what it receives as notices (D-47), with a bell in the bar and the latest notifications in its popover.
 - **The server only receives and reports.** `watch()` starts it on first use and yields whether it's serving, then every notification and every `CloseNotification`. `close(id, reason)` and `invoke(id, key)` send `NotificationClosed` and `ActionInvoked`. Ids count up from 1, and `replaces_id` keeps the id. It advertises `actions`, `body`, `body-markup` and `inline-reply` (D-49). What to show and for how long is the plugin's business.
@@ -930,4 +930,24 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 **Why:** answering a message from where it appears is the point of a notification that offers it, and asking first keeps the bar from ever taking the keyboard unasked.
 
 **Cost:** no dependencies. While a field shows, the bar has the keyboard, as while a popover is open.
+
+---
+
+## D-50: Notifications in their own repository; eave-api and the services on crates.io
+
+**Status:** accepted (2026-10-13). Moves [D-48](#d-48-eave-notify-eaves-own-notification-server)'s crates out of eave.
+
+**What:**
+- `eave-notify` and the `notifications` plugin live in [eaveshell/eave-notifications](https://github.com/eaveshell/eave-notifications), as a collection of their own. The config entry is `widget = "eaveshell/eave-notifications"`. eave keeps what any notification source needs: the notice API (D-47) and replies (D-49), the island's panel and the bell icon.
+- `eave-api` and the service crates (`eave-dbus`, `eave-hyprland`, `eave-net`, `eave-pulse`, `eave-iwd`) are published on crates.io, so a plugin outside eave builds and tests on its own. `eave-build` still patches them to the checkout it builds against.
+- The organisation is now `eaveshell` (it was `eavebar`): the bar is the first piece of a shell.
+
+**Alternatives:**
+- keeping notifications built in: eave's own engine would be a special case, where D-47 says an engine is just a plugin. It's also the only built-in that takes over a desktop-wide role, which not everyone wants from their bar.
+- not publishing, with a `[patch]` in every plugin repository: each would need an eave checkout beside it to build.
+- publishing the host (`eave`) and `eave-build` too: the host relies on the patched `softbuffer` in `vendor/`, which a published crate can't carry, and eave-build installs from git.
+
+**Why:** the engine never depended on eave (D-48), and a separate repository proves the notice API works for a plugin eave doesn't ship.
+
+**Cost:** a published version can only be yanked, not deleted, and `eave-api` now follows semver: a breaking change is 0.2. Changes that touch both the notice API and the plugin are two commits in two repositories.
 

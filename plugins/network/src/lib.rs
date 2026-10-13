@@ -3,7 +3,7 @@
 //! works under any network manager.
 //!
 //! The popover lists the Wi-Fi networks in range, the current one first, and joins, leaves and
-//! forgets them through iwd ([D-42](https://github.com/eavebar/eave/blob/main/docs/decisions.md)),
+//! forgets them through iwd ([D-42](https://github.com/eaveshell/eave/blob/main/docs/decisions.md)),
 //! asking for a password when a network needs one. Each network has a details page. Without iwd
 //! it shows what the kernel knows: the connection, its address and gateway.
 

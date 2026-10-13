@@ -28,7 +28,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 /// Where eave comes from when config.toml has no `eave = "…"`.
-const DEFAULT_EAVE: &str = "eavebar/eave";
+const DEFAULT_EAVE: &str = "eaveshell/eave";
 const SERVICE: &str = "eave.service";
 /// One plugin's manifest, beside its Cargo.toml.
 const PLUGIN_FILE: &str = "eave-plugin.toml";
@@ -925,7 +925,6 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
         "eave-hyprland",
         "eave-iwd",
         "eave-net",
-        "eave-notify",
         "eave-pulse",
     ] {
         let dir = eave_dir.join("crates").join(service);

@@ -1,7 +1,7 @@
 #!/bin/sh
-# Installs eave, a status bar for Hyprland: https://github.com/eavebar/eave
+# Installs eave, a status bar for Hyprland: https://github.com/eaveshell/eave
 #
-#   curl -fsSL https://raw.githubusercontent.com/eavebar/eave/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/eaveshell/eave/main/install.sh | sh
 #
 # It installs eave-build (with cargo), writes a starter ~/.config/eave/config.toml if you have
 # none, builds the bar into ~/.local/bin/eave and sets up the systemd user units. Running it again
@@ -10,7 +10,7 @@
 # EAVE_REPO=<git URL or local checkout> installs from somewhere else, such as a fork.
 set -eu
 
-repo=${EAVE_REPO:-https://github.com/eavebar/eave}
+repo=${EAVE_REPO:-https://github.com/eaveshell/eave}
 config=${XDG_CONFIG_HOME:-$HOME/.config}/eave/config.toml
 eave_build=${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin/eave-build
 

@@ -1,5 +1,5 @@
 //! Audio for eave plugins, over the PulseAudio native protocol. On PipeWire this is served by
-//! `pipewire-pulse`, which every desktop setup runs ([D-19](https://github.com/eavebar/eave/blob/main/docs/decisions.md)).
+//! `pipewire-pulse`, which every desktop setup runs ([D-19](https://github.com/eaveshell/eave/blob/main/docs/decisions.md)).
 //!
 //! One thread holds a subscription to sink and server events for every widget. Reads and commands
 //! each use a short-lived connection on tokio's blocking pool, so the UI thread never waits on

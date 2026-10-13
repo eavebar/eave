@@ -21,7 +21,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **4. Battery.** `plugins/battery`: `/sys/class/power_supply`, re-read on the kernel's `power_supply` uevents and every 30 s while there's a battery. No UPower ([D-23](decisions.md), first done over UPower in [D-18](decisions.md)).
 - [x] **4.5 Network.** `plugins/network` on `crates/eave-net`: the interface with the default route, from rtnetlink, with SSID, signal and band from nl80211, and address and gateway in the popover. It works with any network manager (NetworkManager, iwd, systemd-networkd, dhcpcd) ([D-23](decisions.md)).
 - [x] **5.8 Install and update.** `install.sh` (curl | sh), `eave-build init`, plugins named in config.toml as `owner/repo[@rev]` instead of a separate plugins.toml, only used widgets compiled in, and updates only through `eave-build update` ([D-30](decisions.md), [D-31](decisions.md), [running.md](running.md)).
-- [x] **5.11 Notifications.** Plugins list notices and the right island morphs into a panel of them ([D-47](decisions.md)). `plugins/notifications` on `crates/eave-notify`, eave's own notification server, with the latest ones in its popover and do not disturb ([D-48](decisions.md)).
+- [x] **5.11 Notifications.** Plugins list notices and the right island morphs into a panel of them ([D-47](decisions.md)). eave's own notification server and its plugin, with the latest ones in its popover, history, inline replies and do not disturb ([D-48](decisions.md), [D-49](decisions.md)), now in [eaveshell/eave-notifications](https://github.com/eaveshell/eave-notifications) ([D-50](decisions.md)).
 - [x] **5. Volume.** `plugins/volume` on `crates/eave-pulse`: the PulseAudio protocol served by pipewire-pulse ([D-19](decisions.md)). Scroll changes it, right click mutes, and the popover has −/+, mute and output switching.
 
 ## Next
@@ -38,7 +38,7 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 - [x] Close popovers on any key press, Esc included ([D-36](decisions.md)).
 - [x] Popover open/close animation, owned by the host: the island morphs into its popover and back ([D-28](decisions.md)).
 - [x] Shared services crate (with step 1), so widgets on the same source share one connection. Hyprland is done ([D-17](decisions.md)); D-Bus is done too (`eave-dbus`, [D-18](decisions.md)), and so is the kernel's network state (`eave-net`, [D-23](decisions.md)).
-- [ ] Publish `eave-api` on crates.io, so plugins build standalone without a `[patch]`.
+- [x] Publish `eave-api` on crates.io, so plugins build standalone without a `[patch]`. The service crates too ([D-50](decisions.md)).
 - [ ] Packages (AUR first), once the install flow has settled.
 - [x] Kit primitives as widgets need them: meter, slider, toggle, lists, sections, details, text fields ([D-40](decisions.md), [D-41](decisions.md)). Switcher and item scroll are done ([D-16](decisions.md)), and so are status icons ([D-29](decisions.md)).
 - [x] Real popovers: Wi-Fi networks to join through iwd ([D-42](decisions.md)), sound devices, inputs and apps, battery health, a six-week calendar, workspace windows, keyboard layouts.

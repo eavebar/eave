@@ -5,7 +5,7 @@
 
 [Unit]
 Description=Rebuild eave when config.toml changes
-Documentation=https://github.com/eavebar/eave/blob/main/docs/running.md
+Documentation=https://github.com/eaveshell/eave/blob/main/docs/running.md
 
 [Path]
 # `eave-build init` writes the real path here when XDG_CONFIG_HOME isn't ~/.config.

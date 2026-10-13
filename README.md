@@ -1,6 +1,6 @@
 # eave
 
-[![CI](https://github.com/eavebar/eave/actions/workflows/ci.yml/badge.svg)](https://github.com/eavebar/eave/actions/workflows/ci.yml)
+[![CI](https://github.com/eaveshell/eave/actions/workflows/ci.yml/badge.svg)](https://github.com/eaveshell/eave/actions/workflows/ci.yml)
 
 A status bar for [Hyprland](https://hyprland.org), written from scratch in Rust. Floating islands with workspaces, the focused window, a clock, volume, network and battery. Animations follow the compositor's frame clock, the bar redraws only when something changed, and it idles at about 14 MB and 0% CPU.
 
@@ -11,7 +11,7 @@ Everything in it is a plugin, compiled in rather than loaded at runtime. Plugins
 You need Hyprland, Rust (`cargo`), `git` and `pkg-config` (Arch and CachyOS have it already):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/eavebar/eave/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/eaveshell/eave/main/install.sh | sh
 ```
 
 This installs `eave-build`, writes a starter `~/.config/eave/config.toml`, builds the bar into `~/.local/bin/eave` and starts it as a systemd user service. If your session doesn't use [uwsm](https://wiki.hyprland.org/Useful-Utilities/Systemd-start/), it tells you the one line to add to your Hyprland config instead. Read [the script](install.sh) first if you like: it's short. [docs/running.md](docs/running.md) has the manual steps.

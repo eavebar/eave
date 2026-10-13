@@ -1,5 +1,0 @@
-# Plugin manifest, beside the crate's Cargo.toml.
-[plugin]
-name = "notifications"
-description = "Notifications: cards that grow out of the bar, a bell, and the latest ones in the popover"
-api = "0.1"

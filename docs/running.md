@@ -7,12 +7,12 @@ How to install the bar, start it with your session, update it, and what each kin
 You need Rust (`cargo`) and `git`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/eavebar/eave/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/eaveshell/eave/main/install.sh | sh
 ```
 
 [`install.sh`](../install.sh) does these steps, and you can do them by hand too:
 
-1. `cargo install --locked --git https://github.com/eavebar/eave eave-build`
+1. `cargo install --locked --git https://github.com/eaveshell/eave eave-build`
 2. `eave-build init`: writes a starter `~/.config/eave/config.toml` (an existing one is kept) and the systemd user units into `~/.config/systemd/user/`.
 3. `eave-build`: clones eave into `~/.local/share/eave/src`, builds the widgets config.toml uses, and installs `~/.local/bin/eave`. The first build takes a few minutes.
 4. `systemctl --user enable --now eave-rebuild.path`, and `eave.service` when `graphical-session.target` is active (see [below](#as-a-systemd-user-service-recommended)). Otherwise it tells you what to add instead.
@@ -34,7 +34,7 @@ Running it again repairs an install and never updates one. `EAVE_REPO=<git URL o
 eave-build update
 ```
 
-Nothing changes version until you run this ([D-31](decisions.md)). It fetches eave and every plugin, moves each to the newest commit of its `@rev` (or its default branch), prints what moved, and rebuilds as above. When eave itself moved, it also reinstalls `eave-build` from the new checkout and runs its `init`, which rewrites the systemd units (config.toml is kept) and reloads systemd. To stay on a version, pin it: `eave = "eavebar/eave@<tag>"`, `widget = "someone/weather@v0.2"`.
+Nothing changes version until you run this ([D-31](decisions.md)). It fetches eave and every plugin, moves each to the newest commit of its `@rev` (or its default branch), prints what moved, and rebuilds as above. When eave itself moved, it also reinstalls `eave-build` from the new checkout and runs its `init`, which rewrites the systemd units (config.toml is kept) and reloads systemd. To stay on a version, pin it: `eave = "eaveshell/eave@<tag>"`, `widget = "someone/weather@v0.2"`.
 
 ## Uninstall
 
@@ -126,6 +126,6 @@ systemctl --user enable --now eave-rebuild.path   # eave-build init put the unit
 
 ## Notifications
 
-With `widget = "notifications"` in config.toml, eave is your notification daemon ([D-48](decisions.md)). Only one program can be. If mako, dunst or swaync is already running, eave waits in line and takes over as soon as it quits. Until then, the bell is dimmed and the popover says which daemon has them. To switch, stop starting the other daemon (remove its `exec-once`, or `systemctl --user disable --now mako`), then quit it.
+With `widget = "eaveshell/eave-notifications"` in config.toml, eave is your notification daemon ([D-48](decisions.md), [D-50](decisions.md)). Only one program can be. If mako, dunst or swaync is already running, eave waits in line and takes over as soon as it quits. Until then, the bell is dimmed and the popover says which daemon has them. To switch, stop starting the other daemon (remove its `exec-once`, or `systemctl --user disable --now mako`), then quit it.
 
 Notifications sent while the bar restarts, after a rebuild for example, are lost, and the list starts empty after a restart.
