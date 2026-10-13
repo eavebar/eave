@@ -9,7 +9,7 @@
 
 use iced::{Point, Rectangle};
 
-use crate::island::{REST_DISTANCE, REST_SPEED, SUBSTEP};
+use crate::spring::{REST_DISTANCE, REST_SPEED, SUBSTEP};
 use crate::theme;
 
 /// Springs across the top and the bottom, and down each side.

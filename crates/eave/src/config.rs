@@ -17,10 +17,24 @@
 //! [[right]]
 //! island = true   # the next items are another island, beside this one
 //! live = true     # optional: a live island, rounder and snugger around its items
+//! attach = ["top", "right"]   # optional: flush with these screen edges (D-70)
 //! ```
 //!
-//! One key sits above the zones: `renderer = "gpu"` (the default) or `"cpu"` (D-67). It's read
-//! when the bar starts.
+//! Three keys sit above the zones. `renderer = "gpu"` (the default) or `"cpu"` (D-67), read when
+//! the bar starts. `notch`: `"auto"` (the default) finds a MacBook's, `false` ignores it, and a
+//! table says what it is (D-69). And `screen`, how the screen's edges are rounded or hidden. Both
+//! are in physical pixels, and `eave calibrate` measures and writes them (D-71):
+//!
+//! ```toml
+//! notch = { width = 370, height = 66, radius = 20, smoothing = 0.6, shoulder = 8, top = 0 }
+//! screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
+//! ```
+//!
+//! A notch's `radius` rounds its lower corners, `shoulder` rounds it outwards where it meets the
+//! top edge, and `top` above 0 makes it a cut-out that far down instead. `smoothing` 0 is a
+//! circle's corner, up to 1 a squircle's. A screen's `corners` go top left, top right, bottom
+//! right, bottom left, and its `inset` top, right, bottom, left: the rows and columns hidden under
+//! the bezel. Either takes one number for all four.
 
 use std::path::{Path, PathBuf};
 
@@ -57,7 +71,59 @@ pub struct Entry {
     pub divider: bool,
     /// Whether its island is a live one, set on the marker that starts it.
     pub live: bool,
+    /// The screen edges its island is attached to, set on the marker that starts it.
+    pub attach: Edges,
     pub options: toml::Table,
+}
+
+/// The screen edges an island is attached to (D-70): it reaches them, with no gap and no corners
+/// there. Only the first island on the left can be attached left, and only the last on the right
+/// can be attached right.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Edges {
+    pub top: bool,
+    pub left: bool,
+    pub right: bool,
+}
+
+/// What the bar knows of the notch at the top of the screen (D-69).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub enum Notch {
+    /// Found on a MacBook that shows it, none anywhere else.
+    #[default]
+    Auto,
+    /// No notch, whatever the screen has.
+    Off,
+    /// This one, as measured.
+    Fixed(NotchShape),
+}
+
+/// A notch as config.toml has it, in physical pixels, centered at the top of the screen.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct NotchShape {
+    pub width: f32,
+    /// Without one, as tall as the bar's islands reach.
+    pub height: Option<f32>,
+    /// Its lower corners'.
+    pub radius: f32,
+    /// 0 rounds its corners and shoulders like a circle, up to 1 like a squircle.
+    pub smoothing: f32,
+    /// How much it's rounded outwards where it meets the top edge.
+    pub shoulder: f32,
+    /// 0 hangs from the top edge; more is a cut-out this far below it, rounded all round.
+    pub top: f32,
+}
+
+/// How the screen's own edges are shaped, in physical pixels (D-71). All zero is a plain
+/// rectangle, every pixel of it shown.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Screen {
+    /// Each corner's radius: top left, top right, bottom right, bottom left.
+    pub corners: [f32; 4],
+    /// 0 rounds the corners like a circle, up to 1 like a squircle.
+    pub smoothing: f32,
+    /// The rows and columns hidden under the bezel: top, right, bottom, left.
+    pub inset: [f32; 4],
 }
 
 /// What draws the bar (D-67).
@@ -85,6 +151,8 @@ impl Renderer {
 pub struct Config {
     pub entries: Vec<Entry>,
     pub renderer: Renderer,
+    pub notch: Notch,
+    pub screen: Screen,
     pub warnings: Vec<String>,
 }
 
@@ -153,6 +221,12 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
             .push("`renderer` must be \"gpu\" or \"cpu\", using \"gpu\"".into()),
         None => {}
     }
+    if let Some(value) = table.remove("notch") {
+        config.notch = notch(value, &mut config.warnings);
+    }
+    if let Some(value) = table.remove("screen") {
+        config.screen = screen(value, &mut config.warnings);
+    }
 
     for zone in Zone::ALL {
         let Some(value) = table.remove(zone.key()) else {
@@ -171,6 +245,10 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
         let mut filled = false;
         let mut divider = false;
         let mut live = false;
+        let mut attach = Edges::default();
+        // Each island marker: the island it starts, where it is, and what it attaches.
+        let mut markers = Vec::new();
+        let first = config.entries.len();
         for (index, item) in items.into_iter().enumerate() {
             let at = format!("{}[{index}]", zone.key());
             let toml::Value::Table(mut options) = item else {
@@ -180,38 +258,44 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
             let Some(widget) = options.remove("widget") else {
                 // A marker: a divider, or the start of another island.
                 let marker = |options: &toml::Table, key| options.get(key) == Some(&true.into());
-                let live_option = options.get("live");
-                match options.len() {
-                    1 | 2
-                        if marker(&options, "island")
-                            && (options.len() == 1 || live_option.is_some()) =>
-                    {
-                        if divider {
-                            config.warnings.push(format!(
-                                "{at}: a divider must come before an item, ignoring it"
-                            ));
-                            divider = false;
-                        }
-                        if filled {
-                            island += 1;
-                            filled = false;
-                        }
-                        live = match live_option {
-                            Some(toml::Value::Boolean(value)) => *value,
-                            Some(_) => {
-                                config.warnings.push(format!(
-                                    "{at}: `live` must be true or false, ignoring it"
-                                ));
-                                false
-                            }
-                            None => false,
-                        };
+                let island_marker = marker(&options, "island")
+                    && options
+                        .keys()
+                        .all(|key| matches!(key.as_str(), "island" | "live" | "attach"));
+                if island_marker {
+                    if divider {
+                        config.warnings.push(format!(
+                            "{at}: a divider must come before an item, ignoring it"
+                        ));
+                        divider = false;
                     }
-                    1 if marker(&options, "divider") => divider = true,
-                    _ => config.warnings.push(format!(
+                    if filled {
+                        island += 1;
+                        filled = false;
+                    }
+                    live = match options.get("live") {
+                        Some(toml::Value::Boolean(value)) => *value,
+                        Some(_) => {
+                            config
+                                .warnings
+                                .push(format!("{at}: `live` must be true or false, ignoring it"));
+                            false
+                        }
+                        None => false,
+                    };
+                    attach = match options.get("attach") {
+                        Some(value) => edges(value, &at, &mut config.warnings),
+                        None => Edges::default(),
+                    };
+                    markers.push((island, at, attach));
+                } else if options.len() == 1 && marker(&options, "divider") {
+                    divider = true;
+                } else {
+                    config.warnings.push(format!(
                         "{at} has no `widget = \"name\"` (or is `divider = true` or \
-                         `island = true`, with `live = true` if you like)"
-                    )),
+                         `island = true`, with `live = true` or `attach = [\"top\"]` if you \
+                         like)"
+                    ));
                 }
                 continue;
             };
@@ -249,9 +333,34 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
                 collapsible,
                 divider: std::mem::take(&mut divider),
                 live,
+                attach,
                 options,
             });
             filled = true;
+        }
+        // Only an island at the screen's side can reach it.
+        let last = config.entries[first..].last().map(|entry| entry.island);
+        for (island, at, edges) in markers {
+            let mut kept = edges;
+            if edges.left && !(zone == Zone::Left && island == 0) {
+                config.warnings.push(format!(
+                    "{at}: only the first island on the left can be attached left, ignoring it"
+                ));
+                kept.left = false;
+            }
+            if edges.right && !(zone == Zone::Right && Some(island) == last) {
+                config.warnings.push(format!(
+                    "{at}: only the last island on the right can be attached right, ignoring it"
+                ));
+                kept.right = false;
+            }
+            if kept != edges {
+                for entry in &mut config.entries[first..] {
+                    if entry.island == island {
+                        entry.attach = kept;
+                    }
+                }
+            }
         }
         if divider {
             config.warnings.push(format!(
@@ -267,6 +376,129 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
     Ok(config)
 }
 
+/// `attach = ["top", "left"]`, or just `attach = "top"`.
+fn edges(value: &toml::Value, at: &str, warnings: &mut Vec<String>) -> Edges {
+    let names = match value {
+        toml::Value::Array(names) => names.as_slice(),
+        name => std::slice::from_ref(name),
+    };
+    let mut edges = Edges::default();
+    for name in names {
+        match name.as_str() {
+            Some("top") => edges.top = true,
+            Some("left") => edges.left = true,
+            Some("right") => edges.right = true,
+            Some(other) => warnings.push(format!(
+                "{at}: `attach` takes \"top\", \"left\" and \"right\", ignoring \"{other}\""
+            )),
+            None => warnings.push(format!(
+                "{at}: `attach` takes \"top\", \"left\" and \"right\", ignoring a {}",
+                name.type_str()
+            )),
+        }
+    }
+    edges
+}
+
+/// A size in pixels: an integer or a float, at least 0.
+fn pixels(value: &toml::Value) -> Option<f32> {
+    match value {
+        toml::Value::Integer(size) if *size >= 0 => Some(*size as f32),
+        toml::Value::Float(size) if *size >= 0.0 && size.is_finite() => Some(*size as f32),
+        _ => None,
+    }
+}
+
+/// A smoothing: 0 to 1.
+fn smoothing(value: &toml::Value) -> Option<f32> {
+    pixels(value).filter(|smoothing| *smoothing <= 1.0)
+}
+
+/// Four sizes, or one for all four.
+fn four(value: &toml::Value) -> Option<[f32; 4]> {
+    match value {
+        toml::Value::Array(sizes) if sizes.len() == 4 => {
+            let mut four = [0.0; 4];
+            for (size, value) in four.iter_mut().zip(sizes) {
+                *size = pixels(value)?;
+            }
+            Some(four)
+        }
+        size => pixels(size).map(|size| [size; 4]),
+    }
+}
+
+/// `notch = "auto"`, `false`, or `{ width = 370, height = 66, … }`.
+fn notch(value: toml::Value, warnings: &mut Vec<String>) -> Notch {
+    match value {
+        toml::Value::String(name) if name == "auto" => return Notch::Auto,
+        toml::Value::Boolean(false) => return Notch::Off,
+        toml::Value::Table(table) => {
+            let mut shape = NotchShape::default();
+            let read = table.iter().all(|(key, value)| {
+                let field = match key.as_str() {
+                    "width" => &mut shape.width,
+                    "height" => shape.height.insert(0.0),
+                    "radius" => &mut shape.radius,
+                    "shoulder" => &mut shape.shoulder,
+                    "top" => &mut shape.top,
+                    "smoothing" => {
+                        return smoothing(value)
+                            .map(|value| shape.smoothing = value)
+                            .is_some();
+                    }
+                    _ => return false,
+                };
+                pixels(value).map(|value| *field = value).is_some()
+            });
+            // Everything else may be left out, but not how wide it is.
+            if read && shape.width > 0.0 {
+                return Notch::Fixed(shape);
+            }
+        }
+        _ => {}
+    }
+    warnings.push(
+        "`notch` must be \"auto\", false or { width = 370, height = 66 } in physical pixels, \
+         with radius, smoothing, shoulder and top if you like, using \"auto\""
+            .into(),
+    );
+    Notch::Auto
+}
+
+/// `screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = 0 }`.
+fn screen(value: toml::Value, warnings: &mut Vec<String>) -> Screen {
+    let mut screen = Screen::default();
+    let toml::Value::Table(table) = value else {
+        warnings.push("`screen` must be a table, like { corners = 20 }, ignoring it".into());
+        return screen;
+    };
+    for (key, value) in &table {
+        let read = match key.as_str() {
+            "corners" => four(value).map(|corners| screen.corners = corners),
+            "inset" => four(value).map(|inset| screen.inset = inset),
+            "smoothing" => smoothing(value).map(|value| screen.smoothing = value),
+            _ => {
+                warnings.push(format!(
+                    "`screen` takes corners, smoothing and inset, ignoring `{key}`"
+                ));
+                continue;
+            }
+        };
+        if read.is_none() {
+            warnings.push(format!(
+                "`screen.{key}` must be {}, ignoring it",
+                if key == "smoothing" {
+                    "a number from 0 to 1"
+                } else {
+                    "a size in pixels, or four of them"
+                }
+            ));
+        }
+    }
+    screen
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,6 +511,121 @@ mod tests {
         let odd = parse("renderer = \"vulkan\"").unwrap();
         assert_eq!(odd.renderer, Renderer::Gpu);
         assert_eq!(odd.warnings.len(), 1);
+    }
+
+    #[test]
+    fn the_notch_is_found_unless_its_off_or_given() {
+        assert_eq!(parse("").unwrap().notch, Notch::Auto);
+        assert_eq!(parse("notch = \"auto\"").unwrap().notch, Notch::Auto);
+        assert_eq!(parse("notch = false").unwrap().notch, Notch::Off);
+        assert_eq!(
+            parse("notch = { width = 190 }").unwrap().notch,
+            Notch::Fixed(NotchShape {
+                width: 190.0,
+                ..NotchShape::default()
+            })
+        );
+        assert_eq!(
+            parse(
+                "notch = { width = 370.5, height = 66, radius = 20, smoothing = 0.6, \
+                 shoulder = 8, top = 0 }"
+            )
+            .unwrap()
+            .notch,
+            Notch::Fixed(NotchShape {
+                width: 370.5,
+                height: Some(66.0),
+                radius: 20.0,
+                smoothing: 0.6,
+                shoulder: 8.0,
+                top: 0.0,
+            })
+        );
+        for odd in [
+            "notch = true",
+            "notch = \"yes\"",
+            "notch = { height = 37 }",
+            "notch = { width = -1 }",
+            "notch = { width = 190, depth = 2 }",
+            "notch = { width = 190, smoothing = 2 }",
+        ] {
+            let config = parse(odd).unwrap();
+            assert_eq!(config.notch, Notch::Auto, "{odd}");
+            assert_eq!(config.warnings.len(), 1, "{odd}");
+        }
+    }
+
+    #[test]
+    fn the_screen_is_a_plain_rectangle_unless_it_says_otherwise() {
+        assert_eq!(parse("").unwrap().screen, Screen::default());
+        let config =
+            parse("screen = { corners = [20, 20.5, 0, 0], smoothing = 0.6, inset = 2 }").unwrap();
+        assert_eq!(
+            config.screen,
+            Screen {
+                corners: [20.0, 20.5, 0.0, 0.0],
+                smoothing: 0.6,
+                inset: [2.0; 4],
+            }
+        );
+        assert!(config.warnings.is_empty());
+        let odd = parse("screen = { corners = [1, 2], smoothing = 3, edge = 1 }").unwrap();
+        assert_eq!(odd.screen, Screen::default());
+        assert_eq!(odd.warnings.len(), 3, "{:?}", odd.warnings);
+    }
+
+    #[test]
+    fn islands_attach_to_the_edges_they_can_reach() {
+        let config = parse(
+            r#"
+            [[left]]
+            island = true
+            attach = ["top", "left"]
+            [[left]]
+            widget = "workspaces"
+            [[left]]
+            island = true
+            attach = ["left"]
+            [[left]]
+            widget = "window"
+            [[center]]
+            island = true
+            attach = "top"
+            [[center]]
+            widget = "clock"
+            [[right]]
+            island = true
+            attach = ["right", "bottom"]
+            [[right]]
+            widget = "volume"
+            [[right]]
+            island = true
+            attach = ["top", "right"]
+            [[right]]
+            widget = "battery"
+            "#,
+        )
+        .unwrap();
+        let attach: Vec<_> = config
+            .entries
+            .iter()
+            .map(|entry| (entry.widget.as_str(), entry.attach))
+            .collect();
+        let edges = |top, left, right| Edges { top, left, right };
+        assert_eq!(
+            attach,
+            [
+                ("workspaces", edges(true, true, false)),
+                ("window", edges(false, false, false)),
+                ("clock", edges(true, false, false)),
+                ("volume", edges(false, false, false)),
+                ("battery", edges(true, false, true)),
+            ]
+        );
+        assert_eq!(config.warnings.len(), 3, "{:?}", config.warnings);
+        assert!(config.warnings[0].contains("only the first island on the left"));
+        assert!(config.warnings[1].contains("ignoring \"bottom\""));
+        assert!(config.warnings[2].contains("only the last island on the right"));
     }
 
     #[test]

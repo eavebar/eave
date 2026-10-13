@@ -28,6 +28,13 @@ zune-jpeg = { version = "0.5", default-features = false, features = ["std", "neo
 ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 toml.workspace = true
+# eave calibrate (D-71): `image::allocate`, so a new pattern shows on the next frame. iced only
+# re-exports it with its `image` feature, which would pull in the image codecs. Already in the
+# build through eave-api.
+iced_runtime = "0.14"
+# eave calibrate (D-71): writes the measured notch and screen into config.toml, keeping the
+# user's comments and layout. Already built for zbus's proc macros, on the host.
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
 # inotify for config hot reload (D-21); already in the tree through the Wayland stack.
 rustix = { version = "1", default-features = false, features = ["std", "fs"] }
 # iced_exdevtools 0.19.1 fails to build against winit-core beta.3 (new Key variant); drop once fixed upstream.

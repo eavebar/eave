@@ -3,6 +3,7 @@
 mod alternate;
 mod app;
 mod apps;
+mod calibrate;
 mod clip;
 mod code;
 mod config;
@@ -21,8 +22,10 @@ mod kit;
 mod label;
 mod markdown;
 mod meter;
+mod notch;
 mod slider;
 mod slot;
+mod spring;
 mod sprite;
 mod squircle;
 mod squish;
@@ -78,9 +81,43 @@ fn test_renderer() -> iced::Renderer {
         .expect("tiny-skia")
 }
 
+const USAGE: &str = "\
+Usage: eave [command]
+
+With no command, runs the bar.
+
+Commands:
+  calibrate   Measure the screen's corners and notch, and save them to config.toml";
+
+/// Sets up what the bar and the calibrator both draw with: the renderer config.toml asks for, and
+/// the sans-serif that's installed.
+fn prepare(config: &config::Config) {
+    // iced reads the renderer to use from ICED_BACKEND when it creates its compositor. One set by
+    // hand wins over config.toml. Only a build with both renderers looks at it (D-67).
+    if std::env::var_os("ICED_BACKEND").is_none() {
+        // SAFETY: nothing else runs yet: no thread has started, so none can read the environment
+        // while it changes.
+        unsafe { std::env::set_var("ICED_BACKEND", config.renderer.backends()) };
+    }
+    use_installed_sans();
+}
+
 /// Builds the registry from `plugins`, reads `config.toml` (and keeps watching it), and runs the
-/// bar until it exits.
+/// bar until it exits. `eave calibrate` runs the calibrator instead (D-71).
 pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
+    match std::env::args().nth(1).as_deref() {
+        None => {}
+        Some("calibrate") => return calibrate::run(),
+        Some("-h" | "--help") => {
+            println!("{USAGE}");
+            return Ok(());
+        }
+        Some(other) => {
+            eprintln!("eave: unknown argument `{other}` (try --help)");
+            std::process::exit(2);
+        }
+    }
+
     let mut registry = Registry::new();
     for register in plugins {
         register(&mut registry);
@@ -99,15 +136,7 @@ pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
         config::Config::default()
     });
 
-    // iced reads the renderer to use from ICED_BACKEND when it creates its compositor. One set by
-    // hand wins over config.toml. Only a build with both renderers looks at it (D-67).
-    if std::env::var_os("ICED_BACKEND").is_none() {
-        // SAFETY: nothing else runs yet: no thread has started, so none can read the environment
-        // while it changes.
-        unsafe { std::env::set_var("ICED_BACKEND", config.renderer.backends()) };
-    }
-
-    use_installed_sans();
+    prepare(&config);
 
     iced_layershell::daemon(
         move || app::Bar::new(registry.clone(), config.clone()),

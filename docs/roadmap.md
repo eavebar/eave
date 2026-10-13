@@ -35,6 +35,10 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 
 Every item from here on is a plugin, written against `eave-api` like a third-party one. Anything a built-in widget needs goes into the API or the kit, not into a private shortcut.
 
+## Known issues
+
+- [ ] **New images on the GPU may wait for another redraw.** iced_wgpu 0.14 uploads a new `image::Handle` (covers, app icons, sprite frames) on a worker thread. When it's done, the worker asks for a redraw with `window::Action::RedrawAll`, but iced_layershell 0.19 ignores that action (the `_ => {}` arm in `run_action`, `multi_window.rs`). The image then shows only at the next frame something else asks for. `image::allocate` doesn't help on its own: its callback also waits for a rendered frame. In the bar, animations usually hide this. `eave calibrate` works around it by asking for frames while a pattern is on its way ([D-71](decisions.md)). The fix: handle `RedrawAll` (and `RelayoutAll`) in iced_layershell upstream, or in a patched copy under `vendor/` like softbuffer ([D-25](decisions.md)). Then drop the calibrator's workaround.
+
 ## Plugin system follow-ups
 
 - [x] Close popovers on an outside click, via a Hyprland click bind ([D-14](decisions.md)).
@@ -50,7 +54,7 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 ## Later
 
 - [ ] One bar per monitor, following monitor hotplug. The host already runs as an `iced_layershell::daemon` (0.5), so this needs `StartMode::AllScreens` plus per-output state.
-- [ ] Notch-aware layout on Asahi when `apple_dcp.show_notch=1` ([platform.md](platform.md#asahi-specifics)).
+- [x] Notch-aware layout on Asahi when `appledrm.show_notch=1` ([platform.md](platform.md#asahi-specifics), [D-69](decisions.md)), islands attached to the screen's edges ([D-70](decisions.md)), and `eave calibrate` to measure the notch and the screen's corners ([D-71](decisions.md), [D-72](decisions.md)).
 - [x] `PKGBUILD` for Asahi and CachyOS: the AUR package builds on aarch64 and x86_64 ([D-54](decisions.md)).
 - [ ] Maybe: OSD for volume and brightness, launcher, each built on the same foundations. (Notifications are done: 5.11.)
 - [x] Notification images from files (`image-path`, `app_icon` paths): `Notice::image(url)`, loaded like a cover, SVG included ([D-62](decisions.md)). Raw `image-data` pixels are still left out.

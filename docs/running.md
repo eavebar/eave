@@ -41,6 +41,7 @@ Running it again repairs an install and never updates one. `EAVE_REPO=<git URL o
 |---|---|
 | `~/.config/eave/config.toml`, moving widgets or changing options | Nothing to do. The bar reloads it as soon as you save ([D-21](decisions.md)). Widgets whose entry didn't change keep their state. A file that doesn't parse is reported on stderr and the current bar stays. |
 | `~/.config/eave/config.toml`, `renderer` | Used from the bar's next start: `systemctl --user restart eave.service` ([D-67](decisions.md)). |
+| `~/.config/eave/config.toml`, `notch` or `screen` | Nothing to do: the bar reloads it ([D-71](decisions.md)). |
 | `~/.config/eave/config.toml`, using a widget that isn't compiled in yet | A rebuild: `eave-build`, run for you by the [path unit](#rebuild-automatically-when-configtoml-changes) ([D-22](decisions.md), [D-30](decisions.md)). |
 
 `eave-build` builds, and if the new binary differs from `~/.local/bin/eave`, installs it and restarts a running bar on it. It uses `systemctl --user restart eave.service` when the service runs the bar. Otherwise it stops the bar and relaunches it through Hyprland. A failed build installs nothing and leaves the running bar alone. If no bar is running, it doesn't start one.
@@ -142,6 +143,22 @@ systemctl --user enable --now eave-rebuild.path   # eave-build init put the unit
 - It works whether the bar runs as the service or from the Hyprland config. In the second case it relaunches the bar through Hyprland's socket. If systemd's environment has no `HYPRLAND_INSTANCE_SIGNATURE`, it uses the one Hyprland that's running, and it gives up (leaving the old bar running) only when there are several.
 - `eave-build init` writes the real path into `PathChanged=` when `XDG_CONFIG_HOME` isn't `~/.config`.
 - `eave-build init` writes its own full path into `ExecStart=`. systemd looks up a bare command name only in `/usr/bin` and `/usr/local/bin`, not in `~/.cargo/bin`.
+
+## Calibrate the screen
+
+`eave calibrate` measures how your screen's corners are rounded, and its notch, if it has one, so the bar fits them exactly ([D-71](decisions.md)). It covers the focused output with a model of what the screen shows: a one-pixel red line just inside its edge, and blue over what it says is hidden. Change the model until you can see every red pixel and no blue one. Look closely at the corners and around the notch.
+
+| Key | Does |
+|---|---|
+| ↑ ↓, `k` `j`, Tab, Shift+Tab | pick a row |
+| ← →, `h` `l` | change it by a pixel (smoothing by 0.05; 0 is a circle's corner, more a squircle's) |
+| Shift with ← → | ten pixels (0.2 smoothing) |
+| Space | turn the notch on or off, or move it between hanging from the top and a cut-out below it |
+| `?` | fold the panel away, and back |
+| Enter, `s` | save to config.toml and quit |
+| Esc, `q` | quit without saving |
+
+It starts from what config.toml says, or from the notch the hardware reports. Saving changes only `notch` and `screen`, keeps the rest of the file and its comments, and writes through a symlink. Run it with the binary the bar runs, `~/.local/bin/eave calibrate`, or `cargo run --release -- calibrate` in a checkout.
 
 ## Notifications
 

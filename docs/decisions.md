@@ -1439,3 +1439,86 @@ The icons are theme names (`battery-caution`, `battery-full-charged`). `notify =
 **What:** the `gpu` feature turns on `iced/web-colors`. iced_wgpu then packs colors as they are, picks a non-sRGB surface format, and blends in sRGB, the same as tiny-skia and the web. It only touches iced_wgpu, so CPU-only builds don't change.
 
 **Alternative:** a second set of alpha values for the GPU. Two palettes to keep in step, and anti-aliased edges and text would still disagree.
+
+---
+
+## D-69: The bar goes around the notch
+
+**Status:** accepted (2026-10-13).
+
+**Problem:** with `appledrm.show_notch=1` (`apple_dcp.show_notch=1` on older kernels), Asahi gives the MacBook's full panel to the output, and its top center is a hole. A centered island ends up half under the notch.
+
+**What:**
+- `notch = "auto"`, the default, finds it.
+  - The kernel parameter says whether the notch shows.
+  - The display controller's `apple,notch-height` in the device tree says it's there.
+  - A table of measured models (`notch.rs`) says how wide and tall it really is. The kernel's 74 px hangs below the notch on a 14", which looks like 66.
+  - An unmeasured model gets a width wide enough for any MacBook, and a message asking for `notch = { width = … }`.
+  - Only on a built-in panel (`eDP-*`) that isn't rotated.
+- `notch = false` ignores it. `notch = { … }` says what it is: see D-71 for the keys and their units.
+- The center zone splits in two around it. Its first half of islands goes before the notch, the rest after. The two islands against it reach under it and up to the top edge, so they and the notch read as one black shape. Popovers stay on their island's side.
+
+**Alternative:** leaving the center zone empty, as platform.md planned. That wastes the room on both sides of the notch, where the clock fits.
+
+---
+
+## D-70: Islands attach to the screen's edges
+
+**Status:** accepted (2026-10-13).
+
+**What:** an island marker takes `attach = ["top", "left"]` (or `"top"`, or `"right"`). An attached island reaches across the edge gap and on past the edge by `ATTACH_OVERHANG`. Its corners there are out of sight, so it looks as if it grows out of the screen's edge. It reaches past the edge so that a jelly or a drag never shows it coming away. Only the first island on the left can attach left, and only the last on the right can attach right: no other island is at the side.
+
+**Why:** next to the notch, an island floating 6 px below the top edge looks like a mistake. An island hanging from the edge looks like part of the same hardware.
+
+---
+
+## D-71: `eave calibrate` measures the screen's corners and notch
+
+**Status:** accepted (2026-10-13).
+
+**Problem:** the notch's size came from a table fitted by eye: 74, then 64, then 66 px. The bar knew nothing about how rounded the screen's corners are, or whether the bezel hides any rows.
+
+**What:** `eave calibrate` covers the focused output with a model of what the panel shows:
+- a 1 px red line just inside its edge;
+- blue over what it says is hidden;
+- black inside.
+
+The model is right when every red pixel shows and no blue one does. The keys change the screen's four corner radii, their smoothing, the notch (on or off, width, height, lower corners, smoothing, shoulders, and how far below the top it starts), and the four insets. A panel in the middle shows the rows, as an island that morphs like the bar's: the morph spring for its size and the mark on the selected row, the fade spring for its lines. Enter saves to config.toml.
+
+```toml
+notch = { width = 370, height = 66, radius = 20, smoothing = 0.6, shoulder = 8, top = 0 }
+screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
+```
+
+- **In `eave`, not `eave-build`.** It needs iced, the layer shell, the squircle and the springs, which `eave-build` has none of. `eave::run` checks for the `calibrate` argument, so bars built by `eave-build` have the command too.
+- **One curve.** The screen's corners, the notch and the islands are all drawn through `squircle.rs`. Each corner is a circle's at `smoothing = 0` and a squircle's above it. A corner can turn either way, which is how the notch's shoulders round the screen outwards. What the tool measures is the curve the bar draws.
+- **Exact pixels.**
+  - The pattern is an image at the output's physical size, shown at its logical size without filtering, so each of its pixels is one of the screen's.
+  - The outline is flattened to 0.005 px and filled here: a pixel is in when its center is. tiny-skia's fill without anti-aliasing flattens curves so coarsely that a pixel 0.18 px inside a circle came out hidden, so it isn't used.
+  - The pattern is redrawn on a blocking thread after each change, never on the UI thread.
+  - Each new pattern is allocated (`iced_runtime::image::allocate`) before it replaces the one on screen, so the old one stays until the new one can draw. On the GPU, the upload ends on iced_wgpu's worker thread, and iced_layershell 0.19 drops the redraw it asks for. So the panel asks for frames while a pattern is on its way ([roadmap.md](roadmap.md#known-issues)).
+- **Physical pixels** in config.toml, the hardware's unit and the model table's. The bar divides by the output's scale. This changes `notch = { width, height }` from logical pixels, which only this branch ever had.
+- **toml_edit** (`parse`, `display`, the version zbus's proc macros already build) saves only `notch` and `screen`, and keeps everything else in the file, comments included. The write goes through a symlink (dotfiles managers link config.toml) and lands by a rename.
+- **Red and blue**, a tool-only exception to "no new colors" ([design.md](design.md)): they have to be told apart from each other, from black and from the bezel, one pixel at a time.
+
+**Cost:** release binary 16,936,560 → 17,264,240 B (+328 KB, mostly toml_edit). The bar's RSS and idle CPU are unchanged: none of the calibrator runs in it, and resolving the screen is one Hyprland query when config.toml has measurements.
+
+**Alternatives:**
+- **Print a snippet to paste:** no new dependency, but a step to get wrong after a careful measurement.
+- **A floating window instead of a layer surface:** it couldn't cover the notch, the corners or the bar's exclusive zone.
+
+**Limits:** a notch is centered on the whole output, insets aside. A bezel that hides more on one side than the other would put it off center in the bar, which centers it between the insets.
+
+---
+
+## D-72: The bar keeps off what the bezel hides, and hangs from the top like the notch
+
+**Status:** accepted (2026-10-13).
+
+**What:**
+- **Insets** are the bar surface's layer-shell margins. The bar lays itself out on the part of the screen that shows, and the compositor keeps windows below it.
+- **A lower or taller notch:** the islands against it reach down as far as it does, `top` included.
+- **Shoulders:** an island attached to the top is rounded outwards where its free sides meet the edge, with the notch's `shoulder` and `smoothing` (`squircle::hanging`). Islands then hang from the top the way the notch does, and the notch's fused islands carry its outline on. The free sides are the ones that don't reach on to a screen edge or under the notch. A shoulder is never wider than the room the island's frame keeps around it (14 px).
+- With nothing measured, the bar draws as before.
+
+**Not done: concentric corners.** The plan was for the islands nearest the screen's rounded corners to follow them at an even distance, with radius = screen radius − gap. An island is 30 px tall, so its corners already top out at 15 px. Against a MacBook's ~20 px corners, that's what concentric would give anyway, so it would change nothing visible. Revisit if islands get taller, or there's a screen with much rounder corners.
