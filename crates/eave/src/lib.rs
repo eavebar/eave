@@ -25,6 +25,7 @@ mod tabs;
 mod theme;
 mod toggle;
 mod watch;
+mod zones;
 
 use eave_api::Registry;
 use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};

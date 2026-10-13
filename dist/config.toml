@@ -4,6 +4,10 @@
 # widget. `widget` is a built-in name, or a plugin's source: `someone/weather` (GitHub),
 # `someone/weather@v0.2` (pinned), a git URL, or a local path. Adding a plugin rebuilds the bar
 # (automatic with eave-rebuild.path). See docs/plugins.md.
+#
+# Entries without a widget arrange the zone: `island = true` starts another island beside the last,
+# `divider = true` puts a line before the next item. `collapsible = true` on an item hides it until
+# you press the chevron that shows when you hover its island.
 
 [[left]]
 widget = "workspaces"

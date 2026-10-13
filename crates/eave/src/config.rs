@@ -9,6 +9,13 @@
 //!
 //! [[right]]
 //! widget = "someone/weather@v0.2"   # a plugin, compiled in by eave-build (D-30)
+//! collapsible = true   # also the host's: hidden while its island is collapsed
+//!
+//! [[right]]
+//! divider = true   # a line before the next item
+//!
+//! [[right]]
+//! island = true   # the next items are another island, beside this one
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -38,6 +45,12 @@ pub struct Entry {
     pub widget: String,
     /// Items in the same island and group get the same width, the widest one's.
     pub width_group: Option<String>,
+    /// Which of its zone's islands it's in, counted from 0 in bar order.
+    pub island: usize,
+    /// Hidden while its island is collapsed.
+    pub collapsible: bool,
+    /// A divider comes before it.
+    pub divider: bool,
     pub options: toml::Table,
 }
 
@@ -117,36 +130,83 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
             ));
             continue;
         };
+        let mut island = 0;
+        // Whether the current island has an item yet, so markers before any don't make an empty
+        // one.
+        let mut filled = false;
+        let mut divider = false;
         for (index, item) in items.into_iter().enumerate() {
+            let at = format!("{}[{index}]", zone.key());
             let toml::Value::Table(mut options) = item else {
+                config.warnings.push(format!("{at} is not a table"));
+                continue;
+            };
+            let Some(widget) = options.remove("widget") else {
+                // A marker: a divider, or the start of another island.
+                let marker = |options: &toml::Table, key| options.get(key) == Some(&true.into());
+                match options.len() {
+                    1 if marker(&options, "island") => {
+                        if divider {
+                            config.warnings.push(format!(
+                                "{at}: a divider must come before an item, ignoring it"
+                            ));
+                            divider = false;
+                        }
+                        if filled {
+                            island += 1;
+                            filled = false;
+                        }
+                    }
+                    1 if marker(&options, "divider") => divider = true,
+                    _ => config.warnings.push(format!(
+                        "{at} has no `widget = \"name\"` (or is `divider = true` or \
+                         `island = true`)"
+                    )),
+                }
+                continue;
+            };
+            let toml::Value::String(widget) = widget else {
                 config
                     .warnings
-                    .push(format!("{}[{index}] is not a table", zone.key()));
+                    .push(format!("{at}: `widget` must be a name, skipping it"));
                 continue;
             };
             let width_group = match options.remove("width_group") {
                 Some(toml::Value::String(group)) => Some(group),
                 Some(_) => {
-                    config.warnings.push(format!(
-                        "{}[{index}]: `width_group` must be a name, ignoring it",
-                        zone.key()
-                    ));
+                    config
+                        .warnings
+                        .push(format!("{at}: `width_group` must be a name, ignoring it"));
                     None
                 }
                 None => None,
             };
-            match options.remove("widget") {
-                Some(toml::Value::String(widget)) => config.entries.push(Entry {
-                    zone,
-                    widget,
-                    width_group,
-                    options,
-                }),
-                _ => config.warnings.push(format!(
-                    "{}[{index}] has no `widget = \"name\"`",
-                    zone.key()
-                )),
-            }
+            let collapsible = match options.remove("collapsible") {
+                Some(toml::Value::Boolean(collapsible)) => collapsible,
+                Some(_) => {
+                    config.warnings.push(format!(
+                        "{at}: `collapsible` must be true or false, ignoring it"
+                    ));
+                    false
+                }
+                None => false,
+            };
+            config.entries.push(Entry {
+                zone,
+                widget,
+                width_group,
+                island,
+                collapsible,
+                divider: std::mem::take(&mut divider),
+                options,
+            });
+            filled = true;
+        }
+        if divider {
+            config.warnings.push(format!(
+                "{}: a divider must come before an item, ignoring the last one",
+                zone.key()
+            ));
         }
     }
 
@@ -262,6 +322,97 @@ mod tests {
         assert!(!config.entries[0].options.contains_key("width_group"));
         assert_eq!(config.entries[1].width_group, None);
         assert_eq!(config.warnings.len(), 1);
+    }
+
+    fn layout(config: &Config) -> Vec<(&str, usize, bool, bool)> {
+        config
+            .entries
+            .iter()
+            .map(|entry| {
+                let name = entry.widget.as_str();
+                (name, entry.island, entry.divider, entry.collapsible)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn markers_start_islands_and_put_dividers_before_items() {
+        let config = parse(
+            r#"
+            [[right]]
+            island = true
+            [[right]]
+            widget = "volume"
+            collapsible = true
+            [[right]]
+            divider = true
+            [[right]]
+            widget = "network"
+            [[right]]
+            island = true
+            [[right]]
+            island = true
+            [[right]]
+            widget = "battery"
+            [[left]]
+            widget = "clock"
+            "#,
+        )
+        .unwrap();
+        assert!(config.warnings.is_empty(), "{:?}", config.warnings);
+        assert_eq!(
+            layout(&config),
+            [
+                ("clock", 0, false, false),
+                ("volume", 0, false, true),
+                ("network", 0, true, false),
+                ("battery", 1, false, false),
+            ]
+        );
+        assert!(!config.entries[1].options.contains_key("collapsible"));
+    }
+
+    #[test]
+    fn dividers_without_an_item_after_them_are_warned_about() {
+        let config = parse(
+            r#"
+            [[right]]
+            widget = "volume"
+            [[right]]
+            divider = true
+            [[right]]
+            island = true
+            [[right]]
+            widget = "battery"
+            [[right]]
+            divider = true
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.warnings.len(), 2, "{:?}", config.warnings);
+        assert_eq!(
+            layout(&config),
+            [("volume", 0, false, false), ("battery", 1, false, false)]
+        );
+    }
+
+    #[test]
+    fn odd_markers_and_collapsible_values_are_warned_about() {
+        let config = parse(
+            r#"
+            [[left]]
+            divider = 1
+            [[left]]
+            divider = true
+            island = true
+            [[left]]
+            widget = "clock"
+            collapsible = "yes"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.warnings.len(), 3, "{:?}", config.warnings);
+        assert_eq!(layout(&config), [("clock", 0, false, false)]);
     }
 
     #[test]

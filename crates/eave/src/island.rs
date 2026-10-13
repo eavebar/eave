@@ -10,6 +10,9 @@
 //! and reports when it's done. The panel lives in an overlay, so it's laid out against the whole
 //! surface, drawn over the other islands, and sees events first.
 //!
+//! An island can have a toggle, a control of the host's at one end, there only while the pointer
+//! is over the island: hovering grows the island to make room for it, and it fades in.
+//!
 //! It only watches pointer events on the items and never captures them, so the items work exactly
 //! as they would without it. Like the switcher, it steps one frame at a time when the compositor
 //! asks, and stops asking once everything is at rest.
@@ -44,7 +47,26 @@ pub struct Island<'a, M> {
     nudges: Vec<(u64, (u64, NudgeRequest))>,
     /// Each item's width group: items in the same one are as wide as the widest of them.
     groups: Vec<Option<&'a str>>,
+    /// Where the toggle is among the items, if there is one.
+    toggle: Option<usize>,
+    /// Where the toggle is, and whether the collapsible items show.
+    toggle_side: Horizontal,
+    expanded: bool,
 }
+
+/// The control at one end of an island that shows and hides its collapsible items: there while
+/// the pointer is over the island, or always while they show.
+pub struct Toggle<'a, M> {
+    pub element: Element<'a, M>,
+    /// Before the first item (`Left`), or after the last: where the items come out.
+    pub side: Horizontal,
+    /// Whether the collapsible items show. When it changes, the island squashes the way they
+    /// went, like a nudge.
+    pub expanded: bool,
+}
+
+/// The toggle's key among the items' keys: no item has it.
+const TOGGLE: u64 = u64::MAX;
 
 /// What an island turns into while it's a popover.
 pub struct Popover<'a, M> {
@@ -73,6 +95,9 @@ impl<'a, M> Island<'a, M> {
             popover: None,
             nudges: Vec::new(),
             groups: Vec::new(),
+            toggle: None,
+            toggle_side: Horizontal::Right,
+            expanded: false,
         }
     }
 
@@ -96,6 +121,36 @@ impl<'a, M> Island<'a, M> {
     /// Each item's width group, in the order of the items.
     pub fn width_groups(mut self, groups: Vec<Option<&'a str>>) -> Self {
         self.groups = groups;
+        if self.toggle == Some(0) {
+            self.groups.insert(0, None);
+        }
+        self
+    }
+
+    /// A control shown at one end, while the pointer is over the island or it's pinned, and the
+    /// island isn't a popover.
+    pub fn toggle(mut self, toggle: Option<Toggle<'a, M>>) -> Self {
+        let Some(Toggle {
+            element,
+            side,
+            expanded,
+        }) = toggle
+        else {
+            return self;
+        };
+        self.toggle_side = side;
+        self.expanded = expanded;
+        let index = if side == Horizontal::Left {
+            if !self.groups.is_empty() {
+                self.groups.insert(0, None);
+            }
+            0
+        } else {
+            self.items.len()
+        };
+        self.keys.insert(index, TOGGLE);
+        self.items.insert(index, element);
+        self.toggle = Some(index);
         self
     }
 }
@@ -109,6 +164,17 @@ struct State {
     shape_bent: Cell<bool>,
     /// The popover panel's widget state, while there is one.
     panel: Option<Tree>,
+    /// Whether the pointer is over the island, which shows the toggle.
+    hovered: bool,
+    /// Where the island itself is within its layout, from the layout's left, and how wide: the
+    /// layout is wider while a popover is open, to keep the panel's room clear of its neighbors.
+    own: (f32, f32),
+    /// Whether the collapsible items showed last time, to squash when that changes. `None` until
+    /// the island has had a look.
+    expanded: Option<bool>,
+    /// Whether the last layout made room for the toggle. A hidden one is still laid out, but
+    /// takes no room and gets no events.
+    toggle_shown: bool,
 }
 
 /// How a spring moves: how hard it pulls toward its target, and its damping ratio (below 1 it
@@ -185,6 +251,11 @@ struct Motion {
     stretch_y: Spring,
     /// The newest nudge already played, once the island has been laid out.
     seen: Option<u64>,
+    /// The fastest the island has slid as a whole in the push going on, signed (negative is
+    /// left). 0 when it isn't being pushed.
+    pushed: f32,
+    /// How long the push going on has lasted, in seconds: the swell builds up over it.
+    pushing: f32,
     /// The previous frame, while something is moving.
     last: Option<Instant>,
 }
@@ -208,6 +279,8 @@ impl Default for Motion {
             stretch_x: Spring::new(0.0, SQUISH),
             stretch_y: Spring::new(0.0, SQUISH),
             seen: None,
+            pushed: 0.0,
+            pushing: 0.0,
             last: None,
         }
     }
@@ -432,6 +505,52 @@ impl Motion {
                     theme::JELLY_BUMP * 0.5 * (1.0 + (std::f32::consts::PI * from).cos())
                 });
             }
+        }
+    }
+
+    /// While the island slides as a whole, pushed by a neighbor making room, the end it's pushed
+    /// from swells taller, the more the longer and faster it goes, as if what it passed piled up
+    /// there. When it stops, the swell is kicked across to the other end, and the jelly wiggles
+    /// back flat. A resize moves its edges apart or together, not the same way, so it doesn't
+    /// count, and neither does a popover's morph.
+    fn lean_with_push(&mut self, elapsed: f32) {
+        if self.popover.present || self.press.is_some() {
+            self.pushed = 0.0;
+            self.pushing = 0.0;
+            return;
+        }
+        let (left, right) = (self.edges.left.velocity, self.edges.right.velocity);
+        let speed = if left.signum() == right.signum() {
+            left.signum() * left.abs().min(right.abs())
+        } else {
+            0.0
+        };
+        // From −1 at the start of a side to 1 at its end, eased at both.
+        let toward_end = |along: f32| (std::f32::consts::PI * (along - 0.5)).sin();
+        let strength =
+            |speed: f32, most: f32| most * (speed.abs() / theme::PUSH_FULL_SPEED).min(1.0);
+        if speed.abs() > theme::PUSH_MOVING {
+            if speed.abs() > self.pushed.abs() {
+                self.pushed = speed;
+            }
+            self.pushing += elapsed;
+            // Going left, it's pushed from the right: its right end swells, gradually.
+            let way = speed.signum();
+            let building = (self.pushing / theme::PUSH_BUILD.as_secs_f32()).min(1.0);
+            let lean = strength(speed, theme::PUSH_LEAN) * building;
+            for side in [Side::Top, Side::Bottom] {
+                self.jelly
+                    .kick(side, |along| -way * lean * toward_end(along));
+            }
+        } else if self.pushed != 0.0 {
+            let way = self.pushed.signum();
+            let wiggle = strength(self.pushed, theme::PUSH_WIGGLE);
+            for side in [Side::Top, Side::Bottom] {
+                self.jelly
+                    .kick(side, |along| way * wiggle * toward_end(along));
+            }
+            self.pushed = 0.0;
+            self.pushing = 0.0;
         }
     }
 
@@ -675,6 +794,7 @@ impl Motion {
         for spring in self.paced() {
             spring.advance(paced);
         }
+        self.lean_with_push(paced);
         self.jelly.advance(paced);
         // The fades wait on how far the shape has come.
         self.aim();
@@ -805,6 +925,21 @@ impl Motion {
 /// what's under a popover. Not `Idle`: iced_layershell turns that into the busy cursor. It turns
 /// any variant it doesn't name, like this one, into the default arrow.
 const ARROW: mouse::Interaction = mouse::Interaction::ContextMenu;
+
+/// The island itself, without the room an open popover keeps beside it.
+fn own_bounds(state: &State, layout: Layout<'_>) -> Rectangle {
+    let bounds = layout.bounds();
+    let (offset, width) = state.own;
+    Rectangle::new(
+        Point::new(bounds.x + offset, bounds.y),
+        Size::new(width, bounds.height),
+    )
+}
+
+/// Whether the item at `index` is the toggle, laid out hidden.
+fn is_hidden(toggle: Option<usize>, index: usize, shown: bool) -> bool {
+    toggle == Some(index) && !shown
+}
 
 /// How wide each item's slot is: its own width, or its width group's widest.
 fn slots(widths: &[f32], groups: &[Option<&str>]) -> Vec<f32> {
@@ -955,7 +1090,7 @@ fn draw_island<M>(
     let shape = if motion.island.is_some() {
         motion.shape()
     } else {
-        layout.bounds()
+        own_bounds(state, layout)
     };
     if shape.width < 1.0 || shape.height < 1.0 {
         return;
@@ -1125,6 +1260,10 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             shape: Cache::new(),
             shape_bent: Cell::new(false),
             panel: None,
+            hovered: false,
+            toggle_shown: false,
+            expanded: None,
+            own: (0.0, 0.0),
         })
     }
 
@@ -1144,6 +1283,10 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         let padding = f32::from(theme::ISLAND_PADDING);
         let spacing = theme::ITEM_SPACING as f32;
         let limits = layout::Limits::new(Size::new(0.0, height), Size::new(f32::INFINITY, height));
+        let state = tree.state.downcast_mut::<State>();
+        state.toggle_shown = (state.hovered || self.expanded) && self.popover.is_none();
+        // A hidden toggle takes no room.
+        let hidden = (!state.toggle_shown).then_some(self.toggle).flatten();
         let nodes: Vec<_> = self
             .items
             .iter_mut()
@@ -1151,13 +1294,18 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             .map(|(item, tree)| item.as_widget_mut().layout(tree, renderer, &limits))
             .collect();
         let widths: Vec<_> = nodes.iter().map(|node| node.size().width).collect();
+        let laid_out = nodes.len() - usize::from(hidden.is_some());
         let slots = slots(&widths, &self.groups);
         let mut x = padding;
         let children: Vec<_> = nodes
             .into_iter()
             .zip(slots)
-            .map(|(node, slot)| {
+            .enumerate()
+            .map(|(index, (node, slot))| {
                 let size = node.size();
+                if Some(index) == hidden {
+                    return node.move_to(Point::new(x, ((height - size.height) / 2.0).round()));
+                }
                 let at = Point::new(
                     (x + (slot - size.width) / 2.0).round(),
                     ((height - size.height) / 2.0).round(),
@@ -1166,12 +1314,31 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
                 node.move_to(at)
             })
             .collect();
-        let width = if children.is_empty() {
+        let width = if laid_out == 0 {
             2.0 * padding
         } else {
             x - spacing + padding
         };
-        layout::Node::with_children(Size::new(width, height), children)
+        // An open popover takes the panel's width in the row, so it pushes the islands beside it
+        // away instead of covering them. They glide there and back on their own springs. The
+        // island itself stays where its popover grows from: at the zone's side, or centered.
+        let open = self.popover.as_ref().is_some_and(|popover| popover.open);
+        let room = if open {
+            width.max(theme::PANEL_WIDTH)
+        } else {
+            width
+        };
+        let offset = match self.align {
+            Horizontal::Left => 0.0,
+            Horizontal::Center => ((room - width) / 2.0).round(),
+            Horizontal::Right => room - width,
+        };
+        tree.state.downcast_mut::<State>().own = (offset, width);
+        let children = children
+            .into_iter()
+            .map(|child| child.translate(Vector::new(offset, 0.0)))
+            .collect();
+        layout::Node::with_children(Size::new(room, height), children)
     }
 
     fn draw(
@@ -1246,29 +1413,79 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         shell: &mut Shell<'_, M>,
         viewport: &Rectangle,
     ) {
+        let shown = tree.state.downcast_ref::<State>().toggle_shown;
         // Items under a popover are hidden, and stay out of it.
         if self.popover.is_none() {
-            for ((item, tree), layout) in self
+            for (index, ((item, tree), layout)) in self
                 .items
                 .iter_mut()
                 .zip(&mut tree.children)
                 .zip(layout.children())
+                .enumerate()
             {
+                if is_hidden(self.toggle, index, shown) {
+                    continue;
+                }
                 item.as_widget_mut().update(
                     tree, event, layout, cursor, renderer, clipboard, shell, viewport,
                 );
             }
         }
 
-        let motion = &mut tree.state.downcast_mut::<State>().motion;
+        let state = tree.state.downcast_mut::<State>();
+        // Hovering shows the toggle, and leaving hides it: the island makes room for it, or gives
+        // the room back. No message: it's the island's own.
+        if self.toggle.is_some()
+            && let Event::Mouse(
+                mouse::Event::CursorMoved { .. }
+                | mouse::Event::CursorEntered
+                | mouse::Event::CursorLeft,
+            ) = event
+        {
+            let hovered = !matches!(event, Event::Mouse(mouse::Event::CursorLeft))
+                && cursor.is_over(own_bounds(state, layout));
+            if hovered != state.hovered {
+                state.hovered = hovered;
+                shell.invalidate_layout();
+                shell.request_redraw();
+            }
+        }
+        let own = own_bounds(state, layout);
+        // Showing or hiding the collapsible items squashes the island the way they went: out
+        // toward the toggle, or back.
+        let expanded = self.toggle.map(|_| self.expanded);
+        let squash = state.expanded.is_some() && expanded != state.expanded;
+        state.expanded = expanded;
+        let motion = &mut state.motion;
+        if squash && motion.press.is_none() && !motion.popover.present {
+            let out = if self.toggle_side == Horizontal::Left {
+                Nudge::Left
+            } else {
+                Nudge::Right
+            };
+            let back = if out == Nudge::Left {
+                Nudge::Right
+            } else {
+                Nudge::Left
+            };
+            let nudge = if self.expanded { out } else { back };
+            let request = NudgeRequest {
+                nudge,
+                lasting: Some(theme::COLLAPSE_SQUASH),
+            };
+            motion.nudge(request, None);
+        }
         motion.swap(self.popover.as_ref().map(|popover| popover.key));
+        // A hidden toggle isn't arranged, so it isn't drawn, and fades in when it shows.
         let positions = self
             .keys
             .iter()
             .zip(layout.children())
-            .map(|(key, child)| (*key, child.bounds().x));
+            .enumerate()
+            .filter(|(index, _)| !is_hidden(self.toggle, *index, shown))
+            .map(|(_, (key, child))| (*key, child.bounds().x));
         motion.arrange(
-            layout.bounds(),
+            own,
             positions,
             self.popover.as_ref().map(|popover| popover.open),
         );
@@ -1285,7 +1502,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
                 if self.popover.is_none() =>
             {
-                if let Some(at) = cursor.position_over(layout.bounds()) {
+                if let Some(at) = cursor.position_over(own) {
                     motion.press(at);
                 }
             }
@@ -1328,11 +1545,14 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         if self.popover.is_some() {
             return mouse::Interaction::None;
         }
+        let shown = tree.state.downcast_ref::<State>().toggle_shown;
         self.items
             .iter()
             .zip(&tree.children)
             .zip(layout.children())
-            .map(|((item, tree), layout)| {
+            .enumerate()
+            .filter(|(index, _)| !is_hidden(self.toggle, *index, shown))
+            .map(|(_, ((item, tree), layout))| {
                 item.as_widget()
                     .mouse_interaction(tree, layout, cursor, viewport, renderer)
             })
@@ -1403,7 +1623,7 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             .as_widget_mut()
             .layout(panel, renderer, &limits);
 
-        let island = self.layout.bounds() + self.translation;
+        let island = own_bounds(state, self.layout) + self.translation;
         let rect = place(island, content.size(), self.island.align, bounds.width);
         state
             .motion
@@ -2160,6 +2380,40 @@ mod tests {
         assert_eq!(motion.push_x.velocity, 0.0);
         assert!(motion.jelly.at_rest());
         assert_eq!(motion.seen, Some(3));
+    }
+
+    #[test]
+    fn a_pushed_island_piles_up_where_its_pushed_from_then_wiggles_across() {
+        let mut motion = settled(rect(400.0, 120.0), &[1]);
+        // Pushed 200 px left, by a neighbor on its right.
+        motion.arrange(rect(200.0, 120.0), [(1, 210.0)].into_iter(), None);
+        let (mut right_most, mut left_after) = (0.0f32, 0.0f32);
+        let mut stopped = false;
+        let frames = run(&mut motion, Instant::now(), |motion| {
+            let top = |along| motion.jelly.value(Side::Top, along);
+            let sliding = motion.edges.left.velocity.abs() > theme::PUSH_MOVING;
+            // The first frame has no time to move in.
+            if sliding && !stopped {
+                right_most = right_most.max(top(0.9));
+                assert!(top(0.9) >= top(0.1) - 0.01, "the right end leads the swell");
+            } else if right_most > 0.0 {
+                stopped = true;
+                left_after = left_after.max(top(0.1));
+            }
+        });
+        assert!(right_most > 0.5, "the right end swelled: {right_most}");
+        assert!(left_after > 0.3, "then the left end: {left_after}");
+        assert!(frames < 200, "and it settles");
+        assert!(motion.jelly.is_flat());
+    }
+
+    #[test]
+    fn a_resize_is_not_a_push() {
+        let mut motion = settled(rect(400.0, 120.0), &[1]);
+        motion.arrange(rect(200.0, 320.0), [(1, 210.0)].into_iter(), None);
+        run(&mut motion, Instant::now(), |motion| {
+            assert!(motion.jelly.is_flat(), "only one edge moves");
+        });
     }
 
     #[test]

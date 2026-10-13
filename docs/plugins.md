@@ -19,9 +19,35 @@ widget = "someone/weather"            # a plugin: github.com/someone/weather
 units = "metric"
 ```
 
-The zones are `left`, `center` and `right`, in order. Every key except `widget` and `width_group` goes to the widget's `Config`.
+The zones are `left`, `center` and `right`, in order. Every key except `widget`, `width_group` and `collapsible` goes to the widget's `Config`.
 
 `width_group = "name"` lines items up: items in the same island with the same group all get a slot as wide as the widest of them, each centered in its slot ([D-34](decisions.md)). For example, put `volume` and `network` in one group, so the Wi-Fi icon gets the same room as the volume item, which needs space for its percent.
+
+A zone is one island, or several side by side. Entries without a widget arrange them ([D-55](decisions.md)):
+
+```toml
+[[right]]
+widget = "volume"
+collapsible = true     # hidden until you open the island
+
+[[right]]
+divider = true         # a thin line before the next item
+
+[[right]]
+widget = "network"
+
+[[right]]
+island = true          # what follows is another island, beside this one
+
+[[right]]
+widget = "battery"
+```
+
+- `island = true` starts another island in the same zone.
+- `divider = true` puts a line before the next item. It shows only between two items that show.
+- `collapsible = true` hides the item while its island is collapsed, which it is at first. Hover over the island and a chevron appears on the side facing the middle of the screen. Press it to show the hidden items in their places, and again to hide them.
+
+Notifications open from the right zone's last island, the one at the screen's edge.
 
 Unknown widgets and invalid options are reported on stderr and skipped. They never crash the bar. Changes apply as soon as you save, with no restart. Widgets whose entry didn't change keep their state, and a file that doesn't parse leaves the bar as it was ([D-21](decisions.md)).
 

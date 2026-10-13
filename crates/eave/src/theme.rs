@@ -110,6 +110,20 @@ pub const JELLY_COUPLING: f32 = 1400.0;
 /// way.
 pub const JELLY_BUMP: f32 = 150.0;
 pub const JELLY_LEAN: f32 = 120.0;
+/// A pushed island (one sliding as a whole, because a neighbor made room for itself) piles up at
+/// the end it's pushed from: that end of its top and bottom edges swells out, kicked up to this
+/// many logical pixels per second for as long as it slides at `PUSH_FULL_SPEED` or more (less,
+/// slower), working up to that over `PUSH_BUILD`. It counts as sliding above `PUSH_MOVING`. When
+/// it stops, the swell is kicked across to the other end, at up to `PUSH_WIGGLE`, and the jelly
+/// settles from there. About 1 px at most each way.
+pub const PUSH_LEAN: f32 = 45.0;
+/// How long the squash of an island showing or hiding its collapsible items lasts: a nudge's
+/// motion, slowed down to this.
+pub const COLLAPSE_SQUASH: Duration = Duration::from_millis(450);
+pub const PUSH_BUILD: Duration = Duration::from_millis(250);
+pub const PUSH_WIGGLE: f32 = 90.0;
+pub const PUSH_FULL_SPEED: f32 = 600.0;
+pub const PUSH_MOVING: f32 = 20.0;
 /// How wide a nudge's bump in an island's edge is, end to end.
 pub const NUDGE_BUMP_WIDTH: f32 = 176.0;
 /// The furthest the outline reaches out of the island: it stays inside `EDGE_GAP` above and at
@@ -118,6 +132,12 @@ pub const NUDGE_BUMP_ROOM: f32 = 4.0;
 /// Horizontal padding inside each item, so its click target is wider than its text.
 pub const ITEM_PADDING: u16 = 6;
 pub const ITEM_SPACING: u32 = 4;
+/// A divider between items: a line this wide and tall, in this color.
+pub const DIVIDER_WIDTH: f32 = 1.0;
+pub const DIVIDER_HEIGHT: f32 = 14.0;
+pub const DIVIDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
+/// Space between islands in the same zone.
+pub const ISLAND_SPACING: u32 = EDGE_GAP as u32;
 
 /// Space between a popover's edge and its content.
 pub const PANEL_PADDING: u16 = 12;
