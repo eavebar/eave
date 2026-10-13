@@ -31,7 +31,7 @@ repository = "https://github.com/eaveshell/eave"
 [workspace.dependencies]
 eave-api = { path = "crates/eave-api", version = "0.1.2" }
 eave = { path = "crates/eave", version = "0.1.0" }
-eave-dbus = { path = "crates/eave-dbus", version = "0.1.0" }
+eave-dbus = { path = "crates/eave-dbus", version = "0.1.1" }
 eave-pulse = { path = "crates/eave-pulse", version = "0.1.0" }
 eave-hyprland = { path = "crates/eave-hyprland", version = "0.1.0" }
 eave-iwd = { path = "crates/eave-iwd", version = "0.1.0" }
