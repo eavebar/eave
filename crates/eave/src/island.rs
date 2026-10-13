@@ -1469,7 +1469,11 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
                 Nudge::Left
             };
             let nudge = if self.expanded { out } else { back };
-            motion.nudge(nudge.into(), None);
+            let request = NudgeRequest {
+                nudge,
+                lasting: Some(theme::COLLAPSE_SQUASH),
+            };
+            motion.nudge(request, None);
         }
         motion.swap(self.popover.as_ref().map(|popover| popover.key));
         // A hidden toggle isn't arranged, so it isn't drawn, and fades in when it shows.

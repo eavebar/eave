@@ -117,6 +117,9 @@ pub const JELLY_LEAN: f32 = 120.0;
 /// it stops, the swell is kicked across to the other end, at up to `PUSH_WIGGLE`, and the jelly
 /// settles from there. About 1 px at most each way.
 pub const PUSH_LEAN: f32 = 45.0;
+/// How long the squash of an island showing or hiding its collapsible items lasts: a nudge's
+/// motion, slowed down to this.
+pub const COLLAPSE_SQUASH: Duration = Duration::from_millis(450);
 pub const PUSH_BUILD: Duration = Duration::from_millis(250);
 pub const PUSH_WIGGLE: f32 = 90.0;
 pub const PUSH_FULL_SPEED: f32 = 600.0;
