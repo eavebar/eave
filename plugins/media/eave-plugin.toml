@@ -1,0 +1,4 @@
+[plugin]
+name = "media"
+description = "Now playing: the track in the bar, controls, seeking and players in the popover"
+api = "0.1"

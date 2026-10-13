@@ -6,6 +6,7 @@ fn main() -> Result<(), eave::Error> {
         eave_battery::register,
         eave_clock::register,
         eave_keyboard::register,
+        eave_media::register,
         eave_network::register,
         eave_volume::register,
         eave_window::register,

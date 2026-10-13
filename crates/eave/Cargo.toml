@@ -27,6 +27,7 @@ winit-core = "=0.31.0-beta.2"
 eave-battery = { workspace = true, optional = true }
 eave-clock = { workspace = true, optional = true }
 eave-keyboard = { workspace = true, optional = true }
+eave-media = { workspace = true, optional = true }
 eave-network = { workspace = true, optional = true }
 eave-volume = { workspace = true, optional = true }
 eave-window = { workspace = true, optional = true }
@@ -38,6 +39,7 @@ builtin = [
     "dep:eave-battery",
     "dep:eave-clock",
     "dep:eave-keyboard",
+    "dep:eave-media",
     "dep:eave-network",
     "dep:eave-volume",
     "dep:eave-window",

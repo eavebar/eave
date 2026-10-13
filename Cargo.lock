@@ -758,6 +758,7 @@ dependencies = [
  "eave-clock",
  "eave-hyprland",
  "eave-keyboard",
+ "eave-media",
  "eave-network",
  "eave-volume",
  "eave-window",

@@ -13,10 +13,10 @@ use std::time::{Duration, Instant};
 use eave_dbus::zbus::message::Type as MessageType;
 use eave_dbus::zbus::names::BusName;
 use eave_dbus::zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
-use eave_dbus::zbus::{self, Connection, MatchRule, MessageStream};
+use eave_dbus::zbus::{Connection, MatchRule, MessageStream};
 use futures_util::{FutureExt, StreamExt, stream};
 
-pub use eave_dbus::Stream;
+pub use eave_dbus::{Stream, zbus};
 
 const PREFIX: &str = "org.mpris.MediaPlayer2.";
 const PATH: &str = "/org/mpris/MediaPlayer2";
@@ -167,8 +167,7 @@ pub fn watch() -> impl Stream<Item = Vec<Player>> {
 
 /// Players' names coming and going, and every signal from a player's object: its property
 /// changes and `Seeked`.
-async fn subscribe()
--> zbus::Result<(Connection, stream::Select<MessageStream, MessageStream>)> {
+async fn subscribe() -> zbus::Result<(Connection, stream::Select<MessageStream, MessageStream>)> {
     let connection = eave_dbus::session().await?;
     let names = MatchRule::builder()
         .msg_type(MessageType::Signal)
