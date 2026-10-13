@@ -55,7 +55,7 @@ pub struct Island<'a, M> {
     /// Where the toggle is, and whether the collapsible items show.
     toggle_side: Horizontal,
     expanded: bool,
-    /// A live island: snug around its items and rounder.
+    /// A live island: snug around its items.
     live: bool,
     /// How far its shape reaches past its layout, toward the edges it's attached to (D-70), and its
     /// popover's with it.
@@ -162,15 +162,14 @@ impl<'a, M> Island<'a, M> {
         self
     }
 
-    /// Rounded like this: top left, top right, bottom right, bottom left. A live island is rounder
-    /// until it grows into a popover.
+    /// Rounded like this: top left, top right, bottom right, bottom left, live or not.
     pub fn corners(mut self, corners: [CornerShape; 4]) -> Self {
         self.corners = corners;
         self
     }
 
-    /// Makes it a live island: less room at its ends and rounder corners, so one item in it is
-    /// nearly round. Still a squircle. Its popover panel is like any other.
+    /// Makes it a live island: as much room at its ends as above and below its items, so it's
+    /// snug around them. Its corners are any island's where it sits (D-78).
     pub fn live(mut self, live: bool) -> Self {
         self.live = live;
         self
@@ -1105,21 +1104,6 @@ fn panel_offset(place: Size, content: Size) -> Vector {
     )
 }
 
-/// The corners at `height` of an island `island` tall at rest. A live one's are half its height,
-/// until it grows into a popover: they ease to its own over the first island height it grows, so
-/// the panel looks like any other.
-fn corners(live: bool, island: f32, height: f32, corners: [CornerShape; 4]) -> [CornerShape; 4] {
-    if !live {
-        return corners;
-    }
-    let round = island / 2.0;
-    let grown = ((height - island) / island).clamp(0.0, 1.0);
-    corners.map(|corner| {
-        let radius = round + (corner.radius - round) * grown;
-        CornerShape::new(radius, corner.smoothing)
-    })
-}
-
 /// Draws the island as it is right now: the shape, the items that show, and the popover panel if
 /// one is given (with its layout).
 #[allow(clippy::too_many_arguments)]
@@ -1181,9 +1165,7 @@ fn draw_island<M>(
             let frame_size = Size::new(body.width + 2.0 * room.x, body.height + 2.0 * room.y);
             let geometry = state.shape.draw(renderer, frame_size, |frame| {
                 let size = body.size();
-                // As round as the shape itself would be: what reaches past it doesn't count.
-                let resting = layout.bounds().height;
-                let corners = corners(state.live, resting, shape.height, own_corners);
+                let corners = own_corners;
                 let outline = Rectangle::new(Point::ORIGIN + room, size);
                 // The jelly bends the shape itself: its sides are where they'd be without the
                 // reach, and what reaches past one moves with it.
@@ -1360,11 +1342,6 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         _limits: &layout::Limits,
     ) -> layout::Node {
         let height = self.height;
-        let padding = f32::from(if self.live {
-            theme::LIVE_ISLAND_PADDING
-        } else {
-            theme::ISLAND_PADDING
-        });
         let spacing = theme::ITEM_SPACING as f32;
         let limits = layout::Limits::new(Size::new(0.0, height), Size::new(f32::INFINITY, height));
         let state = tree.state.downcast_mut::<State>();
@@ -1388,6 +1365,22 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             .collect();
         let widths: Vec<_> = nodes.iter().map(|node| node.size().width).collect();
         let laid_out = nodes.len() - usize::from(hidden.is_some());
+        // A live island has as much room at its ends as above and below its tallest item, in
+        // what's seen of it.
+        let tallest = nodes
+            .iter()
+            .enumerate()
+            .filter(|&(index, _)| Some(index) != hidden)
+            .map(|(_, node)| node.size().height)
+            .reduce(f32::max);
+        let padding = match (self.live, tallest) {
+            (false, _) => f32::from(theme::ISLAND_PADDING),
+            (true, Some(tallest)) => {
+                let shown = height + self.shows.top + self.shows.bottom;
+                ((shown - tallest) / 2.0).round().max(0.0)
+            }
+            (true, None) => f32::from(theme::LIVE_ISLAND_PADDING),
+        };
         let slots = slots(&widths, &self.groups);
         let mut x = padding;
         let children: Vec<_> = nodes

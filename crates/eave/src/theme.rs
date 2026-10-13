@@ -56,7 +56,8 @@ pub const ISLAND_RADIUS: f32 = 14.0;
 /// 0.6 is the iOS look). On an island too short for the full spread, the curve is squeezed to fit
 /// rather than the smoothing reduced, so a radius up to half the island's height stays smooth.
 pub const ISLAND_SMOOTHING: f32 = 0.6;
-/// A live island's padding at its ends: snug, so an island of one icon is nearly round.
+/// A live island's padding at its ends while it has no items. With items, it's the room above
+/// and below them (D-78).
 pub const LIVE_ISLAND_PADDING: u16 = 4;
 /// How far each side of a pressed island moves in, in logical pixels.
 pub const PRESS_INSET: f32 = 1.5;
@@ -349,6 +350,16 @@ pub const SPRITE_HEIGHT_PANEL: f32 = 20.0;
 pub const LONG_PRESS: Duration = Duration::from_millis(400);
 /// Touchpad scrolling distance, in logical pixels, that counts as one scroll step.
 pub const SCROLL_STEP: f32 = 30.0;
+/// A flung list slows like this: its speed falls to about a third every `SCROLL_GLIDE_DECAY`
+/// seconds (iOS's feel), so it covers speed × this in all. Not a spring: nothing pulls it
+/// anywhere, it just runs out ([D-77](../../../docs/decisions.md)).
+pub const SCROLL_GLIDE_DECAY: f32 = 0.325;
+/// Slower than this, in logical pixels a second, a fling stops, and a lift doesn't start one.
+pub const SCROLL_GLIDE_MIN: f32 = 20.0;
+/// A wheel step eases to where it goes, two thirds of the way every this many seconds: settled
+/// in about 120 ms, quick enough that the wheel still feels direct. The eases above run a set
+/// time from one value to another, but steps add up while one is under way.
+pub const SCROLL_WHEEL_EASE: f32 = 0.04;
 
 pub const TEXT_SIZE: f32 = 14.0;
 /// Height of an icon, and width of the square ones.
