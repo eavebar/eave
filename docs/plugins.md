@@ -70,7 +70,6 @@ Use them by name. The default binary (`cargo run --release`) has all of them, an
 | `network` | Wi-Fi icon with as many bars as the signal, wired icon, struck-through Wi-Fi when offline; name, signal, band, address, gateway in the popover | `show_name` (default false): the Wi-Fi name next to the icon |
 | `volume` | speaker icon with 0–3 waves for the volume, struck through when muted; the percent while hovered and for 1.5 s after a change, with a nudge; scroll to change, right click to mute; −/+, mute, output list in the popover | `step` (default 5), `max` (default 100) |
 | `keyboard` | active layout, click for the next one; hidden with a single layout | `aliases` (`{ "English (US)" = "us" }`) |
-| `notifications` | eave's own notification server: while there are notifications, the right island turns into a panel of them, with their actions and a line between each. Each goes after a few seconds (not while pointed at), on its close button, or when an action is picked. A bell, with the count of new ones since the popover last opened, leaving out the ones you closed or clicked; in the popover, the ones waiting for you (click one to see all of it and its actions), messages you can answer from where they appear (KDE's inline reply, which messengers use) and a History tab with every one that arrived, with do not disturb. Right click for do not disturb: only critical ones show in the island. Dimmed while another notification daemon (mako, dunst, swaync) is running, until it quits ([D-48](decisions.md)) | `timeout` (seconds, default 5, for notifications that don't say), `history` (default 100: how many the History tab keeps) |
 
 ```toml
 [[left]]
@@ -85,6 +84,8 @@ widget = "keyboard"
 aliases = { "English (US)" = "us", "Italian" = "it" }
 ```
 
+Notifications come from a plugin of their own, eave's notification server, in [eaveshell/eave-notifications](https://github.com/eaveshell/eave-notifications): `widget = "eaveshell/eave-notifications"` ([D-50](decisions.md)).
+
 ## Writing a plugin
 
 ```toml
@@ -94,12 +95,7 @@ eave-api = "0.1"
 serde = { version = "1", features = ["derive"] }
 ```
 
-`eave-api` isn't published on crates.io yet. `eave-build` patches it to the eave checkout it builds against. To work on a plugin on its own, add this to the plugin's own `Cargo.toml` (cargo ignores it when the plugin is used as a dependency):
-
-```toml
-[patch.crates-io]
-eave-api = { path = "../eave/crates/eave-api" }
-```
+`eave-api` and the service crates are on crates.io, so a plugin builds and tests on its own ([D-50](decisions.md)). When it's compiled into a bar, `eave-build` patches them to the eave checkout it builds against, so the host and every plugin share one copy.
 
 ```toml
 # eave-plugin.toml, beside the crate's Cargo.toml
@@ -197,7 +193,7 @@ For the network, depend on `eave-net`: `watch()` yields the primary connection (
 
 For audio, depend on `eave-pulse`: `watch()` yields the outputs (sinks, default, volume, mute) after every change, and `set_volume`, `set_mute` and `set_default` send commands. Run them in a `Task`.
 
-For notifications, depend on `eave-notify`: `watch()` starts eave's notification server and yields whether it's serving (or which daemon it waits behind), then every notification as it arrives (body markup stripped) and every one its app closes. `close(id, reason)` and `invoke(id, key)` tell the app what became of it. Only one widget should use it: the `notifications` plugin does.
+For notifications, `eave-notify` is eave's notification server, in its own repository with its plugin ([eaveshell/eave-notifications](https://github.com/eaveshell/eave-notifications), [D-50](decisions.md)).
 
 ### The rules
 

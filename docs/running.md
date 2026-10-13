@@ -126,6 +126,6 @@ systemctl --user enable --now eave-rebuild.path   # eave-build init put the unit
 
 ## Notifications
 
-With `widget = "notifications"` in config.toml, eave is your notification daemon ([D-48](decisions.md)). Only one program can be. If mako, dunst or swaync is already running, eave waits in line and takes over as soon as it quits. Until then, the bell is dimmed and the popover says which daemon has them. To switch, stop starting the other daemon (remove its `exec-once`, or `systemctl --user disable --now mako`), then quit it.
+With `widget = "eaveshell/eave-notifications"` in config.toml, eave is your notification daemon ([D-48](decisions.md), [D-50](decisions.md)). Only one program can be. If mako, dunst or swaync is already running, eave waits in line and takes over as soon as it quits. Until then, the bell is dimmed and the popover says which daemon has them. To switch, stop starting the other daemon (remove its `exec-once`, or `systemctl --user disable --now mako`), then quit it.
 
 Notifications sent while the bar restarts, after a rebuild for example, are lost, and the list starts empty after a restart.

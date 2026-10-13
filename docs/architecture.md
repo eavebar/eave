@@ -28,7 +28,7 @@ eave keeps these apart. The **host** does the first job and owns everything visu
 
 - **Host** ([D-11](decisions.md)): owns every surface, the layout, the look and the motion. It is not pluggable.
 - **Widgets** implement `eave_api::Widget`. They can't pick colors or sizes, can't build raw iced elements, and can't move other items or the bar ([D-13](decisions.md)).
-- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-net` holds one netlink listener for links, addresses, routes and Wi-Fi ([D-23](decisions.md)). `crates/eave-dbus` shares one system bus connection ([D-18](decisions.md)). `crates/eave-pulse` holds the one audio event subscription ([D-19](decisions.md)). `crates/eave-iwd` controls Wi-Fi through iwd, watched only while the network popover is open ([D-42](decisions.md)). `crates/eave-notify` is eave's notification server, on its own session bus connection ([D-48](decisions.md)).
+- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-net` holds one netlink listener for links, addresses, routes and Wi-Fi ([D-23](decisions.md)). `crates/eave-dbus` shares one system bus connection ([D-18](decisions.md)). `crates/eave-pulse` holds the one audio event subscription ([D-19](decisions.md)). `crates/eave-iwd` controls Wi-Fi through iwd, watched only while the network popover is open ([D-42](decisions.md)).
 
 Core plugins depend only on Hyprland and the kernel, plus an audio server for volume. They don't need UPower, NetworkManager or any other daemon or binary to be installed ([D-23](decisions.md)).
 
@@ -82,7 +82,7 @@ While widgets list notices, the right island turns into a panel of them, the sam
 | Network | kernel (rtnetlink, nl80211) | link/address/route multicast events, plus a 10 s signal re-read while on Wi-Fi ([D-23](decisions.md)) |
 | Bluetooth | BlueZ | D-Bus (`zbus`) |
 | Tray | StatusNotifierItem | D-Bus. We must act as the watcher/host. The hardest widget. |
-| Notifications | apps, through the freedesktop notification spec | D-Bus: eave serves `org.freedesktop.Notifications` on the session bus ([D-48](decisions.md)) |
+| Notifications | apps, through the freedesktop notification spec | D-Bus: eave serves `org.freedesktop.Notifications` on the session bus, from the plugin in [eaveshell/eave-notifications](https://github.com/eaveshell/eave-notifications) ([D-48](decisions.md), [D-50](decisions.md)) |
 | CPU / RAM / temps | `/proc`, `/sys` | timer (the only legitimate polling) |
 
 So far: clock, workspaces, active window, keyboard layout, battery, network, volume and notifications. Media is next. See [roadmap.md](roadmap.md).
@@ -125,7 +125,6 @@ crates/eave-build/         builds the widgets config.toml uses, installs and res
 crates/eave-dbus/          service: shared system bus, snapshot-on-PropertiesChanged watcher
 crates/eave-iwd/           service: Wi-Fi networks and controls through iwd's D-Bus API, and a passphrase agent
 crates/eave-net/           service: network state from the kernel over netlink (one event thread)
-crates/eave-notify/        service: the notification server (org.freedesktop.Notifications on the session bus)
 crates/eave-pulse/         service: audio over the PulseAudio protocol (one event thread)
 crates/eave-hyprland/      service: shared socket2 events, socket1 queries and dispatches
 eave-collection.toml       lists plugins/*: the built-ins, as one collection (D-46)
@@ -136,7 +135,6 @@ plugins/keyboard/          keyboard layout (eave-keyboard)
 plugins/battery/           battery from sysfs (eave-battery)
 plugins/network/           primary connection, via eave-net; Wi-Fi to join via eave-iwd (eave-network)
 plugins/volume/            output volume and switching (eave-volume)
-plugins/notifications/     notifications in the island, bell and history, via eave-notify (eave-notifications)
 vendor/softbuffer/         softbuffer 0.4.8 with an alpha-carrying Wayland buffer (D-25)
 dist/systemd/              user units: the bar, and the rebuild-on-config.toml pair
 dist/config.toml           the starter config `eave-build init` writes
