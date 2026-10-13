@@ -1,4 +1,4 @@
-//! Installed apps, in the dormer: each one an action that launches it (D-83). It shows nothing in
+//! Installed apps, in the dormer: each one an action that launches it (D-84). It shows nothing in
 //! the bar, so it goes in config.toml's `[[dormer]]`:
 //!
 //! ```toml

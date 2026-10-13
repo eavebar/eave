@@ -1,4 +1,4 @@
-//! The dormer: the host's search dialog for widgets' actions (D-83). A keybind opens it, and it
+//! The dormer: the host's search dialog for widgets' actions (D-84). A keybind opens it, and it
 //! drops out of the top of the screen into its upper middle, the way a popover grows out of its
 //! island. What it lists comes from [`Widget::actions`](eave_api::Widget::actions), and from every
 //! widget with a popover, which it can open. Typing narrows the list down, and picking a row sends

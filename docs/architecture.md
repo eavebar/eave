@@ -72,7 +72,7 @@ Notifications travel only over the session bus ([D-52](decisions.md)). The plugi
 
 ## The dormer
 
-The dormer is the host's search dialog for widgets' actions ([D-83](decisions.md)). A Hyprland bind sends `eave-dormer` on socket2 (`bind = SUPER, SPACE, event, eave-dormer`, or `eave dormer`), and the bar's always-on socket2 filter turns it into `Dormer(Toggle)`:
+The dormer is the host's search dialog for widgets' actions ([D-84](decisions.md)). A Hyprland bind sends `eave-dormer` on socket2 (`bind = SUPER, SPACE, event, eave-dormer`, or `eave dormer`), and the bar's always-on socket2 filter turns it into `Dormer(Toggle)`:
 
 1. The host asks Hyprland how tall the focused screen is, then opens the dormer a fifth of the way down (`Opened(top)`). Opening it closes any popover, the same way opening a popover closes it.
 2. It asks every widget for `actions()`, and adds a row for each widget with a popover. `dormer.rs` ranks them for what's typed and keeps the best eight. After each of a widget's messages while it's open, the host asks again, and the selection stays on its row.

@@ -120,7 +120,7 @@ pub enum Placement {
     /// Under its island, growing from its side ([`place`]).
     Below,
     /// Centered across the surface, its top this far down: the dormer, which drops out of an
-    /// island at the top into the middle of the screen (D-83).
+    /// island at the top into the middle of the screen (D-84).
     Centered { top: f32 },
 }
 

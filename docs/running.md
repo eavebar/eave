@@ -162,7 +162,7 @@ It starts from what config.toml says, or from the notch the hardware reports. Sa
 
 ## The dormer
 
-The dormer is a search dialog for what your widgets can do: mute, skip a track, switch to a window, or launch an app with the `apps` widget ([D-83](decisions.md)). Bind a key to it:
+The dormer is a search dialog for what your widgets can do: mute, skip a track, switch to a window, or launch an app with the `apps` widget ([D-84](decisions.md)). Bind a key to it:
 
 ```lua
 -- hyprland.lua (Hyprland 0.56+)

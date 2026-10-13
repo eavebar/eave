@@ -2,7 +2,7 @@
 //! popover isn't a surface of its own: the island holding its item morphs into it, and the bar
 //! surface grows to make room while it's there. Widgets' notifications turn the right island at
 //! the screen's edge into a panel the same way, while there are any. The dormer, the search
-//! dialog for widgets' actions, drops out of the top of the screen the same way too (D-83).
+//! dialog for widgets' actions, drops out of the top of the screen the same way too (D-84).
 
 use std::time::{Duration, Instant};
 

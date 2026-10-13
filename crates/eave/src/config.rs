@@ -20,7 +20,7 @@
 //! attach = ["top", "right"]   # optional: flush with these screen edges (D-70)
 //!
 //! [[dormer]]
-//! widget = "apps"   # only in the dormer, with its actions: not in the bar (D-83)
+//! widget = "apps"   # only in the dormer, with its actions: not in the bar (D-84)
 //! ```
 //!
 //! Four keys sit above the zones. `renderer = "gpu"` (the default) or `"cpu"` (D-67), read when
@@ -53,7 +53,7 @@ pub enum Zone {
     Left,
     Center,
     Right,
-    /// Not in the bar: widgets that are there only for their actions, in the dormer (D-83).
+    /// Not in the bar: widgets that are there only for their actions, in the dormer (D-84).
     Dormer,
 }
 

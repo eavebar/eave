@@ -1708,7 +1708,7 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 
 **Cost:** one small widget and one layer while a badge shows, no dependency.
 
-## D-83: The dormer: actions widgets declare, found by typing
+## D-84: The dormer: actions widgets declare, found by typing
 
 **Status:** accepted (2026-10-14).
 
