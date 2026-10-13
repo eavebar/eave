@@ -49,17 +49,20 @@ pub struct Island<'a, M> {
     groups: Vec<Option<&'a str>>,
     /// Where the toggle is among the items, if there is one.
     toggle: Option<usize>,
-    /// The toggle shows even without the pointer over the island.
-    pinned: bool,
+    /// Where the toggle is, and whether the collapsible items show.
+    toggle_side: Horizontal,
+    expanded: bool,
 }
 
-/// A control at one end of an island: there while the pointer is over the island, or always
-/// while pinned.
+/// The control at one end of an island that shows and hides its collapsible items: there while
+/// the pointer is over the island, or always while they show.
 pub struct Toggle<'a, M> {
     pub element: Element<'a, M>,
-    /// Before the first item (`Left`), or after the last.
+    /// Before the first item (`Left`), or after the last: where the items come out.
     pub side: Horizontal,
-    pub pinned: bool,
+    /// Whether the collapsible items show. When it changes, the island squashes the way they
+    /// went, like a nudge.
+    pub expanded: bool,
 }
 
 /// The toggle's key among the items' keys: no item has it.
@@ -93,7 +96,8 @@ impl<'a, M> Island<'a, M> {
             nudges: Vec::new(),
             groups: Vec::new(),
             toggle: None,
-            pinned: false,
+            toggle_side: Horizontal::Right,
+            expanded: false,
         }
     }
 
@@ -129,12 +133,13 @@ impl<'a, M> Island<'a, M> {
         let Some(Toggle {
             element,
             side,
-            pinned,
+            expanded,
         }) = toggle
         else {
             return self;
         };
-        self.pinned = pinned;
+        self.toggle_side = side;
+        self.expanded = expanded;
         let index = if side == Horizontal::Left {
             if !self.groups.is_empty() {
                 self.groups.insert(0, None);
@@ -164,6 +169,9 @@ struct State {
     /// Where the island itself is within its layout, from the layout's left, and how wide: the
     /// layout is wider while a popover is open, to keep the panel's room clear of its neighbors.
     own: (f32, f32),
+    /// Whether the collapsible items showed last time, to squash when that changes. `None` until
+    /// the island has had a look.
+    expanded: Option<bool>,
     /// Whether the last layout made room for the toggle. A hidden one is still laid out, but
     /// takes no room and gets no events.
     toggle_shown: bool,
@@ -243,6 +251,9 @@ struct Motion {
     stretch_y: Spring,
     /// The newest nudge already played, once the island has been laid out.
     seen: Option<u64>,
+    /// The fastest the island has slid as a whole in the push going on, signed (negative is
+    /// left). 0 when it isn't being pushed.
+    pushed: f32,
     /// The previous frame, while something is moving.
     last: Option<Instant>,
 }
@@ -266,6 +277,7 @@ impl Default for Motion {
             stretch_x: Spring::new(0.0, SQUISH),
             stretch_y: Spring::new(0.0, SQUISH),
             seen: None,
+            pushed: 0.0,
             last: None,
         }
     }
@@ -490,6 +502,48 @@ impl Motion {
                     theme::JELLY_BUMP * 0.5 * (1.0 + (std::f32::consts::PI * from).cos())
                 });
             }
+        }
+    }
+
+    /// While the island slides as a whole, pushed by a neighbor making room, the end it's pushed
+    /// from swells taller, the more the longer and faster it goes, as if what it passed piled up
+    /// there. When it stops, the swell is kicked across to the other end, and the jelly wiggles
+    /// back flat. A resize moves its edges apart or together, not the same way, so it doesn't
+    /// count, and neither does a popover's morph.
+    fn lean_with_push(&mut self) {
+        if self.popover.present || self.press.is_some() {
+            self.pushed = 0.0;
+            return;
+        }
+        let (left, right) = (self.edges.left.velocity, self.edges.right.velocity);
+        let speed = if left.signum() == right.signum() {
+            left.signum() * left.abs().min(right.abs())
+        } else {
+            0.0
+        };
+        // From −1 at the start of a side to 1 at its end, eased at both.
+        let toward_end = |along: f32| (std::f32::consts::PI * (along - 0.5)).sin();
+        let strength =
+            |speed: f32, most: f32| most * (speed.abs() / theme::PUSH_FULL_SPEED).min(1.0);
+        if speed.abs() > theme::PUSH_MOVING {
+            if speed.abs() > self.pushed.abs() {
+                self.pushed = speed;
+            }
+            // Going left, it's pushed from the right: its right end swells.
+            let way = speed.signum();
+            let lean = strength(speed, theme::PUSH_LEAN);
+            for side in [Side::Top, Side::Bottom] {
+                self.jelly
+                    .kick(side, |along| -way * lean * toward_end(along));
+            }
+        } else if self.pushed != 0.0 {
+            let way = self.pushed.signum();
+            let wiggle = strength(self.pushed, theme::PUSH_WIGGLE);
+            for side in [Side::Top, Side::Bottom] {
+                self.jelly
+                    .kick(side, |along| way * wiggle * toward_end(along));
+            }
+            self.pushed = 0.0;
         }
     }
 
@@ -733,6 +787,7 @@ impl Motion {
         for spring in self.paced() {
             spring.advance(paced);
         }
+        self.lean_with_push();
         self.jelly.advance(paced);
         // The fades wait on how far the shape has come.
         self.aim();
@@ -1200,6 +1255,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             panel: None,
             hovered: false,
             toggle_shown: false,
+            expanded: None,
             own: (0.0, 0.0),
         })
     }
@@ -1221,7 +1277,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         let spacing = theme::ITEM_SPACING as f32;
         let limits = layout::Limits::new(Size::new(0.0, height), Size::new(f32::INFINITY, height));
         let state = tree.state.downcast_mut::<State>();
-        state.toggle_shown = (state.hovered || self.pinned) && self.popover.is_none();
+        state.toggle_shown = (state.hovered || self.expanded) && self.popover.is_none();
         // A hidden toggle takes no room.
         let hidden = (!state.toggle_shown).then_some(self.toggle).flatten();
         let nodes: Vec<_> = self
@@ -1388,7 +1444,26 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             }
         }
         let own = own_bounds(state, layout);
+        // Showing or hiding the collapsible items squashes the island the way they went: out
+        // toward the toggle, or back.
+        let expanded = self.toggle.map(|_| self.expanded);
+        let squash = state.expanded.is_some() && expanded != state.expanded;
+        state.expanded = expanded;
         let motion = &mut state.motion;
+        if squash && motion.press.is_none() && !motion.popover.present {
+            let out = if self.toggle_side == Horizontal::Left {
+                Nudge::Left
+            } else {
+                Nudge::Right
+            };
+            let back = if out == Nudge::Left {
+                Nudge::Right
+            } else {
+                Nudge::Left
+            };
+            let nudge = if self.expanded { out } else { back };
+            motion.nudge(nudge.into(), None);
+        }
         motion.swap(self.popover.as_ref().map(|popover| popover.key));
         // A hidden toggle isn't arranged, so it isn't drawn, and fades in when it shows.
         let positions = self
@@ -2294,6 +2369,40 @@ mod tests {
         assert_eq!(motion.push_x.velocity, 0.0);
         assert!(motion.jelly.at_rest());
         assert_eq!(motion.seen, Some(3));
+    }
+
+    #[test]
+    fn a_pushed_island_piles_up_where_its_pushed_from_then_wiggles_across() {
+        let mut motion = settled(rect(400.0, 120.0), &[1]);
+        // Pushed 200 px left, by a neighbor on its right.
+        motion.arrange(rect(200.0, 120.0), [(1, 210.0)].into_iter(), None);
+        let (mut right_most, mut left_after) = (0.0f32, 0.0f32);
+        let mut stopped = false;
+        let frames = run(&mut motion, Instant::now(), |motion| {
+            let top = |along| motion.jelly.value(Side::Top, along);
+            let sliding = motion.edges.left.velocity.abs() > theme::PUSH_MOVING;
+            // The first frame has no time to move in.
+            if sliding && !stopped {
+                right_most = right_most.max(top(0.9));
+                assert!(top(0.9) >= top(0.1) - 0.01, "the right end leads the swell");
+            } else if right_most > 0.0 {
+                stopped = true;
+                left_after = left_after.max(top(0.1));
+            }
+        });
+        assert!(right_most > 1.0, "the right end swelled: {right_most}");
+        assert!(left_after > 0.5, "then the left end: {left_after}");
+        assert!(frames < 200, "and it settles");
+        assert!(motion.jelly.is_flat());
+    }
+
+    #[test]
+    fn a_resize_is_not_a_push() {
+        let mut motion = settled(rect(400.0, 120.0), &[1]);
+        motion.arrange(rect(200.0, 320.0), [(1, 210.0)].into_iter(), None);
+        run(&mut motion, Instant::now(), |motion| {
+            assert!(motion.jelly.is_flat(), "only one edge moves");
+        });
     }
 
     #[test]

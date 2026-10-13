@@ -975,7 +975,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         let toggle = collapsible.then(|| Toggle {
             element: toggle_view(island, side, expanded),
             side,
-            pinned: expanded,
+            expanded,
         });
         Some(
             Island::new(items)
