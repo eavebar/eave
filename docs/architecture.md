@@ -78,6 +78,7 @@ Notifications travel only over the session bus ([D-52](decisions.md)). The plugi
 | Clock | system time | 1 s timer (`eave_api::time::every`) |
 | Battery | kernel (`/sys/class/power_supply`) | `power_supply` uevents over netlink, plus a 30 s re-read while a battery exists ([D-23](decisions.md)) |
 | Volume | PipeWire (through pipewire-pulse) | PulseAudio native protocol, pure Rust, subscribed to sink/server events ([D-19](decisions.md)) |
+| Brightness | kernel (`/sys/class/backlight`, `/sys/class/leds`) | `backlight` uevents over netlink; the keyboard's LED re-read every 2 s only while the popover is open; set through logind's `SetBrightness` ([D-77](decisions.md)) |
 | Media | MPRIS players | D-Bus on the session bus: name changes, `PropertiesChanged` and `Seeked` from every player ([D-56](decisions.md)) |
 | Network | kernel (rtnetlink, nl80211) | link/address/route multicast events, plus a 10 s signal re-read while on Wi-Fi ([D-23](decisions.md)) |
 | Bluetooth | BlueZ | D-Bus (`zbus`) |
@@ -85,7 +86,7 @@ Notifications travel only over the session bus ([D-52](decisions.md)). The plugi
 | Notifications | apps, through the freedesktop notification spec | D-Bus: eave serves `org.freedesktop.Notifications` on the session bus, from the plugin in [eaveshell/eave-notifications](https://github.com/eaveshell/eave-notifications) ([D-48](decisions.md), [D-50](decisions.md)) |
 | CPU / RAM / temps | `/proc`, `/sys` | timer (the only legitimate polling) |
 
-So far: clock, workspaces, active window, keyboard layout, battery, network, volume, media and notifications. Bluetooth is next. See [roadmap.md](roadmap.md).
+So far: clock, workspaces, active window, keyboard layout, battery, network, volume, brightness, media and notifications. Bluetooth is next. See [roadmap.md](roadmap.md).
 
 ## Code layout
 
@@ -104,7 +105,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/config.rs            config.toml → zone entries, with their island, divider and collapsible
   src/watch.rs             inotify watch on the config directory
   src/kit.rs               ui nodes → iced elements, styled
-  src/icon.rs              status icons (volume, Wi-Fi, wired, battery, media) as vector paths
+  src/icon.rs              status icons (volume, Wi-Fi, wired, battery, brightness, media) as vector paths
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
   src/cover.rs             covers: a file or https URL → cropped, rounded 32 and 256 px bitmaps, off the UI thread
   src/theme.rs             every color, size and font
@@ -139,6 +140,7 @@ plugins/window/            focused window title (eave-window)
 plugins/keyboard/          keyboard layout (eave-keyboard)
 plugins/media/             now playing over MPRIS, with cover art (eave-media)
 plugins/battery/           battery from sysfs (eave-battery)
+plugins/brightness/        display and keyboard backlights from sysfs, set through logind (eave-brightness)
 plugins/network/           primary connection, via eave-net; Wi-Fi to join via eave-iwd (eave-network)
 plugins/volume/            output volume and switching (eave-volume)
 vendor/softbuffer/         softbuffer 0.4.8 with an alpha-carrying Wayland buffer (D-25)

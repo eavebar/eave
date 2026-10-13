@@ -37,7 +37,9 @@ The bar must run on any Hyprland machine without checking what else is installed
 - **A font.** Text is shaped with whatever fonts the system has (fontdb reads fontconfig's directories).
 - **For volume only:** a PulseAudio-protocol server, meaning `pipewire-pulse` or PulseAudio. If none is running, the widget hides ([D-19](decisions.md)).
 
-That's all. Battery and network read the kernel directly. The binary links only libc, and no plugin runs other programs. `eave-build` needs `cargo` and `git`, and uses `systemctl` only when systemd is there.
+- **For setting brightness only:** a systemd-logind session, which lets the user's own session set its backlights without root. Without it the level still shows, but can't be changed ([D-77](decisions.md)).
+
+That's all. Battery, brightness and network read the kernel directly. The binary links only libc, and no plugin runs other programs. `eave-build` needs `cargo` and `git`, and uses `systemctl` only when systemd is there.
 
 ## Hyprland interface we rely on
 
