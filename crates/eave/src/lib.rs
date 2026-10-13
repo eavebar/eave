@@ -24,6 +24,7 @@ mod label;
 mod markdown;
 mod meter;
 mod notch;
+mod pip;
 mod slider;
 mod slot;
 mod spring;

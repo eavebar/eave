@@ -1664,3 +1664,18 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 **Alternative:** sysfs writes with a shipped udev rule (one more thing to install); `brightnessctl` (a binary); linear percents (matches sysfs, looks uneven); polling the backlight (wakes up for nothing).
 
 **Cost:** one thread blocked on a netlink socket, one small dependency set already in the tree (rustix, zbus through eave-dbus). External monitors (DDC/CI over `/dev/i2c-*`, which needs `i2c-dev` and group access) are left for later; night light is the compositor's job and out of scope.
+
+## D-81: A count badge for unread notifications
+
+**Status:** accepted (2026-10-13).
+
+**What:** `ui::counted(content, count)` puts a number in a small red badge on its content's top right corner, overlapping it a little: a `Tone::Critical` circle for one digit and a pill for two, with the number in white, capped at 99. The host grows it in from nothing and back on the morph spring, counts through the numbers between like a `counter`, and springs its width from circle to pill. While there's a count, the item is wider by what of the badge sticks out past the content, and the island springs to it; the badge itself is drawn over the content and the item's own padding, so the bell doesn't move as the badge grows. eave-notifications uses it on the bell, and hides it in do not disturb.
+
+**Why:**
+- **A host primitive:** plugins don't pick colors or draw (D-11, D-13), so a red badge has to be something the host draws. `badge(text)` was already the outlined code box (a keyboard layout's `US`), hence the name.
+- **Red:** unread notifications are news, which is what a signal color is for (design rule 2). It's the one red thing on a black bar, so it gets seen.
+- **On the corner, not beside:** the count next to the bell read as another item and made the island jump in width with every digit. On the corner it reads as belonging to the bell, the way phones and desktops show it.
+
+**Alternatives:** keep the counter beside the bell (what it was); a dot without a number (says less); reserve the badge's room always (an island wider for nothing at rest).
+
+**Cost:** one small widget, no dependency. The badge is drawn as shapes, so a picture (an `app_icon`, a `cover`) under it would draw over it; it's meant for symbol icons.

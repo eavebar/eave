@@ -55,6 +55,7 @@ How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs
 | Prominent button | white disc, black icon (or the content color) | | a little dimmer |
 | Text button | 8 % fill | | 14 % fill |
 | Mark (today) | a 1.5 px white ring, semibold | | |
+| Count badge (`counted`) | a `Tone::Critical` circle (a pill from two digits) with a white semibold number, on the top right corner of what it counts, overlapping it a little ([D-81](decisions.md)) | | |
 | Meter | a 6 px bar in its tone (white unless it's a signal) | eases to a new value | |
 | Text field | 6 % fill, 10 % edge | 50 % white edge when focused; a signal color on error | |
 | Timeline | a 1 px line at 14 % white, a mark per step: you a white dot, a note a small grey one, done grey | under way: a white ring with a faint halo, still; failed: a red dot; waiting for you: an amber ring | |
@@ -76,7 +77,8 @@ All motion is driven by the compositor's frame callbacks, and stops asking for f
 | Nudge, push, jelly | a volume change, a workspace switch, a pushed neighbor | `NUDGE_*`, `PUSH_*`, `JELLY_*`: the outline is jelly, poked and settling |
 | Mark slide | switcher, tabs | `SWITCHER_SLIDE`, eased |
 | Hand-over | tabs' pages, alternates | `TAB_FADE` / `ALTERNATE_FADE`, sliding out the old way and in the new |
-| Count | counters | `COUNTER_COUNT`, through every value in between |
+| Count | counters, a count badge's number | `COUNTER_COUNT`, through every value in between |
+| Grow | a count badge coming and going, and its width | `MORPH_*`, about its own middle |
 | Ease | toggle knob, meter fill, slider line | `TOGGLE_SLIDE`, `METER_EASE`, `SLIDER_GROW`, `SLIDER_EASE` |
 | Gulp | charging battery, something filling | `BATTERY_GULP`, `GULP`, at 30 fps |
 | Glide | a scrolling list, `scroll`, a code block | a touchpad fling slows over `SCROLL_GLIDE_DECAY` and stops below `SCROLL_GLIDE_MIN`; a wheel step eases over `SCROLL_WHEEL_EASE` |
