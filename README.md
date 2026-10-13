@@ -42,7 +42,7 @@ widget = "volume"
 widget = "someone/weather@v0.2"   # a plugin from github.com/someone/weather, pinned
 ```
 
-Built-in widgets are `workspaces`, `window`, `clock`, `keyboard`, `volume`, `brightness`, `media`, `network` and `battery`. Anything else is a plugin: `owner/repo` on GitHub, any git URL, or a local path. When the config starts using a new one, the bar is rebuilt with it in the background. See [docs/plugins.md](docs/plugins.md) for the options and for writing your own.
+Built-in widgets are `workspaces`, `window`, `clock`, `keyboard`, `volume`, `brightness`, `media`, `network` and `battery`, plus `apps`, which lists installed apps in the dormer: the search dialog a keybind drops out of the top of the screen, for what every widget can do ([docs/running.md](docs/running.md#the-dormer)). Anything else is a plugin: `owner/repo` on GitHub, any git URL, or a local path. When the config starts using a new one, the bar is rebuilt with it in the background. See [docs/plugins.md](docs/plugins.md) for the options and for writing your own.
 
 ## Update
 
