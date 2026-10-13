@@ -35,6 +35,8 @@ pub struct Panel {
     /// Among the rows, not the lines.
     pub selected: usize,
     pub hidden: bool,
+    /// A new pattern is on its way: frames keep coming until it's shown (see `draw` in mod.rs).
+    pub waiting: bool,
 }
 
 impl Panel {
@@ -161,7 +163,7 @@ impl<Message> Program<Message> for Panel {
                 moving = true;
             }
         }
-        if moving {
+        if moving || self.waiting {
             motion.last = Some(*now);
             Some(canvas::Action::request_redraw())
         } else {

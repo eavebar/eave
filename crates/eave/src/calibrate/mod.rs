@@ -43,6 +43,8 @@ struct Calibrator {
     pattern: Option<iced_runtime::image::Allocation>,
     /// Counts the patterns asked for, so one that's late for a newer model is dropped.
     drawing: u64,
+    /// Which of them is on screen.
+    shown: u64,
 }
 
 #[to_layer_message]
@@ -101,6 +103,7 @@ pub fn run() -> Result<(), iced_layershell::Error> {
                 hidden: false,
                 pattern: None,
                 drawing: 0,
+                shown: 0,
             };
             let task = draw(&mut calibrator);
             (calibrator, task)
@@ -165,6 +168,7 @@ fn update(calibrator: &mut Calibrator, message: Message) -> Task<Message> {
             // The one before stays on screen until this one is ready, then lets its memory go.
             if drawing == calibrator.drawing {
                 calibrator.pattern = Some(pattern);
+                calibrator.shown = drawing;
             }
             Task::none()
         }
@@ -232,7 +236,10 @@ fn key_pressed(
 
 /// Draws the pattern for the model as it is now, off the UI thread (a few milliseconds for a
 /// whole screen), and has the renderer take it in before it's shown: an image it hasn't loaded
-/// yet may not show until something else redraws the screen.
+/// yet may not show until something else redraws the screen. The GPU renderer uploads it on a
+/// thread of its own and only takes it in when it renders a frame, so the panel keeps asking for
+/// frames until it's in: iced_layershell 0.19 drops the redraw the renderer asks for when it's
+/// done.
 fn draw(calibrator: &mut Calibrator) -> Task<Message> {
     calibrator.drawing += 1;
     let drawing = calibrator.drawing;
@@ -292,6 +299,7 @@ fn view(calibrator: &Calibrator) -> Element<'_, Message> {
             .collect(),
         selected,
         hidden: calibrator.hidden,
+        waiting: calibrator.shown != calibrator.drawing,
     };
     let panel = canvas(panel).width(Length::Fill).height(Length::Fill);
     let Some(pattern) = &calibrator.pattern else {
