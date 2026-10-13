@@ -38,7 +38,7 @@ screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
 
 The islands take their corners from these ([D-73](decisions.md)):
 - The top corner of the first island on the left, and of the last on the right, follows the screen's corner at an even distance (its radius less the bar's 6 px gap).
-- A center island next to the notch is rounded like the notch on that side.
+- A center island next to the notch is rounded like the notch on that side: its top corner like the notch's shoulder, its bottom corner like the notch's lower corner.
 - Every other corner follows `islands`, also in physical pixels:
 
 ```toml

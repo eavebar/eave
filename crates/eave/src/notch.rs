@@ -98,8 +98,9 @@ pub struct Place {
 
 impl Screen {
     /// An island's corners where it is: top left, top right, bottom right, bottom left. One that
-    /// faces a screen corner follows it at an even distance; the ones on the notch's side are the
-    /// notch's; the rest are `islands`.
+    /// faces a screen corner follows it at an even distance; on the notch's side, the top one is
+    /// rounded like the notch's shoulder and the bottom one like its lower corner; the rest are
+    /// `islands`.
     pub fn island_corners(&self, place: Place) -> [CornerShape; 4] {
         let mut corners = [self.islands; 4];
         match place.screen_corner {
@@ -107,12 +108,16 @@ impl Screen {
             Some(Side::Right) => corners[1] = self.concentric(1).unwrap_or(corners[1]),
             None => {}
         }
-        if let Some(notch) = self.notch_corner() {
-            match place.notch {
-                Some(Side::Left) => (corners[0], corners[3]) = (notch, notch),
-                Some(Side::Right) => (corners[1], corners[2]) = (notch, notch),
-                None => {}
-            }
+        let (top, bottom) = match place.notch {
+            Some(Side::Left) => (0, 3),
+            Some(Side::Right) => (1, 2),
+            None => return corners,
+        };
+        if let Some(shoulder) = self.notch_shoulder() {
+            corners[top] = shoulder;
+        }
+        if let Some(lower) = self.notch_corner() {
+            corners[bottom] = lower;
         }
         corners
     }
@@ -122,6 +127,13 @@ impl Screen {
         self.notch
             .filter(|notch| notch.radius > 0.0)
             .map(|notch| CornerShape::new(notch.radius, notch.smoothing))
+    }
+
+    /// How the notch is rounded where it meets the top edge, if it's measured.
+    fn notch_shoulder(&self) -> Option<CornerShape> {
+        self.notch
+            .filter(|notch| notch.shoulder > 0.0)
+            .map(|notch| CornerShape::new(notch.shoulder, notch.smoothing))
     }
 
     /// A corner one edge gap in from the screen's corner `index`, so the gap between them is the
@@ -373,6 +385,7 @@ mod tests {
     fn island_corners_follow_what_they_face() {
         let screen = macbook(config::Islands::default());
         let (notch, free) = (CornerShape::new(10.0, 0.4), screen.islands);
+        let shoulder = CornerShape::new(5.5, 0.4);
         let concentric = CornerShape::new(13.5, 0.65);
         let left = Place {
             screen_corner: Some(Side::Left),
@@ -390,7 +403,15 @@ mod tests {
         };
         assert_eq!(
             screen.island_corners(before_notch),
-            [free, notch, notch, free]
+            [free, shoulder, notch, free]
+        );
+        let after_notch = Place {
+            notch: Some(Side::Left),
+            ..Place::default()
+        };
+        assert_eq!(
+            screen.island_corners(after_notch),
+            [shoulder, free, free, notch]
         );
         // A screen corner no rounder than the gap leaves the island's as it was.
         let square = Screen {
