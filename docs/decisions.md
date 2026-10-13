@@ -860,7 +860,7 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 
 ## D-47: Notices: plugins list notifications, the right island turns into them
 
-**Status:** accepted (2026-10-13)
+**Status:** accepted (2026-10-13). Narrowed by [D-52](#d-52-notifications-travel-only-over-the-bus): only the plugin serving the notification bus lists notices. Other plugins send their notifications over the bus. The text below is kept as it was decided.
 
 **What:** a widget can list notifications to show on screen: `Widget::notices() -> Vec<Notice<Message>>`, newest first, next to `item()` and `popover()`. While there are any, the right island morphs into a panel of them, like a popover.
 - **A notice is structured, not a node:** a `key`, a summary, and optionally the app's name and icon, a plain-text body, an `Urgency` (`Low`, `Normal`, `Critical`), actions (label and message), `on_press` (a click on the card), `on_dismiss` (its close button) and `expires(after, message)`. The host lays out each one (`kit::notice`): a thin bar across the top for the time it has left on screen (`countdown.rs`, only if it expires, standing still while its clock is stopped), app icon and name with a close button, the summary, the body cut off after four lines, and the actions, with the first one prominent. Critical names the app in the critical tone, and Low dims the summary.
@@ -977,3 +977,23 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 **Cost:** for the ~300 ms a shrink takes, the input region still covers the part the shape is leaving, so a click there goes to the popover. No new dependencies.
 
 **Measured** (release, the user's config, 15 s after start, 10 s windows, alternating runs): binary 9,465,184 bytes either way. RSS ~16.8 MB on both, and 26–33 ticks per 10 s on both. The bar was measured beside the user's running one, so its ticks run higher than the baseline table. As in D-48, an occasional run of either build jumped to 30–45 MB and 150+ ticks while the desktop was in use.
+
+---
+
+## D-52: Notifications travel only over the bus
+
+**Status:** accepted (2026-10-13). Narrows [D-47](#d-47-notices-plugins-list-notifications-the-right-island-turns-into-them).
+
+**What:** there is one way to send a notification, the freedesktop one: `Notify` on `org.freedesktop.Notifications`, on the session bus. Plugins send theirs that way, like any app.
+- **Whoever owns the name shows it.** With `eaveshell/eave-notifications` in config.toml, that's the bar. Otherwise it's mako, dunst, swaync or whatever else the user runs. With no daemon at all, the notification is lost, as any app's would be.
+- **`notices()` is for the engine only.** It's how the plugin that serves the bus hands what it received to the host to draw (plugins describe, the host draws). No other plugin returns notices: a low battery warning goes over the bus, gets the daemon's history and do not disturb, and shows under any daemon.
+- **eave's extras are vendor hints.** Anything the spec lacks travels in hints named `x-eave-<name>`, and the engine advertises each one it understands as an `x-eave-<name>` capability, as the spec says vendor extensions should be. Daemons that don't know a hint ignore it, so the notification still shows without the extra. KDE's inline reply (D-49) works the same way.
+
+**Alternatives:**
+- deleting `notices()`: eave-notifications would have no way to show what it receives in the island.
+- having the host draw only the notices of the plugin that owns the bus name: the rule enforced in code, for an API with one user. The docs say it, and a plugin that ignores them only shows its own notices in its own bar.
+- plugins choosing between `notices()` and the bus: two paths, where one skips the daemon's history and do not disturb, and only works in eave.
+
+**Why:** one path. A plugin's notification behaves like every other app's, whichever daemon the user picked, and the bar shows it only because it's the daemon.
+
+**Cost:** no code changes. A plugin that sends notifications opens a session bus connection (`zbus::Connection::session()`; `eave-dbus` re-exports zbus). If no daemon runs, its notifications are lost.

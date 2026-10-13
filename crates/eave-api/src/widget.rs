@@ -36,7 +36,9 @@ pub trait Widget: Sized + 'static {
         None
     }
 
-    /// Notifications to show on screen now, newest first.
+    /// Notifications to show on screen now, newest first. Only for a notification engine: the
+    /// widget that serves `org.freedesktop.Notifications` lists here what it received. Any other
+    /// widget sends its notifications with `Notify` on the session bus, like any app.
     ///
     /// While there are any, the bar's right island turns into a panel of them, like a popover. The
     /// host takes each one away once its key is no longer in the list. Keep the notices you mean to show in your state, and drop

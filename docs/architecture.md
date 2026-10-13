@@ -62,7 +62,7 @@ A popover isn't a surface of its own: the island holding the item turns into it 
 
 ## Notifications
 
-While widgets list notices, the right island turns into a panel of them, the same way it turns into a popover ([D-47](decisions.md)):
+Notifications travel only over the session bus ([D-52](decisions.md)). The plugin that serves `org.freedesktop.Notifications` (eave-notifications) lists what it received as notices, and no other plugin lists any. While there are notices, the right island turns into a panel of them, the same way it turns into a popover ([D-47](decisions.md)):
 
 1. After each of a widget's messages, the host compares its notices with the ones it keeps (`Bar::toasts`), by key. New ones go on top, changed ones are updated in place, and missing ones go.
 2. While there are any, and no popover is open on the right island, the host keeps a `NoticePanel`, and `view` hands it to the right island of the toast bar (the first bar surface, for now the only one) as its popover, with the key `NOTICES`. A popover still turning back there gives way. Placing, growing the surface, the input region and the morph are a popover's (`NoticesPlaced`). Unlike a popover's, nobody opens it, it doesn't take the keyboard, and clicks elsewhere don't close it.
