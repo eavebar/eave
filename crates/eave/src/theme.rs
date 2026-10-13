@@ -120,6 +120,8 @@ pub const PUSH_LEAN: f32 = 45.0;
 /// How long the squash of an island showing or hiding its collapsible items lasts: a nudge's
 /// motion, slowed down to this.
 pub const COLLAPSE_SQUASH: Duration = Duration::from_millis(450);
+/// How long a collapsed item stays out after its widget nudges, from the last nudge.
+pub const REVEAL_SHOWN: Duration = Duration::from_millis(2000);
 pub const PUSH_BUILD: Duration = Duration::from_millis(250);
 pub const PUSH_WIGGLE: f32 = 90.0;
 pub const PUSH_FULL_SPEED: f32 = 600.0;

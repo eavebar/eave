@@ -1169,3 +1169,19 @@ RSS and CPU are in D-56: a cover costs about 1 MB of RSS whether it came from a 
 **Cost:**
 - This is the first time the bar reaches the network. The URLs come from programs on the user's own session bus.
 - https is most of the binary growth (+1.5 MB, 16%). It's worth revisiting if a lighter TLS stack appears, or if Spotify starts handing over local files.
+
+---
+
+## D-58: A collapsed item that nudges comes out for a moment
+
+**Status:** accepted (2026-10-13). Extends [D-55](#d-55-several-islands-per-zone-collapsible-items-and-dividers-set-in-configtoml) and [D-32](#d-32-plugins-can-nudge-their-island).
+
+**What:** when a widget whose item is collapsed asks for a nudge, the host shows that item (only that one, not the island's other collapsible items) for `REVEAL_SHOWN` (2 s) after the last nudge, then hides it again. Raising the volume with a collapsed volume item shows the new level. Each instance remembers which reveal shows it (`Instance::revealed`, numbered by `Bar::reveals`), and a timer per reveal sends `Unreveal(id, reveal)`. Only the last one counts, so every nudge keeps it out longer. While the item's popover is open it stays out, and the timer starts again when it fires. Expanding the island makes reveals moot and clears them.
+
+**Why the nudge is the signal:** a nudge already means "what this item shows just changed, and it's worth seeing". Every widget that nudges (volume, media tracks, a future brightness) gets the reveal with no new API, and widgets don't need to know whether they're collapsed. The item comes and goes through the island's morph (D-27), the same motion as pressing the chevron.
+
+**Alternatives:**
+- **`Effect::reveal()`:** an explicit request, separate from the motion. It's more API for what is, so far, always said together with a nudge. It can still be added if a widget ever needs one without the other.
+- **Expanding the whole island:** shows items that didn't change, and pulls the chevron's state into a timer.
+
+**Cost:** one sleeping task per nudge from a collapsed item. Nothing polls.

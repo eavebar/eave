@@ -45,7 +45,7 @@ widget = "battery"
 
 - `island = true` starts another island in the same zone.
 - `divider = true` puts a line before the next item. It shows only between two items that show.
-- `collapsible = true` hides the item while its island is collapsed, which it is at first. Hover over the island and a chevron appears on the side facing the middle of the screen. Press it to show the hidden items in their places, and again to hide them.
+- `collapsible = true` hides the item while its island is collapsed, which it is at first. Hover over the island and a chevron appears on the side facing the middle of the screen. Press it to show the hidden items in their places, and again to hide them. A collapsed item whose widget nudges (the volume going up, say) comes out by itself for two seconds after the last nudge, then tucks back.
 
 Notifications open from the right zone's last island, the one at the screen's edge.
 
@@ -257,4 +257,4 @@ Return `Effect::none().nudge(Nudge::…)` from `update` when something your item
 
 If the change you're following plays out on screen over a known time, like the compositor sliding a workspace in, return `Effect::none().nudge_lasting(nudge, duration)` instead: the host plays the same motion, just as far, stretched to settle over about that long. `workspaces` does this with Hyprland's `workspacesIn` animation.
 
-Nudge on the change itself, wherever it came from, and once per change. `volume` nudges on the server's readings, so a scroll step and a media key look the same. A nudge is dropped while the island is held or has a popover open.
+Nudge on the change itself, wherever it came from, and once per change. `volume` nudges on the server's readings, so a scroll step and a media key look the same. A nudge is dropped while the island is held or has a popover open. A nudge also brings a collapsed item out for a moment, so the change is seen ([D-58](decisions.md)).
