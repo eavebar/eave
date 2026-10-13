@@ -18,8 +18,9 @@ use std::time::{Duration, SystemTime};
 
 use futures_util::{Stream, StreamExt, stream};
 use tokio::sync::{OnceCell, broadcast};
-use zbus::fdo::{DBusProxy, RequestNameReply};
+use zbus::fdo::RequestNameReply;
 use zbus::zvariant::OwnedValue;
+use zbus::{MatchRule, MessageStream};
 
 mod markup;
 
@@ -167,23 +168,54 @@ struct Server {
 impl Server {
     /// Whether it owns the name now, or who does.
     async fn status(&self) -> Event {
-        let Ok(proxy) = DBusProxy::new(&self.connection).await else {
-            return Event::Waiting(None);
-        };
-        let Ok(name) = NAME.try_into() else {
-            return Event::Waiting(None);
-        };
-        match proxy.get_name_owner(name).await {
-            Ok(owner)
-                if self.connection.unique_name().map(|ours| ours.as_str())
-                    == Some(owner.as_str()) =>
-            {
-                Event::Serving
-            }
-            Ok(owner) => Event::Waiting(process_name(&proxy, owner).await),
-            Err(_) => Event::Waiting(None),
+        let owner: Option<String> = self.ask("GetNameOwner", NAME).await;
+        match (owner, self.connection.unique_name()) {
+            (Some(owner), Some(ours)) if owner == ours.as_str() => Event::Serving,
+            (Some(owner), _) => Event::Waiting(self.process_name(&owner).await),
+            (None, _) => Event::Waiting(None),
         }
     }
+
+    /// The name of the process behind `owner` on the bus, from `/proc`.
+    async fn process_name(&self, owner: &str) -> Option<String> {
+        let pid: u32 = self.ask("GetConnectionUnixProcessID", owner).await?;
+        let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+        Some(name.trim().to_string())
+    }
+
+    /// Calls `method` on the bus itself.
+    async fn ask<T>(&self, method: &str, name: &str) -> Option<T>
+    where
+        T: for<'d> zbus::zvariant::DynamicDeserialize<'d>,
+    {
+        bus_call(&self.connection, method, &(name,))
+            .await
+            .ok()?
+            .body()
+            .deserialize()
+            .ok()
+    }
+}
+
+/// Calls `method` on the bus itself. zbus's own `request_name` takes flags as a type it doesn't
+/// export, and watches for the name only after asking for it.
+async fn bus_call<B>(
+    connection: &zbus::Connection,
+    method: &str,
+    body: &B,
+) -> zbus::Result<zbus::Message>
+where
+    B: serde::Serialize + zbus::zvariant::DynamicType,
+{
+    connection
+        .call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            method,
+            body,
+        )
+        .await
 }
 
 /// The server, started once: the session bus connection serving the interface, in line for the
@@ -196,49 +228,31 @@ async fn server() -> zbus::Result<&'static Server> {
                 .serve_at(PATH, Notifications)?
                 .build()
                 .await?;
-            // In line rather than giving up: once another daemon quits, the name is ours. And not
-            // letting a daemon started later take it away.
-            // Asked directly: zbus's own request takes flags as a type it doesn't export, and
-            // these are none.
-            let reply: RequestNameReply = connection
-                .call_method(
-                    Some("org.freedesktop.DBus"),
-                    "/org/freedesktop/DBus",
-                    Some("org.freedesktop.DBus"),
-                    "RequestName",
-                    &(NAME, 0u32),
-                )
+            // Watching before asking, so the name can't arrive unseen.
+            let rule = MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .sender("org.freedesktop.DBus")?
+                .member("NameAcquired")?
+                .arg(0, NAME)?
+                .build();
+            let mut acquired = MessageStream::for_match_rule(rule, &connection, Some(4)).await?;
+            // In line rather than giving up: once another daemon quits, the name is ours. No
+            // flags, so a daemon started later can't take it away either.
+            let reply: RequestNameReply = bus_call(&connection, "RequestName", &(NAME, 0u32))
                 .await?
                 .body()
                 .deserialize()?;
             if reply == RequestNameReply::InQueue {
-                let proxy = DBusProxy::new(&connection).await?;
-                let mut acquired = proxy.receive_name_acquired().await?;
                 // zbus runs on the bar's tokio runtime, and so does this.
                 tokio::spawn(async move {
-                    while let Some(signal) = acquired.next().await {
-                        if signal.args().is_ok_and(|args| args.name() == NAME) {
-                            let _ = bus().send(Event::Serving);
-                        }
+                    if acquired.next().await.is_some() {
+                        let _ = bus().send(Event::Serving);
                     }
                 });
             }
             Ok(Server { connection })
         })
         .await
-}
-
-/// The name of the process that owns `owner` on the bus, from `/proc`.
-async fn process_name(
-    proxy: &DBusProxy<'_>,
-    owner: zbus::names::OwnedUniqueName,
-) -> Option<String> {
-    let pid = proxy
-        .get_connection_unix_process_id(owner.into_inner().into())
-        .await
-        .ok()?;
-    let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
-    Some(name.trim().to_string())
 }
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
