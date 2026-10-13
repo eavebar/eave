@@ -90,7 +90,9 @@ Usage: eave [command]
 With no command, runs the bar.
 
 Commands:
-  calibrate   Measure the screen's corners and notch, and save them to config.toml";
+  calibrate   Measure the screen's corners and notch, and save them to config.toml
+  dormer      Open the running bar's dormer, or close it. A Hyprland bind can do it directly:
+              bind = SUPER, SPACE, event, eave-dormer";
 
 /// Sets up what the bar and the calibrator both draw with: the renderer config.toml asks for, and
 /// the sans-serif that's installed.
@@ -111,6 +113,7 @@ pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
     match std::env::args().nth(1).as_deref() {
         None => {}
         Some("calibrate") => return calibrate::run(),
+        Some("dormer") => return dormer(),
         Some("-h" | "--help") => {
             println!("{USAGE}");
             return Ok(());
@@ -162,4 +165,21 @@ pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
         ..Default::default()
     })
     .run()
+}
+
+/// `eave dormer`: sends the dormer's event through Hyprland, which hands it to the running bar.
+fn dormer() -> Result<(), Error> {
+    let event = format!("hl.dsp.event(\"{}\")", eave_hyprland::DORMER);
+    let legacy = format!("event {}", eave_hyprland::DORMER);
+    let sent = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map(|runtime| runtime.block_on(eave_hyprland::dispatch(&event, &legacy)));
+    match sent {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) | Err(error) => {
+            eprintln!("eave: can't reach Hyprland: {error}");
+            std::process::exit(1);
+        }
+    }
 }
