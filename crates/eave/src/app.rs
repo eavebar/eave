@@ -18,7 +18,7 @@ use iced_layershell::actions::ActionCallback;
 use iced_layershell::reexport::KeyboardInteractivity;
 use iced_layershell::to_layer_message;
 
-use crate::apps::{self, AppIcon, Icons};
+use crate::apps::{self, AppIcon, FileIcon, FileKey, Icons, Wanted};
 use crate::config::{self, Config, Entry, Zone};
 use crate::countdown::Countdown;
 use crate::island::{self, Island};
@@ -44,10 +44,12 @@ pub struct Bar {
     /// How many nudges widgets have asked for, so each island can tell a new one from one it has
     /// already played.
     nudges: u64,
-    /// App icons loaded so far, by app id, for every widget to share.
+    /// App icons and plugins' icon files loaded so far, for every widget to share.
     icons: Icons,
     /// App ids whose icons are being loaded.
     loading: Vec<String>,
+    /// Icon files being drawn.
+    drawing: Vec<FileKey>,
     /// Widgets' notifications, on screen or waiting to be, newest first.
     toasts: Vec<Toast>,
     /// The right island while it's a panel of notifications.
@@ -168,6 +170,8 @@ pub enum Message {
     ConfigChanged(Result<Config, String>),
     /// An app's icon has loaded, or turned out not to exist.
     AppIcon(String, Option<AppIcon>),
+    /// A plugin's icon file has been drawn, or turned out not to be one.
+    FileIcon(FileKey, Option<FileIcon>),
 }
 
 impl Bar {
@@ -181,8 +185,9 @@ impl Bar {
             pointer_inside: false,
             keyboard: None,
             nudges: 0,
-            icons: Icons::new(),
+            icons: Icons::default(),
             loading: Vec::new(),
+            drawing: Vec::new(),
             toasts: Vec::new(),
             notices: None,
             windows: Vec::new(),
@@ -199,8 +204,9 @@ impl Bar {
         for warning in &config.warnings {
             eprintln!("eave: config: {warning}");
         }
-        // The icon theme may have changed since: look every icon up again.
-        self.icons.clear();
+        // The icon theme may have changed since: look every app's icon up again. Icon files are
+        // compiled in, so they stay.
+        self.icons.apps.clear();
         self.loading.clear();
         let mut old = std::mem::take(&mut self.instances);
         let mut tasks = Vec::new();
@@ -264,24 +270,34 @@ impl Bar {
     /// Starts loading the app icons that items and the open popover show and nobody has asked
     /// for yet.
     fn load_icons(&mut self) -> Vec<Task<Message>> {
-        let mut wanted = Vec::new();
+        let mut wanted = Wanted::default();
         for instance in &self.instances {
             if let Some(content) = instance.widget.item().into_parts().content {
-                kit::app_ids(content, &mut wanted);
+                kit::wanted(content, &mut wanted);
             }
             if self.popover_of(instance.id).is_some()
                 && let Some(panel) = instance.widget.popover()
             {
-                kit::app_ids(panel.into_node(), &mut wanted);
+                kit::wanted(panel.into_node(), &mut wanted);
             }
         }
         let notices = self.toasts.iter().map(|toast| &toast.notice);
-        wanted.extend(
+        wanted.apps.extend(
             notices.filter_map(|notice| notice.app_icon.as_ref().or(notice.app.as_ref()).cloned()),
         );
         let mut tasks = Vec::new();
-        for app_id in wanted {
-            if self.icons.contains_key(&app_id) || self.loading.contains(&app_id) {
+        for file in wanted.files {
+            let key = FileKey::of(file);
+            if self.icons.files.contains_key(&key) || self.drawing.contains(&key) {
+                continue;
+            }
+            self.drawing.push(key);
+            tasks.push(Task::perform(apps::load_file(file), move |icon| {
+                Message::FileIcon(key, icon)
+            }));
+        }
+        for app_id in wanted.apps {
+            if self.icons.apps.contains_key(&app_id) || self.loading.contains(&app_id) {
                 continue;
             }
             self.loading.push(app_id.clone());
@@ -722,7 +738,12 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         }
         Message::AppIcon(app_id, icon) => {
             bar.loading.retain(|loading| *loading != app_id);
-            bar.icons.insert(app_id, icon);
+            bar.icons.apps.insert(app_id, icon);
+            Task::none()
+        }
+        Message::FileIcon(key, icon) => {
+            bar.drawing.retain(|drawing| *drawing != key);
+            bar.icons.files.insert(key, icon);
             Task::none()
         }
         Message::InnerPressed(id) if bar.popover_of(id).is_none() => send(bar.close_popover()),
