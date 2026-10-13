@@ -15,6 +15,11 @@ use serde::Deserialize;
 /// How long the last track stays on screen once its player has nothing to show. Players go
 /// stopped with no track for a moment between songs, and that gap shouldn't hide the item.
 const GAP: Duration = Duration::from_millis(1000);
+/// How long after a skip we asked for its track can still come. A skip back that only restarts
+/// the track brings none.
+const SKIP_LANDS: Duration = Duration::from_secs(3);
+/// How many tracks back a player's history goes.
+const TRACKS_KEPT: usize = 32;
 
 pub fn register(registry: &mut Registry) {
     registry.widget::<Media>("media");
@@ -62,8 +67,11 @@ pub struct Media {
     now: Instant,
     /// Where the seek bar is being dragged to. Sent when it's let go.
     dragging: Option<Duration>,
-    /// Asked to skip on this player, and which way: the next track it reports nudges that way.
-    skipping: Option<(String, Nudge)>,
+    /// Asked to skip on this player, which way, and when: a new track it reports soon after went
+    /// that way, if the tracks it played don't already say.
+    skipping: Option<(String, Nudge, Instant)>,
+    /// The tracks the followed player went through, to tell going back from going on.
+    tracks: Tracks,
     /// The player as it last showed, kept on screen for a `GAP` after it stopped showing.
     held: Option<Player>,
     /// Counts the holds, so only the last one's timer lets go.
@@ -106,6 +114,7 @@ impl Widget for Media {
             now: Instant::now(),
             dragging: None,
             skipping: None,
+            tracks: Tracks::default(),
             held: None,
             holds: 0,
         };
@@ -305,9 +314,6 @@ impl Media {
         if started {
             self.chosen = None;
         }
-        // What was on screen, held through a gap between tracks included, so the next track
-        // counts as a change from the last one rather than from the gap.
-        let before = self.showing().map(|p| (p.bus_name.clone(), identify(p)));
         let was = self.current().filter(|p| shown(p)).cloned();
         self.current = pick(&players, self.chosen.as_deref(), self.current.as_deref());
         if self.chosen.as_ref() != self.current.as_ref() {
@@ -328,22 +334,31 @@ impl Media {
             effect = Effect::task(Task::future(sleep(GAP)).map(move |()| Message::Release(hold)));
         }
 
-        // Another track on the same player nudges: the way we skipped, or onward if the player
-        // moved on by itself (the track ended, a media key, its own buttons). MPRIS doesn't say
-        // which way a change went.
-        let after = self
+        // Another track on the same player nudges the way it went: back to the one before, or
+        // on. MPRIS doesn't say which, so the tracks it played do, or failing that the skip we
+        // asked for. A gap between tracks has no title, and doesn't count.
+        let Some((bus_name, key)) = self
             .current()
-            .filter(|p| shown(p))
-            .map(|p| (p.bus_name.clone(), identify(p)));
-        match (before, after) {
-            (Some((from, old)), Some((to, new))) if from == to && old != new => {
-                let nudge = match self.skipping.take() {
-                    Some((skipped, nudge)) if skipped == from => nudge,
-                    _ => Nudge::Right,
-                };
-                effect.nudge(nudge)
+            .filter(|p| !p.title.is_empty())
+            .map(|p| (p.bus_name.clone(), (p.title.clone(), p.artist.clone())))
+        else {
+            return effect;
+        };
+        let asked = match self.skipping.take() {
+            Some((skipped, nudge, at)) if skipped == bus_name && at.elapsed() < SKIP_LANDS => {
+                Some(nudge)
             }
-            _ => effect,
+            _ => None,
+        };
+        match self.tracks.went(&bus_name, key, asked) {
+            Some(nudge) => effect.nudge(nudge),
+            None => {
+                // Not a new track yet: the skip is still on its way.
+                if let Some(nudge) = asked {
+                    self.skipping = Some((bus_name, nudge, Instant::now()));
+                }
+                effect
+            }
         }
     }
 
@@ -353,7 +368,7 @@ impl Media {
             return Effect::none();
         };
         let bus_name = player.bus_name.clone();
-        self.skipping = Some((bus_name.clone(), nudge));
+        self.skipping = Some((bus_name.clone(), nudge, Instant::now()));
         let task = match nudge {
             Nudge::Left => run(async move { eave_mpris::previous(&bus_name).await }),
             _ => run(async move { eave_mpris::next(&bus_name).await }),
@@ -427,10 +442,56 @@ fn shown(player: &Player) -> bool {
     player.status != Status::Stopped || !player.title.is_empty()
 }
 
-/// What tells one track from the next.
-fn identify(player: &Player) -> (Option<String>, String) {
-    let id = player.track_id.as_ref().map(|id| id.as_str().to_owned());
-    (id, player.title.clone())
+/// The tracks one player went through, in order, and which of them it's on: going to the one
+/// before is going back, to the one after or a new one is going on.
+#[derive(Default)]
+struct Tracks {
+    bus_name: String,
+    /// Each track's title and artist. A player may give a track a new id each time it plays it.
+    list: Vec<(String, String)>,
+    at: usize,
+}
+
+impl Tracks {
+    /// The player is on `track` now: which way that went from the one before, if it's another
+    /// one on the same player. `asked` is the way we skipped, for a track it hasn't seen.
+    fn went(
+        &mut self,
+        bus_name: &str,
+        track: (String, String),
+        asked: Option<Nudge>,
+    ) -> Option<Nudge> {
+        if self.bus_name != bus_name {
+            *self = Self {
+                bus_name: bus_name.to_owned(),
+                list: vec![track],
+                at: 0,
+            };
+            return None;
+        }
+        if self.list.get(self.at) == Some(&track) {
+            return None;
+        }
+        if self.at > 0 && self.list[self.at - 1] == track {
+            self.at -= 1;
+            return Some(Nudge::Left);
+        }
+        if self.list.get(self.at + 1) == Some(&track) {
+            self.at += 1;
+            return Some(Nudge::Right);
+        }
+        if asked == Some(Nudge::Left) {
+            self.list.insert(self.at, track);
+            return Some(Nudge::Left);
+        }
+        self.list.truncate(self.at + 1);
+        self.list.push(track);
+        if self.list.len() > TRACKS_KEPT {
+            self.list.remove(0);
+        }
+        self.at = self.list.len() - 1;
+        Some(Nudge::Right)
+    }
 }
 
 /// "Title · Artist", the title alone, or the player's name when there's no title.
@@ -692,38 +753,52 @@ mod tests {
     fn a_new_track_nudges_the_way_it_went() {
         let nudge = |effect: Effect<Message>| effect.into_parts().2.map(|request| request.nudge);
         let mut media = media(Config::default());
-        media.update(Message::Players(vec![player("a", Status::Playing, "One")]));
-        assert_eq!(nudge(media.update(Message::Previous)), None, "not yet");
-        assert_eq!(
-            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "One")]))),
-            None,
-            "same track"
-        );
-        assert_eq!(
-            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "Zero")]))),
-            Some(Nudge::Left)
-        );
-        // The player moving on by itself goes onward.
-        assert_eq!(
-            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "One")]))),
-            Some(Nudge::Right)
-        );
+        let play = |media: &mut Media, title: &str| {
+            nudge(media.update(Message::Players(vec![player("a", Status::Playing, title)])))
+        };
+        assert_eq!(play(&mut media, "One"), None, "the first track");
+        assert_eq!(play(&mut media, "One"), None, "the same track");
+        assert_eq!(play(&mut media, "Two"), Some(Nudge::Right));
+        assert_eq!(play(&mut media, "Three"), Some(Nudge::Right));
+        // Back and forth, from a media key or the player's own buttons: the tracks say which way.
+        assert_eq!(play(&mut media, "Two"), Some(Nudge::Left));
+        assert_eq!(play(&mut media, "One"), Some(Nudge::Left));
+        assert_eq!(play(&mut media, "Two"), Some(Nudge::Right));
         // Through a gap between tracks: one nudge, when the next one comes.
         assert_eq!(
             nudge(media.update(Message::Players(vec![player("a", Status::Stopped, "")]))),
             None
         );
-        assert_eq!(
-            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "Two")]))),
-            Some(Nudge::Right)
-        );
+        assert_eq!(play(&mut media, "Three"), Some(Nudge::Right));
         // Another player taking over isn't a track change.
         assert_eq!(
             nudge(media.update(Message::Players(vec![
-                player("a", Status::Paused, "Two"),
+                player("a", Status::Paused, "Three"),
                 player("b", Status::Playing, "Other"),
             ]))),
             None
+        );
+    }
+
+    #[test]
+    fn a_skip_back_to_a_track_never_seen_goes_left() {
+        let nudge = |effect: Effect<Message>| effect.into_parts().2.map(|request| request.nudge);
+        let mut media = media(Config::default());
+        media.update(Message::Players(vec![player("a", Status::Playing, "Five")]));
+        assert_eq!(nudge(media.update(Message::Previous)), None, "not yet");
+        assert_eq!(
+            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "Five")]))),
+            None,
+            "the same track"
+        );
+        assert_eq!(
+            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "Four")]))),
+            Some(Nudge::Left)
+        );
+        // And on from there is the track it came from.
+        assert_eq!(
+            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "Five")]))),
+            Some(Nudge::Right)
         );
     }
 
