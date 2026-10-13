@@ -976,6 +976,8 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 
 **Cost:** for the ~300 ms a shrink takes, the input region still covers the part the shape is leaving, so a click there goes to the popover. No new dependencies.
 
+**Addendum (2026-10-13): landed means landed where it should be.** A shrink that a plugin caused by swapping its page still snapped. The Wi-Fi password page and going back from a Claude chat to its list both did it, while switching tabs didn't. A plugin's message rebuilds the UI, and the next event lays the panel out at its new size and reaches the overlay's `report` before the island's `update` has aimed the edges anywhere. The edges sat at rest on their old targets, so `reach` took them as landed and gave the room back at once. Now the edges count as landed only once they're at rest *on* where the shape should go: the panel, the last place that fit, or the island when closing. Tab switches were fine because their relayout happens inside the overlay's own update, after which the island aims before reporting. The tests had aimed right after placing, which hid this. One test now places without aiming.
+
 **Measured** (release, the user's config, 15 s after start, 10 s windows, alternating runs): binary 9,465,184 bytes either way. RSS ~16.8 MB on both, and 26–33 ticks per 10 s on both. The bar was measured beside the user's running one, so its ticks run higher than the baseline table. As in D-48, an occasional run of either build jumped to 30–45 MB and 150+ ticks while the desktop was in use.
 
 ---
