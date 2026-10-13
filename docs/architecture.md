@@ -67,8 +67,9 @@ Notifications travel only over the session bus ([D-52](decisions.md)). The plugi
 1. After each of a widget's messages, the host compares its notices with the ones it keeps (`Bar::toasts`), by key. New ones go on top, changed ones are updated in place, and missing ones go.
 2. While there are any, and no popover is open on the right island, the host keeps a `NoticePanel`, and `view` hands it to the right island of the toast bar (the first bar surface, for now the only one) as its popover, with the key `NOTICES`. A popover still turning back there gives way. Placing, growing the surface, the input region and the morph are a popover's (`NoticesPlaced`). Unlike a popover's, nobody opens it, it doesn't take the keyboard, and clicks elsewhere don't close it.
 3. As notices come and go, the panel springs to its new size. When the last one goes, it folds back into the island, still showing them while they fade, and reports `NoticesClosed`.
-4. The host runs each notice's clock while the panel is on screen and not pointed at (`NoticesHovered`), with one timer set for the next to expire (`ToastTimer`). When it runs out, the widget gets the notice's `expires` message.
-5. An open popover on the right island takes the island over, and the notices wait with their clocks stopped. The island's popover key changes, so it morphs straight from one to the other, both ways.
+4. The panel shows them as cards (`Bar::cards`): critical ones first, then the rest, newest first, notices of the same thread that come one after another sharing a card. Only the first three cards show; a line under them says how many more wait and opens their popover ([D-83](decisions.md)).
+5. The host runs the clock of each shown card's newest notice while the panel is on screen and not pointed at (`NoticesHovered`), with one timer set for the next to expire (`ToastTimer`). When it runs out, the widget gets the `expires` message of every notice on the card. Cards that wait don't count down.
+6. An open popover on the right island takes the island over, and the notices wait with their clocks stopped. The island's popover key changes, so it morphs straight from one to the other, both ways.
 
 ## Data sources by widget
 

@@ -864,7 +864,7 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 
 ## D-47: Notices: plugins list notifications, the right island turns into them
 
-**Status:** accepted (2026-10-13). Narrowed by [D-52](#d-52-notifications-travel-only-over-the-bus): only the plugin serving the notification bus lists notices. Other plugins send their notifications over the bus. The text below is kept as it was decided.
+**Status:** accepted (2026-10-13). Narrowed by [D-52](#d-52-notifications-travel-only-over-the-bus): only the plugin serving the notification bus lists notices. Other plugins send their notifications over the bus. The card's layout is amended by [D-83](#d-83-notification-cards-fixed-slots-pictures-choices-stacks): the time and close button share a corner, pictures can be wide or pixels, cards of a thread stack, and at most three show. The text below is kept as it was decided.
 
 **What:** a widget can list notifications to show on screen: `Widget::notices() -> Vec<Notice<Message>>`, newest first, next to `item()` and `popover()`. While there are any, the right island morphs into a panel of them, like a popover.
 - **A notice is structured, not a node:** a `key`, a summary, and optionally the app's name and icon, a plain-text body, an `Urgency` (`Low`, `Normal`, `Critical`), actions (label and message), `on_press` (a click on the card), `on_dismiss` (its close button) and `expires(after, message)`. The host lays out each one (`kit::notice`): a thin bar across the top for the time it has left on screen (`countdown.rs`, only if it expires, standing still while its clock is stopped), app icon and name with a close button, the summary, the body cut off after four lines, and the actions, with the first one prominent. Critical names the app in the critical tone, and Low dims the summary. *Since 2026-10-13:* a notification's own picture (`Notice::image`) sits 40 px across beside the summary and body instead of in the app icon's place, the body is laid out in full and fades out at its fourth line rather than being squeezed into four (a cut-off Markdown list left a blank hole), and the parts are spaced apart: 8 px under the app's name, 2 between summary and body, 12 above the reply field and actions.
@@ -1260,7 +1260,7 @@ A marker before the zone's first item sets the first island, so no island has to
 
 ## D-62: Reading and writing in popovers: Markdown, a text area, scrolling, wide panels
 
-**Status:** accepted (2026-10-13). Supersedes the "Reply button first" part of [D-49](#d-49-answering-a-notification-a-field-and-the-keyboard-only-once-asked).
+**Status:** accepted (2026-10-13). Supersedes the "Reply button first" part of [D-49](#d-49-answering-a-notification-a-field-and-the-keyboard-only-once-asked). The notice's picture and reply field are amended by [D-83](#d-83-notification-cards-fixed-slots-pictures-choices-stacks).
 
 **Why now:** the Claude plugin's popover becomes a chat: a list of sessions, and for each one its conversation, what it's doing, and a field to answer it. Its replies and plans are Markdown, its messages are several lines long, and a conversation is taller than any screen. Its notifications should take an answer without a click on Reply first. None of this is Claude's alone: any messenger, mail or notes plugin needs the same pieces.
 
@@ -1707,3 +1707,30 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 **On top:** the badge draws in a layer of its own. Within one layer the renderer draws by kind (shapes, then pictures, then text), not in the order things were drawn, so the bell could show through it. A nested layer isn't clipped by the island's, so the island hands down what it shows (`island::clip`, ambient like the squish) and the badge keeps to it.
 
 **Cost:** one small widget and one layer while a badge shows, no dependency.
+
+## D-83: Notification cards: fixed slots, pictures, choices, stacks
+
+**Status:** accepted (2026-10-14). Amends [D-47](#d-47-notices-plugins-list-notifications-the-right-island-turns-into-them) and [D-62](#d-62-reading-and-writing-in-popovers-markdown-a-text-area-scrolling-wide-panels).
+
+**What:** a notification card has one layout with fixed slots, which a notice fills or leaves out, and the panel shows the cards in a set way. Designed side by side with today's cards first (the artifact "eave Notification Cards").
+- **Slots, top to bottom:** the countdown; where it's from (the app's icon, which may now be a `file://` URL, its name, the thread's name, step dots, and when it came, `Notice::time`); what it says (summary and body, with the picture 40 px beside them); a wide picture under them; the earlier notices of its thread, a line each; progress (`Notice::progress`, a meter and its percent); then what to answer.
+- **The corner:** the time at rest, the close button under the pointer, swapped by an `Alternate` that the card's `Slot` tells about the pointer. Thin at rest, it grows under the hand (design rule 5).
+- **Pictures:** wider than 4:3, the picture is drawn whole under the text, as wide as the card and at most 180 px tall, cropped from the middle past that (`Cover::wide`, made only for wide ones). Squarer ones stay 40 px beside the text: a large square avatar is still an avatar, so it's the shape that decides, not the size. A picture can come as pixels (`Notice::pixels`, eave-notify reading `image-data`), drawn off the UI thread like a file and kept by where its bytes are; the host holds the bytes while it keeps the picture, so no other picture can take that address.
+- **Answers:** options (`Notice::choices`, one or several, with descriptions and a recommended one) as rows lit like a list row in use, with check boxes for several and "Send N"; then the reply field and up to three buttons sharing the card's width, the first filled. A reply with two buttons or fewer shares their row. The reply's send button shows only once there's text, and `Reply::sent` says Sent in the field's place. "Show all" opens a cut body in place.
+- **Steps:** a notice can be question *n* of *m* (`Notice::step`), with Back. When the step changes, the old content slides away and the new one in, like tabs' pages (`steps.rs`); the host keeps the old notice for as long as that takes.
+- **Stacks:** notices of the same widget, app and thread (`Notice::thread`) that come one after another share a card: the newest in full, up to three earlier ones a line each. The card's clock is its newest's, and when it runs out every notice on it expires; its close button dismisses them all.
+- **Three at most:** critical cards come first, then the newest. Past three, the rest wait with their clocks stopped, under a line saying how many, which opens their popover.
+- **Keyed cards:** the panel is a keyed column, so a card's state (what's typed into it) stays with it as cards come and go above it.
+- **Over the bus:** eave-notify reads `image-data`, `value`, `transient`, `resident` and eave's own `x-eave-thread`, `x-eave-thread-name`, `x-eave-icon`, `x-eave-choices`, `x-eave-multiple` and `x-eave-step`, and advertises them. A single pick is the action with the option's key; several picks go back as the `EaveChoicesPicked` signal.
+
+**Why:** apps send more than the cards showed: avatars as pixels, progress, screenshots. A burst of messages from one chat filled the screen edge, card after card. And a question with three options, or several, had to open the chat. Fixed slots keep "plugins describe, the host draws": a notice still says what it has, never where it goes.
+
+**Alternatives:**
+- the picture's size deciding (≥ 256 px wide): large square avatars would fill the card.
+- stacking every notice of an app, not just one thread's: a chat's messages from two people would read as one conversation.
+- grouping runs in the popover rather than by app: as soon as two apps interleave there's little to group (eave-notifications groups by app, then thread).
+- actions right-aligned as before: one button looked lost, three cramped.
+- the close button always there: one more thing at rest on every card.
+
+**Measured:** see the table in [development.md](development.md#measuring).
+
