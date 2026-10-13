@@ -1,5 +1,9 @@
 //! Every visual constant in one place. Plugins can't reach any of this: they name a [`Tone`], the
 //! host picks the color.
+//!
+//! The palette is black islands and white ink, with opacity for hierarchy. Color only appears as a
+//! signal (good, warning, critical) or when it comes from the content, like a cover's (D-58,
+//! [docs/design.md](../../../docs/design.md)).
 
 use std::time::Duration;
 
@@ -28,8 +32,9 @@ pub const ISLAND_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 pub const HOVER_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 pub const PRESSED_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.14);
 pub const SEPARATOR: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);
-/// Behind the current option of a switcher (the active workspace).
-pub const SWITCHER_MARK: Color = Color::from_rgba(0.53, 0.70, 1.00, 0.22);
+/// Behind the current option of a switcher (the active workspace): the current thing is marked
+/// with light, not a hue.
+pub const SWITCHER_MARK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.14);
 
 /// Horizontal padding inside each island, at its ends.
 pub const ISLAND_PADDING: u16 = 14;
@@ -169,22 +174,31 @@ pub const ROW_HEIGHT_TALL: f32 = 46.0;
 pub const ROW_SPACING: u32 = 2;
 /// A list taller than this many one-line rows scrolls.
 pub const LIST_MAX_ROWS: f32 = 6.0;
-/// Behind the list row in use, like the current option of a switcher.
-pub const SELECTED_BG: Color = SWITCHER_MARK;
-/// A subtitle under a selected row's title: dim, tinted toward the accent.
-pub const SELECTED_SUBTITLE: Color = Color::from_rgb(0.66, 0.73, 0.84);
+/// Behind the list row in use, like the current option of a switcher but softer, since a row is
+/// bigger.
+pub const SELECTED_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);
 /// Square buttons holding just an icon, and the height of text buttons.
 pub const ICON_BUTTON: f32 = 28.0;
+/// A prominent icon button (play and pause): a white disc this wide.
+pub const PROMINENT_BUTTON: f32 = 36.0;
 pub const BUTTON_HEIGHT: f32 = 30.0;
 /// A text button at rest in a popover, so it reads as a button and not a label.
 pub const BUTTON_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
-/// The text on a prominent button, over the accent.
+/// What's drawn on a white fill: a prominent button's text or icon, a toggle's knob when on.
 pub const ON_ACCENT: Color = Color::BLACK;
+/// A prominent button's fill, and a toggle's pill when on.
+pub const ACCENT_FILL: Color = Color::WHITE;
 /// The empty part of a slider, toggle or meter.
 pub const TRACK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.14);
 pub const METER_TRACK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);
-pub const SLIDER_RAIL: f32 = 4.0;
-pub const SLIDER_KNOB: f32 = 7.0;
+/// A slider is a line with no knob: this thick at rest, `SLIDER_RAIL_HOVER` under the pointer or
+/// while dragged, easing between the two over `SLIDER_GROW`. `SLIDER_HEIGHT` is the room it takes,
+/// and what the pointer can grab. A click eases the fill over `SLIDER_EASE`.
+pub const SLIDER_RAIL: f32 = 2.0;
+pub const SLIDER_RAIL_HOVER: f32 = 4.0;
+pub const SLIDER_HEIGHT: f32 = 16.0;
+pub const SLIDER_GROW: Duration = Duration::from_millis(180);
+pub const SLIDER_EASE: Duration = Duration::from_millis(220);
 pub const METER_HEIGHT: f32 = 6.0;
 /// How long a meter takes to ease to a new value.
 pub const METER_EASE: Duration = Duration::from_millis(400);
@@ -197,10 +211,14 @@ pub const TOGGLE_SLIDE: Duration = Duration::from_millis(160);
 pub const FIELD_HEIGHT: f32 = 34.0;
 pub const FIELD_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
 pub const FIELD_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);
-pub const PLACEHOLDER: Color = Color::from_rgb(0.42, 0.42, 0.47);
-pub const SELECTION: Color = Color::from_rgba(0.53, 0.70, 1.00, 0.35);
-/// The filled circle of a mark (today in a calendar), and the height of a calendar's rows.
+/// A focused field's edge.
+pub const FIELD_FOCUS: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.50);
+pub const PLACEHOLDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.30);
+pub const SELECTION: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.25);
+/// The ring of a mark (today in a calendar), how thick its line is, and the height of a
+/// calendar's rows.
 pub const MARK_SIZE: f32 = 28.0;
+pub const MARK_RING: f32 = 1.5;
 pub const GRID_ROW: f32 = 32.0;
 /// A badge's outline.
 pub const BADGE_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
@@ -210,7 +228,8 @@ pub const SCROLLER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.20);
 pub const TAB_HEIGHT: f32 = 28.0;
 pub const TAB_INSET: f32 = 2.0;
 pub const TAB_TRACK: Color = BUTTON_BG;
-pub const TAB_MARK: Color = SELECTED_BG;
+/// A little brighter than a selected row's fill, since it sits on the track.
+pub const TAB_MARK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.16);
 /// Switching tabs hands the page over: the old one slides `TAB_SLIDE` away from the new tab as it
 /// fades out, then the new one slides in from that side, over `TAB_FADE` in all. Further than an
 /// alternate's slide, since pages are wide.
@@ -296,11 +315,15 @@ pub const SANS_FAMILIES: &[&str] = &[
 
 pub fn tone(tone: Tone) -> Color {
     match tone {
-        Tone::Normal => Color::from_rgb(0.90, 0.90, 0.92),
-        Tone::Dim => Color::from_rgb(0.55, 0.55, 0.60),
-        Tone::Accent => Color::from_rgb(0.53, 0.70, 1.00),
-        Tone::Warning => Color::from_rgb(0.98, 0.76, 0.36),
-        Tone::Critical => Color::from_rgb(0.97, 0.42, 0.42),
-        Tone::Good => Color::from_rgb(0.45, 0.85, 0.55),
+        // White ink at 94 % and 50 %: brightness, not hue, sets the hierarchy. Written as the
+        // grey it makes on a black island, so overlapping strokes in an icon don't show seams.
+        Tone::Normal => Color::from_rgb(0.94, 0.94, 0.94),
+        Tone::Dim => Color::from_rgb(0.50, 0.50, 0.50),
+        // The thing to notice is the brightest thing there.
+        Tone::Accent => Color::WHITE,
+        // Signals: vivid, because they're the only color on screen.
+        Tone::Warning => Color::from_rgb8(0xFF, 0xB0, 0x20),
+        Tone::Critical => Color::from_rgb8(0xFF, 0x45, 0x3A),
+        Tone::Good => Color::from_rgb8(0x30, 0xD1, 0x58),
     }
 }

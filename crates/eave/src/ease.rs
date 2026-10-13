@@ -33,6 +33,19 @@ impl Ease {
         }
     }
 
+    /// Shows `value` at once, stopping any easing: for a value that follows the hand.
+    pub fn snap(&mut self, value: f32) {
+        self.shown = Some(value);
+        self.to = value;
+        self.pending = false;
+        self.start = None;
+    }
+
+    /// Where it's going, or where it is once it's there.
+    pub fn target(&self) -> f32 {
+        self.to
+    }
+
     pub fn value(&self) -> f32 {
         self.shown.unwrap_or(self.to)
     }

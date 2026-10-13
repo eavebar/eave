@@ -117,7 +117,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Field<'_, M> {
         let state = tree.state.downcast_ref::<State>();
         let edge = match (state.focused, self.alert) {
             (_, Some(alert)) => alert,
-            (true, None) => theme::tone(eave_api::ui::Tone::Accent),
+            (true, None) => theme::FIELD_FOCUS,
             (false, None) => theme::FIELD_BORDER,
         };
         renderer.fill_quad(

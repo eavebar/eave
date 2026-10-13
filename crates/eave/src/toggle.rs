@@ -1,5 +1,5 @@
 //! The host side of [`eave_api::ui::toggle`]: a pill with a knob. A click sends the widget's
-//! message; when the plugin's state flips, the knob slides over and the pill takes the accent.
+//! message; when the plugin's state flips, the knob slides over and the pill turns white.
 
 use iced::advanced::widget::{Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, renderer};
@@ -79,7 +79,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Toggle<M> {
                 border: Border::default().rounded(bounds.height / 2.0),
                 ..renderer::Quad::default()
             },
-            mix(theme::TRACK, theme::tone(Tone::Accent), t),
+            mix(theme::TRACK, theme::ACCENT_FILL, t),
         );
         let inset = (bounds.height - theme::TOGGLE_KNOB) / 2.0;
         let travel = bounds.width - 2.0 * inset - theme::TOGGLE_KNOB;
