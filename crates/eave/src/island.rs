@@ -590,12 +590,28 @@ impl Motion {
     /// The room the panel needs on the surface: where it goes, and while the shape is still on
     /// its way, what was asked for before too. A shrinking shape keeps its room until it lands,
     /// then gives it back at once: the surface resizes twice, not every frame.
+    ///
+    /// Landed means at rest where the shape should go now, not just at rest: a plugin's page swap
+    /// lays the panel out anew and is reported before [`Motion::aim`] points the edges at it.
     fn reach(&self) -> Option<Rectangle> {
         let rect = self.popover.rect?;
         let edges = &self.edges;
-        let landed = [edges.left, edges.top, edges.right, edges.bottom]
+        let destination = self.popover.opening().or(self.island);
+        let there = destination.is_none_or(|to| {
+            let at = edges.rect();
+            [
+                at.x - to.x,
+                at.y - to.y,
+                at.width - to.width,
+                at.height - to.height,
+            ]
             .iter()
-            .all(Spring::at_rest);
+            .all(|off| off.abs() < REST_DISTANCE)
+        });
+        let landed = there
+            && [edges.left, edges.top, edges.right, edges.bottom]
+                .iter()
+                .all(Spring::at_rest);
         match self.popover.reported {
             Some(reported) if !landed => Some(rect.union(&reported)),
             _ => Some(rect),
@@ -1736,6 +1752,29 @@ mod tests {
         });
         assert!(!faded, "the content stays while it grows");
         assert_eq!(motion.edges.rect(), taller);
+    }
+
+    #[test]
+    fn a_page_swap_keeps_its_room_before_the_shape_sets_off() {
+        let island = rect(100.0, 120.0);
+        let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 200.0));
+        let shorter = Rectangle {
+            height: 90.0,
+            ..panel
+        };
+        let mut motion = settled(island, &[1]);
+        popover(&mut motion, true, panel, true);
+        run(&mut motion, Instant::now(), |_| {});
+        motion.popover.reported = motion.reach();
+
+        // A plugin swapped its page: laid out and reported before anything aims the edges.
+        motion.place_panel(shorter, true);
+        assert_eq!(motion.reach(), Some(panel), "still has the room it had");
+
+        motion.aim();
+        assert_eq!(motion.reach(), Some(panel), "and keeps it on the way");
+        run(&mut motion, Instant::now(), |_| {});
+        assert_eq!(motion.reach(), Some(shorter), "gives it back once it lands");
     }
 
     #[test]
