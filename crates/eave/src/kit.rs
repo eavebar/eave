@@ -681,7 +681,7 @@ fn answer_button<'a>(
         .wrapping(text::Wrapping::None);
     let fill = prominent.then(|| ctx.fill());
     let enabled = message.is_some();
-    button(container(content).center_x(width))
+    button(container(content).center_x(width).center_y(Length::Fill))
         .on_press_maybe(message)
         .width(width)
         .height(theme::BUTTON_HEIGHT)
