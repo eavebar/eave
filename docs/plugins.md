@@ -26,13 +26,15 @@ Above the zones, `renderer = "cpu"` draws the bar on the CPU (tiny-skia) instead
 Two more keys there describe the screen. `eave calibrate` measures them for you and writes them ([running.md](running.md#calibrate-the-screen), [D-71](decisions.md)):
 
 ```toml
-notch = { width = 370, height = 66, radius = 20, smoothing = 0.6, shoulder = 8, top = 0 }
+notch = { width = 370, height = 66, radius = 20, smoothing = 0.6, shoulder = 8, top = 0, grow = [4, 4] }
 screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
 ```
 
 - `notch = "auto"` (the default) finds a MacBook's on Asahi, and `notch = false` ignores it. The bar splits the center zone around it ([D-69](decisions.md)).
 - Everything is in physical pixels.
 - A notch's `radius` rounds its lower corners. `shoulder` rounds it outwards where it meets the top edge, and islands attached to the top then flare the same way ([D-72](decisions.md)). `top` above 0 makes it a cut-out that far below the edge.
+- The bar draws the notch black. `grow = [sides, below]` draws it bigger than it is, by `sides` on each side and `below` at the bottom, and the bar goes around it at that size ([D-75](decisions.md)). It's `[0, 0]` by default.
+- With a notch, the islands end where it does, grown: their height plus the gap above them is the notch's bottom ([D-76](decisions.md)).
 - `smoothing` 0 is a circle's corner, and up to 1 a squircle's.
 - A screen's `corners` go top left, top right, bottom right, bottom left. `inset` goes top, right, bottom, left: rows and columns the bezel hides, which the bar keeps off. Either takes one number for all four.
 

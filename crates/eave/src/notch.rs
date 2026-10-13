@@ -25,6 +25,9 @@ pub struct Notch {
     pub shoulder: f32,
     /// How far below the top edge it starts: 0 hangs from it.
     pub top: f32,
+    /// How much bigger than the hardware's `width` and `height` are: on each side, and below
+    /// (D-75). The room a squish has to shrink it back by.
+    pub grow: [f32; 2],
 }
 
 /// The notch as the hardware has it, in physical pixels.
@@ -122,6 +125,16 @@ impl Screen {
         corners
     }
 
+    /// How tall the islands are: down to where the notch ends, from one gap below the top that
+    /// shows (D-76). Without a notch, the theme's.
+    pub fn island_height(&self) -> f32 {
+        match self.notch {
+            Some(notch) => (notch.top + notch.height - self.inset[0] - f32::from(theme::EDGE_GAP))
+                .max(theme::MIN_ISLAND_HEIGHT),
+            None => theme::ISLAND_HEIGHT as f32,
+        }
+    }
+
     /// The notch's lower corners, if it has measured ones.
     fn notch_corner(&self) -> Option<CornerShape> {
         self.notch
@@ -172,7 +185,6 @@ pub async fn resolve(
     screen: config::Screen,
     islands: config::Islands,
 ) -> Screen {
-    let bar_height = f32::from(theme::EDGE_GAP) + theme::ISLAND_HEIGHT as f32;
     // Only what's measured needs the scale: physical pixels to logical.
     let measured = matches!(notch, config::Notch::Fixed(_))
         || screen != config::Screen::default()
@@ -184,14 +196,7 @@ pub async fn resolve(
     };
     let notch = match notch {
         config::Notch::Off => None,
-        config::Notch::Fixed(shape) => Some(Notch {
-            width: shape.width / scale,
-            height: shape.height.map_or(bar_height, |height| height / scale),
-            radius: shape.radius / scale,
-            smoothing: shape.smoothing,
-            shoulder: shape.shoulder / scale,
-            top: shape.top / scale,
-        }),
+        config::Notch::Fixed(shape) => Some(fixed(shape, scale)),
         config::Notch::Auto => detect().await,
     };
     let mut resolved = Screen {
@@ -204,6 +209,22 @@ pub async fn resolve(
     };
     resolved.resolve_islands(islands, scale);
     resolved
+}
+
+/// The notch config.toml gives, in logical pixels at `scale`, as big as the bar draws it: grown.
+/// Without a height, it's as tall as islands reach without one.
+fn fixed(shape: config::NotchShape, scale: f32) -> Notch {
+    let bar_height = f32::from(theme::EDGE_GAP) + theme::ISLAND_HEIGHT as f32;
+    let grow = shape.grow.map(|grow| grow / scale);
+    Notch {
+        width: shape.width / scale + 2.0 * grow[0],
+        height: shape.height.map_or(bar_height, |height| height / scale) + grow[1],
+        radius: shape.radius / scale,
+        smoothing: shape.smoothing,
+        shoulder: shape.shoulder / scale,
+        top: shape.top / scale,
+        grow,
+    }
 }
 
 /// This machine's notch, on the output the bar is on, if it shows there.
@@ -337,6 +358,7 @@ mod tests {
                 smoothing: 0.4,
                 shoulder: 5.5,
                 top: 0.0,
+                grow: [0.0; 2],
             }),
             corners: [
                 CornerShape::new(19.5, 0.65),
@@ -348,6 +370,35 @@ mod tests {
         };
         screen.resolve_islands(islands, 2.0);
         screen
+    }
+
+    #[test]
+    fn a_grown_notch_is_bigger_by_its_growth() {
+        let shape = config::NotchShape {
+            width: 368.0,
+            height: Some(64.0),
+            radius: 20.0,
+            shoulder: 11.0,
+            grow: [4.0, 2.0],
+            ..config::NotchShape::default()
+        };
+        let notch = fixed(shape, 2.0);
+        assert_eq!((notch.width, notch.height), (188.0, 33.0));
+        assert_eq!((notch.radius, notch.shoulder), (10.0, 5.5));
+        assert_eq!(notch.grow, [2.0, 1.0]);
+    }
+
+    #[test]
+    fn islands_end_where_the_notch_does() {
+        assert_eq!(Screen::default().island_height(), theme::ISLAND_HEIGHT as f32);
+        let mut screen = macbook(config::Islands::default());
+        assert_eq!(screen.island_height(), 26.0);
+        // A row hidden under the bezel moves the islands' top, not the notch's bottom.
+        screen.inset[0] = 2.0;
+        assert_eq!(screen.island_height(), 24.0);
+        // A tiny notch doesn't crush them.
+        screen.notch.as_mut().unwrap().height = 10.0;
+        assert_eq!(screen.island_height(), theme::MIN_ISLAND_HEIGHT);
     }
 
     #[test]

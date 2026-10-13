@@ -5,19 +5,36 @@
 //!
 //! With a notch (D-69), the center zone can't be centered: it comes in two halves, one each side
 //! of the notch. A half whose island there is fused to the notch is right against it, so they read
-//! as one; any other keeps `ISLAND_SPACING` from it (D-73).
+//! as one; any other keeps `ISLAND_SPACING` from it (D-73). The notch itself is drawn black, as
+//! big as the bar has it, which may be bigger than it is (D-75).
 
-use iced::advanced::widget::{Operation, Tree};
+use std::cell::Cell;
+
+use iced::advanced::Renderer as _;
+use iced::advanced::graphics::geometry::Renderer as _;
+use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
+use iced::widget::canvas::{Cache, Path};
 use iced::{Element, Event, Length, Point, Rectangle, Size, Vector};
 
+use crate::notch::Notch;
+use crate::squircle::{self, CornerShape, squircle_corners};
 use crate::theme;
 
 pub struct Zones<'a, M> {
     /// Left, center and right; or left, the center's two halves and right, around a notch.
     zones: Vec<Element<'a, M>>,
-    /// The notch's width, centered, and the gap each half keeps from it.
-    notch: Option<(f32, [f32; 2])>,
+    /// The notch, centered, and the gap each half keeps from it.
+    notch: Option<(Notch, [f32; 2])>,
+    /// How far below the screen's top edge the zones start: the gap above the islands, and the
+    /// rows the bezel hides.
+    top: f32,
+}
+
+/// The notch as last drawn, and what it was drawn from.
+struct State {
+    cache: Cache,
+    drawn: Cell<Option<(Notch, f32)>>,
 }
 
 impl<'a, M> Zones<'a, M> {
@@ -25,16 +42,19 @@ impl<'a, M> Zones<'a, M> {
         Self {
             zones: vec![left, center, right],
             notch: None,
+            top: 0.0,
         }
     }
 
-    /// Around a notch `width` wide, centered: the center zone's halves go each side of it, right
-    /// against it where `fused`.
+    /// Around `notch`, centered: the center zone's halves go each side of it, right against it
+    /// where `fused`. The zones start `top` below the screen's top edge, so the notch is drawn
+    /// where it is.
     pub fn around_notch(
         left: Element<'a, M>,
         [before, after]: [Element<'a, M>; 2],
         right: Element<'a, M>,
-        width: f32,
+        notch: Notch,
+        top: f32,
         fused: [bool; 2],
     ) -> Self {
         let gaps = fused.map(|fused| {
@@ -46,9 +66,36 @@ impl<'a, M> Zones<'a, M> {
         });
         Self {
             zones: vec![left, before, after, right],
-            notch: Some((width, gaps)),
+            notch: Some((notch, gaps)),
+            top,
         }
     }
+}
+
+/// The notch `top` below where the zones start, in a frame its own size: what's drawn, and the
+/// frame's top left in the zones' coordinates, centered in `width`. Hanging from the screen's top
+/// edge, it's rounded outwards there like the screen's is, and reaches past it out of sight; lower
+/// down, it's a cut-out, rounded all round.
+fn notch_outline(notch: Notch, top: f32, width: f32) -> (Path, Point) {
+    let lower = CornerShape::new(notch.radius, notch.smoothing);
+    let x = (width - notch.width) / 2.0;
+    let y = notch.top - top;
+    if notch.top > 0.0 {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(notch.width, notch.height));
+        return (squircle_corners(bounds, [lower; 4]), Point::new(x, y));
+    }
+    // Room beside it for the shoulders, and above it to reach past the edge.
+    let room = Vector::new(notch.shoulder * 2.0, theme::ATTACH_OVERHANG);
+    let path = Path::new(|builder| {
+        let bounds = Rectangle::new(
+            Point::new(room.x, 0.0),
+            Size::new(notch.width, room.y + notch.height),
+        );
+        let corners = [CornerShape::SQUARE, CornerShape::SQUARE, lower, lower];
+        let shoulder = CornerShape::new(notch.shoulder, notch.smoothing);
+        squircle::hanging(builder, bounds, corners, room.y, shoulder, [true; 2]);
+    });
+    (path, Point::new(x, y) - room)
 }
 
 /// Where the center zone starts: centered in `width`, or as near that as it can be while
@@ -102,7 +149,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
                 (width - widths[2]).round(),
             ],
             Some((notch, gaps)) => {
-                let (before, after) = around(width, notch, widths[1], gaps);
+                let (before, after) = around(width, notch.width, widths[1], gaps);
                 vec![
                     0.0,
                     before.round(),
@@ -135,10 +182,41 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        // Under the islands, so what's fused to it covers it.
+        if let Some((notch, _)) = self.notch {
+            let state = tree.state.downcast_ref::<State>();
+            let bounds = layout.bounds();
+            let drawn = (notch, self.top);
+            if state.drawn.replace(Some(drawn)) != Some(drawn) {
+                state.cache.clear();
+            }
+            let (path, at) = notch_outline(notch, self.top, bounds.width);
+            let size = Size::new(
+                notch.width + notch.shoulder * 4.0,
+                notch.height + theme::ATTACH_OVERHANG,
+            );
+            let geometry = state.cache.draw(renderer, size, |frame| {
+                frame.fill(&path, theme::ISLAND_BG);
+            });
+            renderer.with_translation(Vector::new(bounds.x + at.x, bounds.y + at.y), |renderer| {
+                renderer.draw_geometry(geometry);
+            });
+        }
         for ((zone, tree), layout) in self.zones.iter().zip(&tree.children).zip(layout.children()) {
             zone.as_widget()
                 .draw(tree, renderer, theme, style, layout, cursor, viewport);
         }
+    }
+
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<State>()
+    }
+
+    fn state(&self) -> tree::State {
+        tree::State::new(State {
+            cache: Cache::new(),
+            drawn: Cell::new(None),
+        })
     }
 
     fn children(&self) -> Vec<Tree> {

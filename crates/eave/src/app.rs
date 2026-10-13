@@ -557,12 +557,16 @@ impl Bar {
         let height = rects
             .iter()
             .map(|rect| (rect.y + rect.height).ceil() as u32 + u32::from(style::EDGE_GAP))
-            .fold(style::SURFACE_HEIGHT, u32::max);
+            .fold(
+                style::surface_height(self.screen.island_height()),
+                u32::max,
+            );
+        let bar_height = style::bar_height(self.screen.island_height());
         let callback = ActionCallback::new(move |region| {
             // iced_layershell reuses one region and only clears the surface's current size, which
             // may be the old one: clear all of it, so no earlier popover's rect is left behind.
             region.subtract(0, 0, i32::MAX, i32::MAX);
-            region.add(0, 0, i32::MAX, style::BAR_HEIGHT as i32);
+            region.add(0, 0, i32::MAX, bar_height as i32);
             for rect in &rects {
                 region.add(
                     rect.x.floor() as i32,
@@ -587,13 +591,20 @@ impl Bar {
     }
 
     /// Moves a bar surface off what the bezel hides (D-71): its margins are the insets, so the bar
-    /// lays itself out on the screen that shows, and the windows are kept clear of it all.
+    /// lays itself out on the screen that shows, and the windows are kept clear of it all, and of
+    /// islands as tall as they are (D-76).
     fn inset(&self, window: window::Id) -> Task<Message> {
         let [top, right, _, left] = self.screen.inset.map(|inset| inset.round() as i32);
-        Task::done(Message::MarginChange {
-            id: window,
-            margin: (top, right, 0, left),
-        })
+        Task::batch([
+            Task::done(Message::MarginChange {
+                id: window,
+                margin: (top, right, 0, left),
+            }),
+            Task::done(Message::ExclusiveZoneChange {
+                id: window,
+                zone_size: style::bar_height(self.screen.island_height()) as i32,
+            }),
+        ])
     }
 
     /// The bar whose right island shows the notifications: the focused monitor's. The bar only opens on the
@@ -1085,10 +1096,15 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             if bar.screen_setting != Some(setting) || bar.screen == screen {
                 return Task::none();
             }
-            let moved = bar.screen.inset != screen.inset;
+            let moved = bar.screen.inset != screen.inset
+                || bar.screen.island_height() != screen.island_height();
             bar.screen = screen;
             if moved {
-                Task::batch(bar.windows.iter().map(|window| bar.inset(*window)))
+                Task::batch(
+                    bar.windows
+                        .iter()
+                        .flat_map(|window| [bar.fit(*window), bar.inset(*window)]),
+                )
             } else {
                 Task::none()
             }
@@ -1204,7 +1220,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                     .shows(shows(attach))
                     .notch(bar.screen.notch.map(|notch| notch.width))
                     .shoulders(shoulders)
-                    .corners(bar.screen.island_corners(Place::default())),
+                    .corners(bar.screen.island_corners(Place::default()))
+                    .height(bar.screen.island_height()),
                 attach,
             ))
         };
@@ -1261,7 +1278,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             }
             let fused = [before.last(), after.first()]
                 .map(|next| next.is_some_and(|(_, attach)| attach.top));
-            Zones::around_notch(left, [zone(before), zone(after)], right, notch.width, fused)
+            let below = top + f32::from(style::EDGE_GAP);
+            Zones::around_notch(left, [zone(before), zone(after)], right, notch, below, fused)
         }
     };
 
@@ -1315,7 +1333,7 @@ fn beside_notch<'a>(
         return island;
     }
     let mut bleed = bleed(attach);
-    let island_bottom = f32::from(style::EDGE_GAP) + style::ISLAND_HEIGHT as f32;
+    let island_bottom = f32::from(style::EDGE_GAP) + screen.island_height();
     bleed.bottom = notch.top + notch.height - top - island_bottom;
     // What reaches under the notch is out of sight; so is what a shorter notch leaves below it.
     let shows = Padding {

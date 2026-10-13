@@ -827,7 +827,7 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 - **Limits:** `DRAG_LIMIT_X` stays 10 and `DRAG_LIMIT_Y` goes 5 → 6. These are now how far the part under the pointer goes, so the rest of the island moves less than before. *(First 18 and 10 on this branch; the user wanted it to move less.)* The canvas frame gets that much room on top of `NUDGE_BUMP_ROOM`, and the items' clip grows by the current stretch.
 - **The grab point** is kept, relative to the shape, until the springs settle after letting go, so the spring back wobbles where it was grabbed.
 - **Popovers:** a press on an open popover grabs it only if the panel's content didn't capture it. Presses on sliders, buttons, rows, fields and scrollbars don't. Dragging the volume slider shouldn't stretch the panel. The overlay follows the drag itself, because what it captures never reaches the island.
-- **Surface:** a downward pull needs more room than the 6 px D-26 left. The surface is now `SURFACE_HEIGHT`, with `DRAG_ROOM` (14 px) below the islands. The exclusive zone and the input strip stay `BAR_HEIGHT`, with only `RESERVED_ROOM` (6 px) below, so windows don't move. The extra 8 px hang transparently over the top of the windows and let their clicks through: the input region (D-28) is now set when each bar surface opens, not only when a popover comes or goes. A held drag still gets motion outside it, through the pointer's implicit grab.
+- **Surface:** a downward pull needs more room than the 6 px D-26 left. The surface is now `SURFACE_HEIGHT`, with `DRAG_ROOM` (14 px) below the islands. The exclusive zone and the input strip stay `BAR_HEIGHT`, with only `RESERVED_ROOM` (6 px) below, so windows don't move. *(They follow the islands' height since [D-76](#d-76-islands-are-as-tall-as-the-notch).)* The extra 8 px hang transparently over the top of the windows and let their clicks through: the input region (D-28) is now set when each bar surface opens, not only when a popover comes or goes. A held drag still gets motion outside it, through the pointer's implicit grab.
 
 **Alternatives:**
 - the old rigid translate, with bigger limits: the island just slides further. It doesn't stretch.
@@ -1217,7 +1217,7 @@ RSS and CPU are in D-56: a cover costs about 1 MB of RSS whether it came from a 
 
 **What:** `live = true` beside `island = true` makes that island a live one. For now that only changes its shape:
 - **Snug:** `LIVE_ISLAND_PADDING` (4 px) at its ends instead of `ISLAND_PADDING` (14), and never narrower than it is tall. An island of one icon is about 36 × 30, nearly round.
-- **Rounder:** `LIVE_ISLAND_RADIUS`, half the island's height, with the same smoothing, so it's still a squircle. As it grows into a popover the radius eases back to `ISLAND_RADIUS` over the first island height, so its panel looks like any other.
+- **Rounder:** `LIVE_ISLAND_RADIUS`, half the island's height *(half its own height since [D-76](#d-76-islands-are-as-tall-as-the-notch))*, with the same smoothing, so it's still a squircle. As it grows into a popover the radius eases back to `ISLAND_RADIUS` over the first island height, so its panel looks like any other.
 
 A marker before the zone's first item sets the first island, so no island has to be empty to be live. `live` that isn't a boolean is warned about and ignored. Every entry of the island carries `live` (`Entry::live`), and the view reads it the way it reads `collapsible`. The island rebuilds its cached shape when it changes.
 
@@ -1561,3 +1561,34 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 **Why:** an island fused to the notch, or hanging from the top, is meant to read as one shape with the hardware around it (D-69, D-72). The notch and the bezel have no border, so the island's hairline drew a line along the bottom under the notch and round the shoulders, right where it should have disappeared. A black border would look the same as none, and none is less to draw.
 
 **Alternative:** no border only where an island touches the notch or an edge. Islands would then look different depending on where they sit, for a line that's hardly visible on a dark wallpaper anyway.
+
+---
+
+## D-75: The bar draws the notch, and it can be grown
+
+**Status:** accepted (2026-10-13).
+
+**What:** the bar fills the notch black, under the islands, with its shoulders and lower corners as measured (D-71, D-72). `notch = { …, grow = [sides, below] }`, in physical pixels and `[0, 0]` by default, makes what the bar draws, and goes around, that much bigger than the hardware's: `sides` on each side and `below` at the bottom. The corners and shoulders keep their measured size. `notch::Notch` holds the grown size, and keeps `grow` so the real one can be found again. `eave calibrate` still models the real notch, and writes `grow` back as it was.
+
+**Why draw it:** the notch should be something the bar can move. A squish that shrinks the notch back toward its real size, or bulges it, needs black pixels of the bar's own to move, beyond the hardware's. Drawing it always also hides a calibration a pixel off, which would otherwise show a sliver of wallpaper between the notch and an island fused to it.
+
+**Why in `notch`:** it's about the notch, it's in the same pixels, and `notch = "auto"` has nothing to grow until the notch is measured anyway.
+
+**Alternative:** only make room for a grown notch, and draw it once a squish exists. The extra pixels would show the wallpaper wherever no island is fused to the notch.
+
+**Cost:** one cached path, drawn when the notch changes. No new dependency.
+
+---
+
+## D-76: Islands are as tall as the notch
+
+**Status:** accepted (2026-10-13).
+
+**What:** with a notch, an island's height plus the gap above it is the notch's bottom, grown (D-75), from the top of the screen that shows: `notch.top + notch.height − inset − EDGE_GAP`, at least `MIN_ISLAND_HEIGHT` (20 px). On the MacBook, with the notch 32 px tall at scale 2, that's 26 px instead of the theme's 30. Without a notch, islands are `ISLAND_HEIGHT`, as before. The bar's exclusive zone, input strip and surface follow (`theme::bar_height`, `surface_height`): they're set to the theme's when the bar opens and change once the screen is found. A live island's corners are half its own height, no longer `LIVE_ISLAND_RADIUS`.
+
+**Why:** islands that ended 4 px below the notch looked like they missed it, whether they were fused to it or floating beside it. Lining every bottom up with it makes the bar one row with the notch.
+
+**Alternative:** keep islands 30 px tall and grow the notch to match. That works with `grow`, but makes it a fix for the bar instead of a choice.
+
+**Cost:** windows move a few pixels up once the screen is found, and again if the notch changes.
+

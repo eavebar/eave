@@ -60,6 +60,8 @@ How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs
 | Timeline | a 1 px line at 14 % white, a mark per step: you a white dot, a note a small grey one, done grey | under way: a white ring with a faint halo, still; failed: a red dot; waiting for you: an amber ring | |
 | Island attached to the top | hangs from the edge, its corners there out of sight; with a measured notch, rounded outwards where it meets the edge, like the notch ([D-72](decisions.md)) | | |
 | Island corners | follow what they face: a screen corner at an even distance, the notch's corners beside it, `islands` everywhere else ([D-73](decisions.md)) | | |
+| Island height | 30 px; with a notch, ending where the notch does ([D-76](decisions.md)) | | |
+| Notch | drawn black by the bar, `grow` px bigger than it is if asked ([D-75](decisions.md)) | | |
 | Code block, diff | 7 % fill, monospace, colored for the language; four lines or more are numbered | a diff's added and removed lines on faint green and red, its header counting them | |
 
 ## Motion

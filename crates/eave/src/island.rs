@@ -69,6 +69,8 @@ pub struct Island<'a, M> {
     /// How far past its layout it can be seen each way, less where it can't: its items are
     /// centered in that.
     shows: Padding,
+    /// How tall it is at rest: the theme's, or down to where the notch ends (D-76).
+    height: f32,
 }
 
 /// The control at one end of an island that shows and hides its collapsible items: there while
@@ -123,7 +125,14 @@ impl<'a, M> Island<'a, M> {
             shoulders: None,
             corners: [CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING); 4],
             shows: Padding::ZERO,
+            height: theme::ISLAND_HEIGHT as f32,
         }
+    }
+
+    /// This tall at rest, instead of the theme's.
+    pub fn height(mut self, height: f32) -> Self {
+        self.height = height;
+        self
     }
 
     /// Reaches past its layout by this much each way: to the screen edges it's attached to, and
@@ -1096,17 +1105,17 @@ fn panel_offset(place: Size, content: Size) -> Vector {
     )
 }
 
-/// The island's corners at `height`. A live one's are rounder, until it grows into a popover:
-/// they ease to its own over the first island height it grows, so the panel looks like any other.
-fn corners(live: bool, height: f32, corners: [CornerShape; 4]) -> [CornerShape; 4] {
+/// The corners at `height` of an island `island` tall at rest. A live one's are half its height,
+/// until it grows into a popover: they ease to its own over the first island height it grows, so
+/// the panel looks like any other.
+fn corners(live: bool, island: f32, height: f32, corners: [CornerShape; 4]) -> [CornerShape; 4] {
     if !live {
         return corners;
     }
-    let island = theme::ISLAND_HEIGHT as f32;
+    let round = island / 2.0;
     let grown = ((height - island) / island).clamp(0.0, 1.0);
     corners.map(|corner| {
-        let radius =
-            theme::LIVE_ISLAND_RADIUS + (corner.radius - theme::LIVE_ISLAND_RADIUS) * grown;
+        let radius = round + (corner.radius - round) * grown;
         CornerShape::new(radius, corner.smoothing)
     })
 }
@@ -1173,7 +1182,8 @@ fn draw_island<M>(
             let geometry = state.shape.draw(renderer, frame_size, |frame| {
                 let size = body.size();
                 // As round as the shape itself would be: what reaches past it doesn't count.
-                let corners = corners(state.live, shape.height, own_corners);
+                let resting = layout.bounds().height;
+                let corners = corners(state.live, resting, shape.height, own_corners);
                 let outline = Rectangle::new(Point::ORIGIN + room, size);
                 // The jelly bends the shape itself: its sides are where they'd be without the
                 // reach, and what reaches past one moves with it.
@@ -1338,7 +1348,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
     }
 
     fn size(&self) -> Size<Length> {
-        Size::new(Length::Shrink, Length::Fixed(theme::ISLAND_HEIGHT as f32))
+        Size::new(Length::Shrink, Length::Fixed(self.height))
     }
 
     /// A row of items, centered vertically, with padding at the ends. Items in a width group get
@@ -1349,7 +1359,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         renderer: &iced::Renderer,
         _limits: &layout::Limits,
     ) -> layout::Node {
-        let height = theme::ISLAND_HEIGHT as f32;
+        let height = self.height;
         let padding = f32::from(if self.live {
             theme::LIVE_ISLAND_PADDING
         } else {

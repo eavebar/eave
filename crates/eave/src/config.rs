@@ -27,13 +27,14 @@
 //! round the islands are (D-73):
 //!
 //! ```toml
-//! notch = { width = 370, height = 66, radius = 20, smoothing = 0.6, shoulder = 8, top = 0 }
+//! notch = { width = 370, height = 66, radius = 20, smoothing = 0.6, shoulder = 8, top = 0, grow = [4, 4] }
 //! screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
 //! islands = { radius = "auto", smoothing = "auto" }
 //! ```
 //!
 //! A notch's `radius` rounds its lower corners, `shoulder` rounds it outwards where it meets the
-//! top edge, and `top` above 0 makes it a cut-out that far down instead. `smoothing` 0 is a
+//! top edge, and `top` above 0 makes it a cut-out that far down instead. The bar draws it black
+//! (D-75), `grow` pixels bigger on each side and below than it is. `smoothing` 0 is a
 //! circle's corner, up to 1 a squircle's. A screen's `corners` go top left, top right, bottom
 //! right, bottom left, and its `inset` top, right, bottom, left: the rows and columns hidden under
 //! the bezel. Either takes one number for all four.
@@ -117,6 +118,8 @@ pub struct NotchShape {
     pub shoulder: f32,
     /// 0 hangs from the top edge; more is a cut-out this far below it, rounded all round.
     pub top: f32,
+    /// How much bigger the bar draws it than it is: on each side, and below (D-75).
+    pub grow: [f32; 2],
 }
 
 /// How the screen's own edges are shaped, in physical pixels (D-71). All zero is a plain
@@ -447,6 +450,16 @@ fn four(value: &toml::Value) -> Option<[f32; 4]> {
     }
 }
 
+/// `[4, 4]`: two sizes in pixels, or one for both.
+fn two(value: &toml::Value) -> Option<[f32; 2]> {
+    match value {
+        toml::Value::Array(sizes) if sizes.len() == 2 => {
+            Some([pixels(&sizes[0])?, pixels(&sizes[1])?])
+        }
+        size => pixels(size).map(|size| [size; 2]),
+    }
+}
+
 /// `notch = "auto"`, `false`, or `{ width = 370, height = 66, … }`.
 fn notch(value: toml::Value, warnings: &mut Vec<String>) -> Notch {
     match value {
@@ -461,6 +474,9 @@ fn notch(value: toml::Value, warnings: &mut Vec<String>) -> Notch {
                     "radius" => &mut shape.radius,
                     "shoulder" => &mut shape.shoulder,
                     "top" => &mut shape.top,
+                    "grow" => {
+                        return two(value).map(|grow| shape.grow = grow).is_some();
+                    }
                     "smoothing" => {
                         return smoothing(value)
                             .map(|value| shape.smoothing = value)
@@ -479,7 +495,7 @@ fn notch(value: toml::Value, warnings: &mut Vec<String>) -> Notch {
     }
     warnings.push(
         "`notch` must be \"auto\", false or { width = 370, height = 66 } in physical pixels, \
-         with radius, smoothing, shoulder and top if you like, using \"auto\""
+         with radius, smoothing, shoulder, top and grow if you like, using \"auto\""
             .into(),
     );
     Notch::Auto
@@ -580,7 +596,7 @@ mod tests {
         assert_eq!(
             parse(
                 "notch = { width = 370.5, height = 66, radius = 20, smoothing = 0.6, \
-                 shoulder = 8, top = 0 }"
+                 shoulder = 8, top = 0, grow = [4, 2] }"
             )
             .unwrap()
             .notch,
@@ -591,6 +607,15 @@ mod tests {
                 smoothing: 0.6,
                 shoulder: 8.0,
                 top: 0.0,
+                grow: [4.0, 2.0],
+            })
+        );
+        assert_eq!(
+            parse("notch = { width = 190, grow = 3 }").unwrap().notch,
+            Notch::Fixed(NotchShape {
+                width: 190.0,
+                grow: [3.0, 3.0],
+                ..NotchShape::default()
             })
         );
         for odd in [
@@ -600,6 +625,7 @@ mod tests {
             "notch = { width = -1 }",
             "notch = { width = 190, depth = 2 }",
             "notch = { width = 190, smoothing = 2 }",
+            "notch = { width = 190, grow = [1, 2, 3] }",
         ] {
             let config = parse(odd).unwrap();
             assert_eq!(config.notch, Notch::Auto, "{odd}");

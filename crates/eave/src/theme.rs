@@ -10,8 +10,11 @@ use std::time::Duration;
 use eave_api::ui::Tone;
 use iced::{Color, Font, font};
 
-/// Height of an island, the visible part of the bar.
+/// Height of an island, the visible part of the bar, where there's no notch. With one, the islands
+/// end where it does (D-76).
 pub const ISLAND_HEIGHT: u32 = 30;
+/// No notch makes an island shorter than this, or its items wouldn't fit.
+pub const MIN_ISLAND_HEIGHT: f32 = 20.0;
 /// Space between the islands and the top, left and right screen edges. A popover keeps the same
 /// distance from the sides.
 pub const EDGE_GAP: u16 = 6;
@@ -21,11 +24,17 @@ pub const DRAG_ROOM: u16 = 14;
 /// How much of `DRAG_ROOM` the bar keeps windows out of. The rest of the surface hangs over the
 /// top of the windows below it, outside its input region, so it never takes their clicks (D-45).
 pub const RESERVED_ROOM: u16 = 6;
-/// The bar's exclusive zone, and the strip that takes the pointer: an island, the gap above it
-/// and the reserved room below it.
-pub const BAR_HEIGHT: u32 = EDGE_GAP as u32 + ISLAND_HEIGHT + RESERVED_ROOM as u32;
-/// The bar surface: an island, the gap above it and all the room below it.
-pub const SURFACE_HEIGHT: u32 = EDGE_GAP as u32 + ISLAND_HEIGHT + DRAG_ROOM as u32;
+/// The bar's exclusive zone, and the strip that takes the pointer, with islands `island` tall: an
+/// island, the gap above it and the reserved room below it.
+pub fn bar_height(island: f32) -> u32 {
+    (f32::from(EDGE_GAP) + island + f32::from(RESERVED_ROOM)).ceil() as u32
+}
+
+/// The bar surface, with islands `island` tall: an island, the gap above it and all the room
+/// below it.
+pub fn surface_height(island: f32) -> u32 {
+    (f32::from(EDGE_GAP) + island + f32::from(DRAG_ROOM)).ceil() as u32
+}
 
 /// How far an island attached to a screen edge reaches past it (D-70): further than its corners
 /// and anything that moves it, so the edge never shows a gap or a corner.
@@ -49,8 +58,6 @@ pub const ISLAND_RADIUS: f32 = 14.0;
 pub const ISLAND_SMOOTHING: f32 = 0.6;
 /// A live island's padding at its ends: snug, so an island of one icon is nearly round.
 pub const LIVE_ISLAND_PADDING: u16 = 4;
-/// A live island's corner radius, before smoothing: half its height, as round as it gets.
-pub const LIVE_ISLAND_RADIUS: f32 = ISLAND_HEIGHT as f32 / 2.0;
 /// How far each side of a pressed island moves in, in logical pixels.
 pub const PRESS_INSET: f32 = 1.5;
 /// The most the part of a dragged island under the pointer moves, sideways and up or down. It only

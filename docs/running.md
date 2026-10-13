@@ -158,7 +158,7 @@ systemctl --user enable --now eave-rebuild.path   # eave-build init put the unit
 | Enter, `s` | save to config.toml and quit |
 | Esc, `q` | quit without saving |
 
-It starts from what config.toml says, or from the notch the hardware reports. Saving changes only `notch` and `screen`, keeps the rest of the file and its comments, and writes through a symlink. Run it with the binary the bar runs, `~/.local/bin/eave calibrate`, or `cargo run --release -- calibrate` in a checkout.
+It starts from what config.toml says, or from the notch the hardware reports. Saving changes only `notch` and `screen`, keeps the notch's `grow` as it was, keeps the rest of the file and its comments, and writes through a symlink. Run it with the binary the bar runs, `~/.local/bin/eave calibrate`, or `cargo run --release -- calibrate` in a checkout.
 
 ## Notifications
 
