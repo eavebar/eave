@@ -25,18 +25,21 @@ struct Found {
     height: u32,
 }
 
-/// How wide each model's notch is, in physical pixels, by the first entry of the device tree's
-/// `compatible`. Only measured ones: a guess would put islands over the screen or under the notch.
+/// How big each model's notch is, width and height in physical pixels, by the first entry of the
+/// device tree's `compatible`. Only measured ones: a guess would put islands over the screen or
+/// under the notch.
 ///
-/// The 14" and 16" panels are both 254 ppi, and macOS measures their notch at 185 points wide in
-/// the native-scale mode (`NSScreen`'s frame minus its auxiliary top areas): 370 pixels.
-/// notchbay.com/blog/macbook-notch-size and crestnotch.app/macbook-notch-dimensions.
-const WIDTHS: &[(&str, u32)] = &[
+/// The 14" and 16" panels are both 254 ppi, and macOS measures their notch at 185 × 32 points in
+/// the native-scale mode (`NSScreen`'s frame minus its auxiliary top areas, and its top safe area
+/// inset): 370 × 64 pixels (notchbay.com/blog/macbook-notch-size,
+/// crestnotch.app/macbook-notch-dimensions). On a 14" the 64 fits the panel; the kernel's
+/// `apple,notch-height` says 74, which hangs below it.
+const MODELS: &[(&str, u32, u32)] = &[
     // MacBook Pro 14" and 16" (M1 Pro, M1 Max).
-    ("apple,j314s", 370),
-    ("apple,j314c", 370),
-    ("apple,j316s", 370),
-    ("apple,j316c", 370),
+    ("apple,j314s", 370, 64),
+    ("apple,j314c", 370, 64),
+    ("apple,j316s", 370, 64),
+    ("apple,j316c", 370, 64),
 ];
 
 /// For a notch whose width nobody has measured: wide enough to clear any MacBook's, in logical
@@ -90,13 +93,16 @@ fn find(root: &Path) -> Option<Found> {
     if !shown(root) {
         return None;
     }
+    // The kernel's height says the notch is there; a measured one says how tall it looks.
     let height = height(root)?;
     let model = model(root);
-    let width = WIDTHS
+    let measured = MODELS
         .iter()
-        .find(|(name, _)| Some(*name) == model.as_deref())
-        .map(|(_, width)| *width);
-    Some(Found { width, height })
+        .find(|(name, ..)| Some(*name) == model.as_deref());
+    Some(Found {
+        width: measured.map(|(_, width, _)| *width),
+        height: measured.map_or(height, |(.., height)| *height),
+    })
 }
 
 /// Whether the kernel shows the notch. The parameter was `apple_dcp`'s before the driver became
@@ -108,7 +114,7 @@ fn shown(root: &Path) -> bool {
     })
 }
 
-/// The notch's height, from the display controller that drives the built-in panel: the only one
+/// The notch's height as the kernel has it, from the display controller that drives the built-in panel: the only one
 /// with `apple,notch-height`, a big-endian u32.
 fn height(root: &Path) -> Option<u32> {
     let soc = std::fs::read_dir(root.join("proc/device-tree/soc")).ok()?;
@@ -167,7 +173,7 @@ mod tests {
             find(&root),
             Some(Found {
                 width: Some(370),
-                height: 74
+                height: 64
             })
         );
         std::fs::remove_dir_all(root).unwrap();

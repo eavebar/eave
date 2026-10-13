@@ -1234,15 +1234,15 @@ fn zone(islands: Vec<Island<'_, Message>>) -> Element<'_, Message> {
         .into()
 }
 
-/// An island against the notch, on its `side`: attached to the top, as low as the notch, and
-/// reaching under it to its middle, past any rounding of its corners.
+/// An island against the notch, on its `side`: attached to the top, ending as low as the notch
+/// does, and reaching under it to its middle, past any rounding of its corners.
 fn fused(island: Island<'_, Message>, side: Horizontal, notch: Notch) -> Island<'_, Message> {
     let mut bleed = bleed(config::Edges {
         top: true,
         ..Default::default()
     });
     let island_bottom = f32::from(style::EDGE_GAP) + style::ISLAND_HEIGHT as f32;
-    bleed.bottom = (notch.height - island_bottom).max(0.0);
+    bleed.bottom = notch.height - island_bottom;
     if side == Horizontal::Right {
         bleed.right = notch.width / 2.0;
     } else {
