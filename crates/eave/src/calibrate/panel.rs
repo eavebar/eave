@@ -235,7 +235,8 @@ impl<Message> Program<Message> for Panel {
 
         // Nothing spills out of the shape while it grows or shrinks.
         frame.with_clip(shape, |frame| {
-            // Within the clip, the shape's top left is the origin.
+            // The clip only clips: move the origin to the shape's top left.
+            frame.translate(Vector::new(at.x, at.y));
             let left = (size.width - open.width) / 2.0 + PADDING;
             let right = left + open.width - 2.0 * PADDING;
             if shown > 0.0 {
