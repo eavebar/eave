@@ -1198,7 +1198,7 @@ RSS and CPU are in D-56: a cover costs about 1 MB of RSS whether it came from a 
 **What:** the media popover was a plain column, with everything on its left. Long titles wrapped onto several lines, the player's name showed twice for a track with no title, and `.prominent()` did nothing on the icon-only play button. Now:
 - **`ui::center(node)`** centers `node` across the panel's width (`container(..).center_x(Fill)`). In the bar it's just `node`. Labels inside it keep to one line and are cut and faded at the edge (`Clip`, which is only as wide as its text, so short text centers).
 - **A `heading` in a popover keeps to one line**, cut like the header's title. Every heading so far is a title, and a two-line title pushed the panel taller as tracks changed.
-- **A prominent icon button** is a filled accent circle, `PROMINENT_ICON_BUTTON` (36 px), with the icon in `ON_ACCENT`.
+- **A prominent icon button** is a filled accent circle, `PROMINENT_ICON_BUTTON` (36 px), with the icon in `ON_ACCENT`. *Superseded by [D-61](#d-61-black-and-white-and-color-only-as-a-signal): a white disc (or the cover's color), `PROMINENT_BUTTON`.*
 - **The media popover** is the header with the player's name, then the cover, the title and "artist · album" centered, the seek bar, and previous, play/pause and next centered, play/pause prominent. The player list follows as before.
 
 **Alternatives:**
@@ -1226,3 +1226,28 @@ A marker before the zone's first item sets the first island, so no island has to
 - **Settable padding and radius:** more knobs than anyone needs, and it makes the look the config's, not the host's (D-13).
 
 **Cost:** none. One more branch in layout and drawing.
+
+---
+
+## D-61: Black and white, and color only as a signal
+
+**Status:** accepted (2026-10-13). Replaces the blue accent used since the first popovers (D-40). The rules are in [design.md](design.md).
+
+**What:** the bar is black and white. Brightness, not hue, says what's current, and color appears only as a signal or when it comes from the content.
+- **Ink.** `Tone::Normal` is white at 94 % and `Tone::Dim` white at 50 %. Both are neutral; they used to have a blue cast. They're written as the opaque grey they make on black, so overlapping icon strokes don't show seams. `Tone::Accent` is plain white: the thing to notice is the brightest thing there. Plugins keep the same `Tone`s. Only what they look like changed.
+- **Current is lit.** The selected list row gets a 10 % white fill, a semibold title and white icons. The workspace mark is a 14 % white pill. Tabs get a 16 % pill on their track, with the current label white and semibold and the others dim. Today in the calendar is a 1.5 px white ring. The toggle is a white pill with a black knob when on. A prominent button is filled white with black text, and a prominent icon button (play/pause) is now drawn as a 36 px white disc; before, `prominent` was ignored for icon buttons. A focused field's edge is 50 % white.
+- **Signals are vivid:** good `#30D158`, warning `#FFB020`, critical `#FF453A`, up from pastels. They're now the only color on screen, so they should be seen when they show up.
+- **The slider is a line.** It's a new host widget (`slider.rs`) in place of iced's slider: a 2 px line, white up to the value, with no knob. It eases to 4 px under the pointer or while dragged, and back when left. A click eases the fill to where it landed, and a drag follows exactly. It behaves like iced's slider: the change on press and drag, release message, Ctrl+wheel and arrow keys.
+- **Content color.** While a cover is shrunk, the host also finds its strongest hue (a 12-bin hue histogram over the 32 px copy, weighted by saturation × value) and lifts it to a lightness that reads on black. A popover that shows a large cover uses that color for its slider fill and prominent button. A cover with little color gives none, and they stay white. No API change: the host infers it from the cover, and plugins still never pick a color (D-11).
+
+**Alternatives** (compared side by side in a style study, with a live preview of each in the full bar):
+- **Keep the blue tint** for what's current. Blue meant "selected" in four places and "interactive" in two more, so it signaled nothing in particular, and it fought with the album art and app icons.
+- **Solid white with black text** for what's current. It's very clear, but heavy: a white row or pill is the loudest thing in a popover, louder than a warning.
+- **Lines and dots only** (an underline for tabs, a dot under today, a check with no fill for rows). It's the quietest option, but the current row is hard to find at a glance in a long list.
+- **A knob on the slider, or a thick bar.** The knob is the one round shape in a flat line, and the thick bar looked like a meter. A thin line that grows under the hand fits "thin at rest, alive when touched".
+- **iced's slider with a status-based style.** It can switch between 2 and 4 px, but only in one jump: the style function has no time, so it can't ease.
+- **A plugin-chosen tint** (`.tint(color)` on a slider). It would break D-11. The cover already carries the color.
+
+**Measured** (Asahi, release, the user's config, no popover open, alternating runs in one session): the binary is 11,693,568 bytes before and after (identical, the change fits in the same pages). RSS was 18.5–18.8 MB on both, and idle CPU 2–4 ticks in 10 s on both. The content color is three floats per cover, computed from the 32 px copy that was being made anyway.
+
+**Cost:** one more host widget, about 250 lines with tests. Tone colors changed for every plugin at once, which is the point.

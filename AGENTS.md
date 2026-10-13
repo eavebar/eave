@@ -15,6 +15,7 @@ We build it ourselves, not on a framework like Quickshell or AGS, because we wan
 | [docs/vision.md](docs/vision.md) | What we are building, the philosophy, what we will *not* do |
 | [docs/platform.md](docs/platform.md) | Targets (Hyprland, Asahi aarch64, CachyOS x86_64) and their quirks |
 | [docs/architecture.md](docs/architecture.md) | How the bar works: host / widgets / services, the event loop, popovers, code layout |
+| [docs/design.md](docs/design.md) | How it looks and moves: the palette, how components mark what's current, the motion vocabulary |
 | [docs/plugins.md](docs/plugins.md) | Using and writing plugins: config.toml and widget references, the Widget trait, the manifest |
 | [docs/running.md](docs/running.md) | Installing, updating, starting the bar (systemd user service or Hyprland config), config reload, rebuild and restart |
 | [docs/decisions.md](docs/decisions.md) | Every significant choice, with the alternatives and *why* |
@@ -39,6 +40,7 @@ We build it ourselves, not on a framework like Quickshell or AGS, because we wan
 - **Measure** RSS, idle CPU and binary size before and after any change that might affect them (dependencies, renderer, animation).
 - **Keep both architectures building:** aarch64 (Asahi) and x86_64 (CachyOS). No arch-specific code without a fallback.
 - **Plugins describe, the host draws.** Never give plugins colors, sizes, raw iced elements or control over layout. Extend the `ui` vocabulary in `eave-api` and render it in `crates/eave/src/kit.rs` instead.
+- **No new colors.** Black islands, white text, and brightness for hierarchy. Color is for signals (good, warning, critical) and for content (app icons, covers) only. Mark what's current the way [docs/design.md](docs/design.md) does, and reuse its springs and durations.
 - **Built-in widgets are plugins.** They use only the public `eave-api`. No private shortcuts into the host.
 - **Leave visual testing to the user.** Don't take screenshots or record the screen to judge how something looks or moves. Run the tests, start the bar, and ask the user to try it and tell you what they see.
 - **"Start the bar" means your worktree's bar.** When asked to start the bar (or run it, or show it), build and run it from the worktree you're working in, so the user sees your feature. Don't stop, restart or replace any other eave you find running: it may be another worktree's or the user's main bar. Just ignore them.

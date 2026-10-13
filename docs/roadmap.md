@@ -26,6 +26,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **5. Volume.** `plugins/volume` on `crates/eave-pulse`: the PulseAudio protocol served by pipewire-pulse ([D-19](decisions.md)). Scroll changes it, right click mutes, and the popover has −/+, mute and output switching.
 
 - [x] **6. Media.** `plugins/media` on `crates/eave-mpris`: any MPRIS player over the session bus. The track's cover in the bar, title and artist, right click to play or pause, scroll to skip; cover, seek bar, controls and players in the popover ([D-56](decisions.md)). Covers through a new `ui::cover`, from files or https ([D-57](decisions.md)).
+- [x] **6.5 Style.** Black and white, with color only as a signal or from the content. A soft white fill marks what's current, the slider is a line that thickens under the pointer, and a media popover takes its cover's color ([D-61](decisions.md), [design.md](design.md)).
 
 ## Next
 

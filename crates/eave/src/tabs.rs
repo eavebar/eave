@@ -216,7 +216,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
             let (font, tone) = if index == current {
                 (theme::STRONG_FONT, eave_api::ui::Tone::Accent)
             } else {
-                (Font::DEFAULT, eave_api::ui::Tone::Normal)
+                (Font::DEFAULT, eave_api::ui::Tone::Dim)
             };
             let Some(clip) = place.intersection(viewport) else {
                 continue;

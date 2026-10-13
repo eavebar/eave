@@ -121,6 +121,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/tabs.rs              tabs: a pill strip of names over the current page, which the host owns; pages hand over
   src/toggle.rs            toggle: a pill whose knob slides over
   src/meter.rs             meter: a thin bar eased to its value, with an optional limit tick
+  src/slider.rs            slider: a line with no knob that thickens under the pointer
   src/field.rs             text field box, its focus on appearing, and the focus query popovers use
   src/clip.rs              a line of text cut at its room, fading at the end
   src/ease.rs              a number eased to each new value on the frame clock

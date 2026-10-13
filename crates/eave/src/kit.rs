@@ -8,9 +8,7 @@
 use eave_api::erased::AnyMessage;
 use eave_api::ui::{Kind, Node, NoticeParts, Tone, Urgency};
 use iced::widget::scrollable::{self, Scrollbar};
-use iced::widget::{
-    Space, button, column, container, mouse_area, row, rule, slider, text, text_input,
-};
+use iced::widget::{Space, button, column, container, mouse_area, row, rule, text, text_input};
 use iced::{Background, Border, Color, Element, Font, Length, Padding, Theme, alignment};
 
 use crate::alternate::Alternate;
@@ -23,6 +21,7 @@ use crate::gulp::Gulp;
 use crate::icon;
 use crate::label::Label;
 use crate::meter::Meter;
+use crate::slider::Slider;
 use crate::switcher::Switcher;
 use crate::tabs::Tabs;
 use crate::theme;
@@ -33,9 +32,34 @@ pub fn node<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage
     render(node, Ctx::new(Place::Bar), icons)
 }
 
-/// A popover's content, laid out at the panel's width.
+/// A popover's content, laid out at the panel's width. When it shows a large cover with color in
+/// it, its sliders and main button take that color: the content's, never one a plugin picked
+/// (D-61).
 pub fn panel<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage> {
-    render(node, Ctx::new(Place::Panel), icons)
+    let content = large_cover(node.kind())
+        .and_then(|url| icons.covers.get(url))
+        .and_then(|cover| cover.as_ref()?.color());
+    let ctx = Ctx {
+        content,
+        ..Ctx::new(Place::Panel)
+    };
+    render(node, ctx, icons)
+}
+
+/// The URL of the first large cover in `kind`, if there is one.
+fn large_cover<M>(kind: &Kind<M>) -> Option<&str> {
+    fn first<M>(children: &[Node<M>]) -> Option<&str> {
+        children.iter().find_map(|child| large_cover(child.kind()))
+    }
+    match kind {
+        Kind::Cover {
+            url, large: true, ..
+        } => Some(url),
+        Kind::Row(children) | Kind::Column(children) | Kind::List(children) => first(children),
+        Kind::Grid { cells, .. } => first(cells),
+        Kind::Tabs(pages) => pages.iter().find_map(|(_, page)| large_cover(page.kind())),
+        _ => None,
+    }
 }
 
 /// Notifications' cards, newest first, as one popover's content, with a line between each and
@@ -271,6 +295,8 @@ struct Ctx {
     place: Place,
     /// Inside a `center`: text keeps to one line and is cut if it's too long.
     centered: bool,
+    /// The color of what the popover shows (its cover's), for its sliders and main button.
+    content: Option<Color>,
 }
 
 impl Ctx {
@@ -281,7 +307,14 @@ impl Ctx {
             text: Text::Body,
             place,
             centered: false,
+            content: None,
         }
+    }
+
+    /// What a slider's fill and a prominent button are filled with: the content's color, or
+    /// white.
+    fn fill(&self) -> Color {
+        self.content.unwrap_or(theme::ACCENT_FILL)
     }
 
     fn color(&self, tone: Option<Tone>) -> Color {
@@ -422,18 +455,18 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                     .padding([2, 8])
                     .style(bar_button_style)
             } else if only_icon && prominent {
-                // The one main action: a filled circle, a size up from the plain ones.
                 let inner = Ctx {
                     color: Some(theme::ON_ACCENT),
                     ..ctx
                 };
+                let fill = ctx.fill();
                 button(
                     container(render(*content, inner, icons))
-                        .center(Length::Fixed(theme::PROMINENT_ICON_BUTTON)),
+                        .center(Length::Fixed(theme::PROMINENT_BUTTON)),
                 )
                 .on_press(on_press)
                 .padding(0)
-                .style(prominent_icon_button_style)
+                .style(move |theme: &Theme, status| prominent_button_style(theme, status, fill))
             } else if only_icon {
                 button(
                     container(render(*content, ctx, icons))
@@ -448,11 +481,12 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                     color: prominent.then_some(theme::ON_ACCENT),
                     ..ctx
                 };
+                let fill = prominent.then(|| ctx.fill());
                 button(container(render(*content, inner, icons)).center_y(Length::Fill))
                     .on_press(on_press)
                     .height(theme::BUTTON_HEIGHT)
                     .padding([0, 14])
-                    .style(move |theme: &Theme, status| text_button_style(theme, status, prominent))
+                    .style(move |theme: &Theme, status| text_button_style(theme, status, fill))
             };
             match on_secondary {
                 Some(message) => mouse_area(button).on_right_press(message).into(),
@@ -576,21 +610,13 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             step,
             on_change,
             on_release,
-        } => {
-            let slider = slider(range, value, on_change)
-                .step(step)
-                .width(if ctx.panel() {
-                    Length::Fill
-                } else {
-                    Length::Fixed(80.0)
-                })
-                .height(16)
-                .style(slider_style);
-            match on_release {
-                Some(message) => slider.on_release(message).into(),
-                None => slider.into(),
-            }
-        }
+        } => Slider::new(value, range, step, on_change, on_release, ctx.fill())
+            .width(if ctx.panel() {
+                Length::Fill
+            } else {
+                Length::Fixed(80.0)
+            })
+            .into(),
         Kind::Toggle { on, on_toggle } => Toggle::new(on, on_toggle).into(),
         Kind::Meter {
             fraction,
@@ -634,15 +660,18 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
         ),
         Kind::Mark(content) => {
             let inner = Ctx {
-                color: Some(theme::ON_ACCENT),
+                tone: Tone::Accent,
                 text: Text::Strong,
                 ..ctx
             };
             container(render(*content, inner, icons))
                 .center(Length::Fixed(theme::MARK_SIZE))
                 .style(|_| container::Style {
-                    background: Some(Background::Color(theme::tone(Tone::Accent))),
-                    border: Border::default().rounded(theme::MARK_SIZE / 2.0),
+                    border: Border {
+                        color: theme::tone(Tone::Accent),
+                        width: theme::MARK_RING,
+                        radius: (theme::MARK_SIZE / 2.0).into(),
+                    },
                     ..container::Style::default()
                 })
                 .into()
@@ -736,11 +765,11 @@ struct ListItem {
     on_secondary: Option<AnyMessage>,
 }
 
-/// A row: leading icon, title over subtitle, then trailing at the far end. Selected rows take the
-/// accent: behind, in the icon, and in a heavier title.
+/// A row: leading icon, title over subtitle, then trailing at the far end. The selected row is
+/// lit: a soft white fill behind, a heavier title, and its icons at full white.
 fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMessage> {
     let background = if item.selected {
-        // The selected tint over the island, which is what a fading title fades into.
+        // The selected fill over the island, which is what a fading title fades into.
         let tint = theme::SELECTED_BG;
         Color::from_rgb(tint.r * tint.a, tint.g * tint.a, tint.b * tint.a)
     } else {
@@ -768,11 +797,7 @@ fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMess
         Clip::new(
             text(subtitle)
                 .size(theme::SMALL_SIZE)
-                .color(if item.selected {
-                    theme::SELECTED_SUBTITLE
-                } else {
-                    theme::tone(Tone::Dim)
-                })
+                .color(theme::tone(Tone::Dim))
                 .wrapping(text::Wrapping::None),
             background,
         )
@@ -894,30 +919,25 @@ fn icon_button_style(theme: &Theme, status: button::Status) -> button::Style {
     bar_button_style(theme, status)
 }
 
-/// The prominent icon button in a popover: an accent circle.
-fn prominent_icon_button_style(theme: &Theme, status: button::Status) -> button::Style {
-    button::Style {
-        border: Border::default().rounded(theme::PROMINENT_ICON_BUTTON / 2.0),
-        ..text_button_style(theme, status, true)
+/// How a filled button answers the pointer: a little dimmer hovered, more pressed.
+fn filled(fill: Color, status: button::Status) -> Color {
+    match status {
+        button::Status::Hovered => fill.scale_alpha(0.88),
+        button::Status::Pressed => fill.scale_alpha(0.76),
+        _ => fill,
     }
 }
 
 /// Text buttons in a popover: filled even at rest, so they read as buttons. A prominent one is
-/// filled with the accent.
-fn text_button_style(_: &Theme, status: button::Status, prominent: bool) -> button::Style {
-    let background = if prominent {
-        let accent = theme::tone(Tone::Accent);
-        match status {
-            button::Status::Hovered => accent.scale_alpha(0.88),
-            button::Status::Pressed => accent.scale_alpha(0.76),
-            _ => accent,
-        }
-    } else {
-        match status {
+/// filled with `prominent`: white, or the content's color.
+fn text_button_style(_: &Theme, status: button::Status, prominent: Option<Color>) -> button::Style {
+    let background = match prominent {
+        Some(fill) => filled(fill, status),
+        None => match status {
             button::Status::Hovered => theme::PRESSED_BG,
             button::Status::Pressed => theme::HOVER_BG,
             _ => theme::BUTTON_BG,
-        }
+        },
     };
     button::Style {
         background: Some(Background::Color(background)),
@@ -944,28 +964,13 @@ fn row_style(_: &Theme, status: button::Status, selected: bool) -> button::Style
     }
 }
 
-fn slider_style(_: &Theme, status: slider::Status) -> slider::Style {
-    let knob = match status {
-        slider::Status::Active => theme::tone(Tone::Normal),
-        slider::Status::Hovered | slider::Status::Dragged => Color::WHITE,
-    };
-    slider::Style {
-        rail: slider::Rail {
-            backgrounds: (
-                Background::Color(theme::tone(Tone::Accent)),
-                Background::Color(theme::TRACK),
-            ),
-            width: theme::SLIDER_RAIL,
-            border: Border::default().rounded(theme::SLIDER_RAIL / 2.0),
-        },
-        handle: slider::Handle {
-            shape: slider::HandleShape::Circle {
-                radius: theme::SLIDER_KNOB,
-            },
-            background: Background::Color(knob),
-            border_width: 0.0,
-            border_color: Color::TRANSPARENT,
-        },
+/// A prominent icon button (play and pause): a disc filled with `fill`.
+fn prominent_button_style(_: &Theme, status: button::Status, fill: Color) -> button::Style {
+    button::Style {
+        background: Some(Background::Color(filled(fill, status))),
+        text_color: theme::ON_ACCENT,
+        border: Border::default().rounded(theme::PROMINENT_BUTTON / 2.0),
+        ..button::Style::default()
     }
 }
 

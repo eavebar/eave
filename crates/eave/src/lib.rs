@@ -18,6 +18,7 @@ mod jelly;
 mod kit;
 mod label;
 mod meter;
+mod slider;
 mod slot;
 mod squircle;
 mod squish;
