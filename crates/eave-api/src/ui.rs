@@ -134,7 +134,7 @@ pub enum Kind<M> {
         content: Box<Node<M>>,
         on_press: M,
         on_secondary: Option<M>,
-        /// The main action of a popover page: filled with the accent.
+        /// The main action of a popover page: filled, so it stands out.
         prominent: bool,
     },
     Switcher {
@@ -479,7 +479,7 @@ pub fn display<M>(content: Node<M>) -> Node<M> {
     Node(Kind::Display(Box::new(content)))
 }
 
-/// Its content on a filled accent circle: today in a calendar.
+/// Its content marked with a ring: today in a calendar.
 pub fn mark<M>(content: Node<M>) -> Node<M> {
     Node(Kind::Mark(Box::new(content)))
 }
@@ -530,7 +530,7 @@ impl<M> Node<M> {
         self
     }
 
-    /// For a [`button`]: the main action of its page, filled with the accent. Other nodes ignore
+    /// For a [`button`]: the main action of its page, filled so it stands out. Other nodes ignore
     /// it.
     pub fn prominent(mut self) -> Self {
         if let Kind::Button { prominent, .. } = &mut self.0 {
