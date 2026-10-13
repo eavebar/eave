@@ -28,6 +28,7 @@ eave-battery = { workspace = true, optional = true }
 eave-clock = { workspace = true, optional = true }
 eave-keyboard = { workspace = true, optional = true }
 eave-network = { workspace = true, optional = true }
+eave-notifications = { workspace = true, optional = true }
 eave-volume = { workspace = true, optional = true }
 eave-window = { workspace = true, optional = true }
 eave-workspaces = { workspace = true, optional = true }
@@ -39,6 +40,7 @@ builtin = [
     "dep:eave-clock",
     "dep:eave-keyboard",
     "dep:eave-network",
+    "dep:eave-notifications",
     "dep:eave-volume",
     "dep:eave-window",
     "dep:eave-workspaces",

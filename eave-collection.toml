@@ -8,6 +8,7 @@ plugins = [
     "plugins/clock",
     "plugins/keyboard",
     "plugins/network",
+    "plugins/notifications",
     "plugins/volume",
     "plugins/window",
     "plugins/workspaces",
