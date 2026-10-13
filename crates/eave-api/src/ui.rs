@@ -76,6 +76,35 @@ pub enum Icon {
     Next,
 }
 
+/// Where a [`step`] of a [`timeline`] stands. The host draws it as the step's mark on the line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Mark {
+    /// Something said or noted along the way.
+    #[default]
+    Note,
+    /// What you did or said: where a stretch of steps starts.
+    You,
+    /// Under way.
+    Running,
+    /// Finished.
+    Done,
+    /// Finished, and it went wrong.
+    Failed,
+    /// Held up until you answer.
+    Waiting,
+}
+
+/// What a line of a [`diff`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    /// Unchanged, shown around the changes.
+    Context,
+    Added,
+    Removed,
+    /// Where the next stretch of changes is, like `@@ -88,7 +88,9 @@`.
+    Hunk,
+}
+
 /// A piece of UI. Build it with the functions in this module.
 pub struct Node<M>(Kind<M>);
 
@@ -227,6 +256,24 @@ pub enum Kind<M> {
         content: Box<Node<M>>,
         /// Keeps the end in view as content arrives there, like a chat.
         bottom: bool,
+    },
+    Literal {
+        text: String,
+        tone: Option<Tone>,
+    },
+    Divider {
+        text: String,
+    },
+    Timeline(Vec<Node<M>>),
+    Step {
+        mark: Mark,
+        /// Drawn on the line in place of the mark.
+        leading: Option<Box<Node<M>>>,
+        content: Box<Node<M>>,
+    },
+    Diff {
+        title: String,
+        lines: Vec<(Change, String)>,
     },
 }
 
@@ -562,6 +609,51 @@ pub fn scroll<M>(content: Node<M>) -> Node<M> {
     })
 }
 
+/// Text exactly as typed, not prose: a path, a command, a name in code. It doesn't wrap: when it
+/// doesn't fit, its end fades out.
+pub fn literal<M>(text: impl Into<String>) -> Node<M> {
+    Node(Kind::Literal {
+        text: text.into(),
+        tone: None,
+    })
+}
+
+/// A [`separator`] with a short caption in the middle of it, like the time between two turns of
+/// a conversation.
+pub fn divider<M>(text: impl Into<String>) -> Node<M> {
+    Node(Kind::Divider { text: text.into() })
+}
+
+/// Steps one after another, strung on a line: what someone did, in order. Each child is a
+/// [`step`], whose mark says where it stands; other nodes count as steps marked
+/// [`Mark::Note`].
+pub fn timeline<M>(steps: impl IntoIterator<Item = Node<M>>) -> Node<M> {
+    Node(Kind::Timeline(steps.into_iter().collect()))
+}
+
+/// One step of a [`timeline`]: `content`, marked on the line as `mark`. A
+/// [`leading`](Node::leading) node, like a small picture, stands on the line in place of the
+/// mark. Outside a timeline it's just its content.
+pub fn step<M>(mark: Mark, content: Node<M>) -> Node<M> {
+    Node(Kind::Step {
+        mark,
+        leading: None,
+        content: Box::new(content),
+    })
+}
+
+/// A change to a file, titled with its name: lines added, removed, and some unchanged ones around
+/// them. The host counts what was added and removed.
+pub fn diff<M>(
+    title: impl Into<String>,
+    lines: impl IntoIterator<Item = (Change, String)>,
+) -> Node<M> {
+    Node(Kind::Diff {
+        title: title.into(),
+        lines: lines.into_iter().collect(),
+    })
+}
+
 /// Its text, large: the one number a popover is about, like a battery's charge.
 pub fn display<M>(content: Node<M>) -> Node<M> {
     Node(Kind::Display(Box::new(content)))
@@ -643,9 +735,10 @@ impl<M> Node<M> {
         self
     }
 
-    /// For a [`list_item`]: an icon before the title. Other nodes ignore it.
+    /// For a [`list_item`]: an icon before the title. For a [`step`]: a small picture on the line,
+    /// in place of its mark. Other nodes ignore it.
     pub fn leading(mut self, node: Node<M>) -> Self {
-        if let Kind::ListItem { leading, .. } = &mut self.0 {
+        if let Kind::ListItem { leading, .. } | Kind::Step { leading, .. } = &mut self.0 {
             *leading = Some(Box::new(node));
         }
         self
@@ -761,6 +854,7 @@ impl<M> Node<M> {
             | Kind::Meter { tone, .. }
             | Kind::TextInput { tone, .. }
             | Kind::Markdown { tone, .. }
+            | Kind::Literal { tone, .. }
             | Kind::Badge { tone, .. } => {
                 tone.get_or_insert(new);
             }
@@ -776,8 +870,15 @@ impl<M> Node<M> {
             | Kind::Grid {
                 cells: children, ..
             }
-            | Kind::List(children) => {
+            | Kind::List(children)
+            | Kind::Timeline(children) => {
                 children.iter_mut().for_each(|child| child.set_tone(new));
+            }
+            Kind::Step {
+                leading, content, ..
+            } => {
+                leading.iter_mut().for_each(|child| child.set_tone(new));
+                content.set_tone(new);
             }
             Kind::Button { content, .. }
             | Kind::Gulp(content)
@@ -805,6 +906,8 @@ impl<M> Node<M> {
                     .for_each(|(child, _)| child.set_tone(new));
             }
             Kind::Separator
+            | Kind::Divider { .. }
+            | Kind::Diff { .. }
             | Kind::Empty
             | Kind::Section { .. }
             | Kind::Header { .. }
@@ -1018,6 +1121,19 @@ impl<M> Node<M> {
                 content: Box::new(content.map(f)),
                 bottom,
             },
+            Kind::Literal { text, tone } => Kind::Literal { text, tone },
+            Kind::Divider { text } => Kind::Divider { text },
+            Kind::Timeline(steps) => Kind::Timeline(map_all(steps)),
+            Kind::Step {
+                mark,
+                leading,
+                content,
+            } => Kind::Step {
+                mark,
+                leading: map_box(leading),
+                content: Box::new(content.map(f)),
+            },
+            Kind::Diff { title, lines } => Kind::Diff { title, lines },
         })
     }
 
@@ -1672,6 +1788,69 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn timelines_map_and_tone_their_steps() {
+        let node = timeline([
+            step(Mark::You, label("a")),
+            step(Mark::Failed, button(literal("b"), 1)).leading(icon(Icon::Check)),
+            label("c"),
+        ])
+        .tone(Tone::Dim)
+        .map(&|n: i32| n * 10);
+        let Kind::Timeline(steps) = node.into_kind() else {
+            panic!("timeline became something else");
+        };
+        let mut steps = steps.into_iter().map(Node::into_kind);
+        let Some(Kind::Step {
+            mark: Mark::You,
+            leading: None,
+            content,
+        }) = steps.next()
+        else {
+            panic!("first step lost");
+        };
+        assert!(matches!(
+            content.into_kind(),
+            Kind::Label {
+                tone: Some(Tone::Dim),
+                ..
+            }
+        ));
+        let Some(Kind::Step {
+            mark: Mark::Failed,
+            leading: Some(leading),
+            content,
+        }) = steps.next()
+        else {
+            panic!("second step lost its picture");
+        };
+        assert!(matches!(
+            leading.into_kind(),
+            Kind::Icon {
+                tone: Some(Tone::Dim),
+                ..
+            }
+        ));
+        let Kind::Button {
+            content,
+            on_press: 10,
+            ..
+        } = content.into_kind()
+        else {
+            panic!("button lost its message");
+        };
+        assert!(matches!(
+            content.into_kind(),
+            Kind::Literal {
+                tone: Some(Tone::Dim),
+                ..
+            }
+        ));
+        assert!(matches!(steps.next(), Some(Kind::Label { .. })));
+        let node: Node<()> = diff("f", [(Change::Added, "x".to_string())]).leading(label("y"));
+        assert!(matches!(node.into_kind(), Kind::Diff { lines, .. } if lines.len() == 1));
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! things to the end. The bar has no width to give, so those collapse to their content.
 
 use eave_api::erased::AnyMessage;
-use eave_api::ui::{Kind, Node, NoticeParts, Tone, Urgency};
+use eave_api::ui::{Kind, Mark, Node, NoticeParts, Tone, Urgency};
 use iced::widget::scrollable::{self, Scrollbar};
 use iced::widget::{Space, button, column, container, mouse_area, row, rule, text, text_input};
 use iced::{Background, Border, Color, Element, Font, Length, Padding, Size, Theme, alignment};
@@ -14,6 +14,7 @@ use iced::{Background, Border, Color, Element, Font, Length, Padding, Size, Them
 use crate::alternate::Alternate;
 use crate::apps::{FileKey, Icons, Wanted};
 use crate::clip::{Clip, Fold};
+use crate::code;
 use crate::countdown::Countdown;
 use crate::counter::Counter;
 use crate::field::Field;
@@ -28,6 +29,7 @@ use crate::switcher::Switcher;
 use crate::tabs::Tabs;
 use crate::text_area::TextArea;
 use crate::theme;
+use crate::timeline;
 use crate::toggle::Toggle;
 
 /// A node in the bar.
@@ -303,7 +305,18 @@ pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
         | Kind::TextInput { trailing, .. }
         | Kind::TextArea { trailing, .. } => all(trailing.into_iter().map(|node| *node).collect()),
         Kind::Scroll { content, .. } => all(vec![*content]),
+        Kind::Timeline(steps) => all(steps),
+        Kind::Step {
+            leading, content, ..
+        } => all(leading
+            .into_iter()
+            .map(|node| *node)
+            .chain([*content])
+            .collect()),
         Kind::Markdown { .. }
+        | Kind::Literal { .. }
+        | Kind::Divider { .. }
+        | Kind::Diff { .. }
         | Kind::Label { .. }
         | Kind::Heading { .. }
         | Kind::Icon { .. }
@@ -583,6 +596,57 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             Switcher::new(row(options).spacing(theme::SPACING / 2), current).into()
         }
         Kind::Separator => separator(),
+        Kind::Divider { text: caption } => {
+            let caption = text(caption)
+                .size(theme::SMALL_SIZE)
+                .color(theme::tone(Tone::Dim));
+            row![separator(), caption, separator()]
+                .spacing(theme::SPACING + 2)
+                .align_y(alignment::Vertical::Center)
+                .into()
+        }
+        // One line, as typed: a long one fades out at the end.
+        Kind::Literal {
+            text: content,
+            tone,
+        } => Clip::new(
+            text(content)
+                .font(theme::MONO_FONT)
+                .size(theme::SMALL_SIZE)
+                .color(ctx.color(tone))
+                .wrapping(text::Wrapping::None),
+            theme::ISLAND_BG,
+        )
+        .into(),
+        Kind::Timeline(steps) => timeline::view(
+            steps
+                .into_iter()
+                .map(|node| {
+                    if !matches!(node.kind(), Kind::Step { .. }) {
+                        return timeline::Step {
+                            mark: Mark::Note,
+                            leading: None,
+                            content: render(node, ctx, icons),
+                        };
+                    }
+                    let Kind::Step {
+                        mark,
+                        leading,
+                        content,
+                    } = node.into_kind()
+                    else {
+                        unreachable!()
+                    };
+                    timeline::Step {
+                        mark,
+                        leading: leading.map(|node| render(*node, ctx, icons)),
+                        content: render(*content, ctx, icons),
+                    }
+                })
+                .collect(),
+        ),
+        Kind::Step { content, .. } => render(*content, ctx, icons),
+        Kind::Diff { title, lines } => code::diff(Some(title), lines, ""),
         Kind::Empty => text("").into(),
         Kind::Fill if ctx.panel() => Space::new().width(Length::Fill).into(),
         Kind::Fill => Space::new().into(),
