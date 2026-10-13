@@ -56,7 +56,8 @@ builtin = [
 ]
 # GPU renderer (wgpu), the default since D-67; tiny-skia stays as fallback, and is what
 # `renderer = "cpu"` in config.toml picks. Without this feature the bar is CPU-only.
-gpu = ["iced/wgpu"]
+# web-colors: wgpu blends in sRGB like tiny-skia, so translucent grays match on both (D-68).
+gpu = ["iced/wgpu", "iced/web-colors"]
 
 [[bin]]
 name = "eave"

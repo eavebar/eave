@@ -62,6 +62,8 @@ Each entry records what we chose, what else we considered, and **why**. When a d
 
 `iced` uses `default-features = false` with only `tiny-skia`, `wayland`, `tokio` and `crisp`.
 
+**Update (2026-10-13):** `web-colors` came back with the `gpu` feature. Dropping it made the GPU blend in linear light, so its grays didn't match tiny-skia's ([D-68](#d-68-the-gpu-blends-in-srgb-like-tiny-skia-web-colors)). The rest of this decision stands.
+
 **Why:** the defaults include `wgpu`, `x11`, `thread-pool`, `web-colors` and `linux-theme-detection`. We don't support X11 ([vision.md](vision.md#non-goals)). `tokio` is our async runtime, so the thread pool is redundant. Theme detection is pointless since the bar has its own theme. Each removed feature means less to compile, a smaller binary and fewer dependencies.
 
 ---
@@ -1425,3 +1427,15 @@ The icons are theme names (`battery-caution`, `battery-full-charged`). `notify =
 - **CPU by default, GPU opt-in:** most users would never find out their popovers can be smooth.
 
 **Revisit if:** the GPU's memory grows past the numbers above, or a target's driver turns out unreliable. Then make `cpu` the default there.
+
+---
+
+## D-68: The GPU blends in sRGB, like tiny-skia (`web-colors`)
+
+**Status:** accepted (2026-10-13). Amends [D-5](#d-5-minimal-iced-feature-set).
+
+**Problem:** with the GPU renderer ([D-67](#d-67-the-gpu-renders-by-default-renderer--cpu-in-configtoml)), borders, the tab mark, hover backgrounds and other grays looked brighter than on tiny-skia. They are all translucent white over a black island (`theme.rs`), and D-5 had dropped iced's `web-colors` feature. Without it, iced_wgpu draws to an sRGB surface and blends in linear light. tiny-skia blends in sRGB, which is what the palette was tuned on. White at α 0.08 over black is ~20/255 on the CPU but ~80/255 on the GPU. Opaque colors came out the same, so only the grays (and anti-aliased edges) differed.
+
+**What:** the `gpu` feature turns on `iced/web-colors`. iced_wgpu then packs colors as they are, picks a non-sRGB surface format, and blends in sRGB, the same as tiny-skia and the web. It only touches iced_wgpu, so CPU-only builds don't change.
+
+**Alternative:** a second set of alpha values for the GPU. Two palettes to keep in step, and anti-aliased edges and text would still disagree.
