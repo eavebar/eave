@@ -63,6 +63,10 @@ pub enum Icon {
     Display,
     /// A bell: notifications, struck through when they're silenced.
     Bell { muted: bool },
+    /// A sun whose rays light up with the level: a screen's brightness.
+    Brightness { level: f32 },
+    /// A keyboard: its backlight.
+    KeyboardLight,
     /// Three level bars, like an equalizer: media. Uneven while `playing`, low and level when
     /// not.
     Media { playing: bool },
