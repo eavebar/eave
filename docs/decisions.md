@@ -536,7 +536,7 @@ Both new watchers publish through a `tokio::sync::watch` channel, so every widge
   - *Superseded on the way:* a hump confined to the straight part of the edge. Clamped clear of the corners, it slid away from an item near the island's end. Cut short on the corner side instead, it stayed over the item but rose steeply on that side.
   The whole island also moves about half a pixel the same way (one physical pixel at scale 2).
   The nudged item rides along with its bump, by `NUDGE_ITEM_FOLLOW` (half) of it. *Superseded by the jelly below, which gives the same half by itself.*
-- **`Left` / `Right`:** the whole island travels about 5 px that way and comes back.
+- **`Left` / `Right`:** the whole island travels about 5 px that way and comes back. *Later* (2026-10-13): the item that nudged also gets a push of its own, `NUDGE_KICK_SPEED`, about 2.5 px further than its island, on its own spring (`ItemMotion::kick`, at the nudge's pace). So what changed, like the next track's cover or the active workspace, moves a little more than the rest. It squishes as it goes, `NUDGE_KICK_SQUISH` (3 %) narrower and half that taller per pixel out, about 7 % narrower at the furthest, as if it bumped into where it's going (`Motion::kicked`, through the same per-item squish as the jelly).
 - **The outline is a jelly** (2026-10-13, `jelly.rs`). It is a ring of springs all the way round the island's edge: 24 across the top and bottom, 6 down each side, each one how far out (or in) its piece of the edge is. Each is pulled back to 0 (`JELLY_STIFFNESS` 600, `JELLY_DAMPING` 0.85, the NUDGE feel) and toward its neighbors (`JELLY_COUPLING` 1400). The pull toward the neighbors does the smoothing. A nudge just pokes the ring with velocity kicks, and the ring spreads the poke along the edge and round the corners into a soft curve, then settles flat. Nothing that pokes it decides what curve it makes. The ring is drawn by warping the squircle through it: each side moves the points near it, eased out over half the shape's short way, and the ring is sampled smoothly between springs (Catmull-Rom).
   - **Up / down:** the edge over the item is kicked in a raised cosine `NUDGE_BUMP_WIDTH` wide (`JELLY_BUMP`, peaks about 2 px). `NUDGE_BUMP_WIDTH` went 64 → 112 → 176 px (2026-10-13): the user wanted the bump smoother and larger, then wider still. Wider kicks still peak about 2.1 px (2.05 before), since kicks bring springs up to their speed rather than add, so it's a gentler slope, not a taller one. Both sides are kicked to lean the same way (`JELLY_LEAN`), so the edge it's going toward widens, about 1.3 px each side.
   - **Left / right:** the top and bottom are kicked to lean (`JELLY_LEAN`, a sine from the end it's leaving to the end it's going toward). The leading end swells about 1.6 px each way, so it's about 3 px taller, and the trailing end flattens as much.
@@ -1019,7 +1019,7 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 - **A path to a file installed beside the binary:** the bar is one binary (D-12), and a missing file would be a new way to fail.
 - **Asking users to install the icon in their theme** (what eave-claude's README said): most never do, and the bar showed a C.
 - **iced's `svg` feature:** rejected in D-38 for its size and for drawing on the UI thread.
-- **Bytes taken at runtime (`Vec<u8>`), e.g. notification images:** the host would have to hash or compare them on every view to know them again. That's for later, with its own decision, if notification images come. *Later:* runtime pictures came as `ui::cover`, keyed by URL instead of by bytes ([D-56](#d-56-runtime-pictures-uicover-loaded-by-the-host-from-files-or-https)).
+- **Bytes taken at runtime (`Vec<u8>`), e.g. notification images:** the host would have to hash or compare them on every view to know them again. That's for later, with its own decision, if notification images come. *Later:* runtime pictures came as `ui::cover`, keyed by URL instead of by bytes ([D-57](#d-57-runtime-pictures-uicover-loaded-by-the-host-from-files-or-https)).
 
 **Measured** (Asahi, release, two clocks, 8 s after start then 10 s windows, three alternating runs each): binary 9,465,184 → 9,530,720 bytes (+64 KiB). RSS 14.6–14.7 MB with it, 14.8 MB without, and 1–2 ticks per 10 s on both. No new dependencies: resvg, tiny-skia's PNG decoding and iced's `image-without-codecs` were already in for D-38.
 
@@ -1097,6 +1097,9 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
   - `show = "hover"` shows the text only while hovered, and `show = "icon"` never shows it.
   - Right click plays or pauses, and the status changes at once, before the player confirms it. Scrolling skips tracks, and a skip nudges `Right` or `Left` when the player reports the new track, not when the request is sent.
   - The popover has a large cover, the title, artist and album, a seek bar, previous, play/pause and next, and a list of players when there are several.
+  - *Later:* every track change on the followed player nudges, not only skips from the bar. MPRIS doesn't say which way a change went, so the plugin keeps the tracks the player went through (`Tracks`, by title alone: Chrome gives every track the same id, and sends a new track's title a moment before its artist). Going to the one before is `Left`, and going to the one after, or a new one, is `Right`, like a browser's history. That holds for media keys and the player's own buttons too. A skip back from the bar to a track it hasn't seen yet still goes `Left` (`SKIP_LANDS`, 3 s, since a skip back that only restarts the track brings none). A gap between tracks has no title and doesn't count. *Superseded:* every change the bar didn't ask for went `Right`, so going back with a media key nudged the wrong way.
+  - *Later:* players go stopped with no track for a moment between songs, and the item used to vanish for that moment. Now the last track stays on screen for `GAP` (1 s) after the player has nothing to show, and the next track takes over from it. A player that really stops hides a second later.
+  - *Later* ([D-59](#d-59-uicenter-and-a-centered-media-popover)): the popover is centered. The cover, title and "artist · album" sit in the middle, cut rather than wrapped, and play/pause is a filled circle between previous and next.
 - **New `Icon`s:** `Media { playing }` (three level bars), `Play`, `Pause`, `Previous`, `Next`.
 
 **The bars don't dance.** At first `Icon::Media` danced while playing, frame by frame like the charging battery (D-37). Measured on the full bar (workspaces, media, volume, network, battery, clock) with a player playing, in ticks per 10 s (100 is one core):
@@ -1146,7 +1149,7 @@ Binary: 9,530,720 bytes on `main`. The plugin and `eave-mpris` add 459 KB, makin
   - Files and downloads are capped at 8 MB, and pictures at 4096 px a side.
 - **Decoding:** PNG through tiny-skia, which was already in the build for icons. JPEG through `zune-jpeg` (pure Rust, no default features), the format most covers come in.
 - **Drawing:** the middle square is cropped (a video's 16:9 thumbnail shows its middle), shrunk by averaging, and given rounded corners. This is done twice, at 32 px for the icon and 256 px for the popover, and only those bitmaps are kept (~4 KB and ~256 KB). Smaller pictures aren't enlarged when drawn; the renderer scales them.
-- **Fallback:** it shows until the cover is there, and in its place if the cover can't be had. Media uses the player's app icon (Spotify, Firefox, mpv), so a missing or slow cover never leaves a hole. In the popover the fallback is `empty()`: the popover springs to the cover's size when it arrives.
+- **Fallback:** it shows until the cover is there, and in its place if the cover can't be had. Media uses the player's app icon (Spotify, Firefox, mpv), so a missing or slow cover never leaves a hole. In the popover the fallback is `empty()`: the popover springs to the cover's size when it arrives. *Later:* between tracks, media keeps the last cover instead of its app icon (`Art`). Chrome sends a new track before its cover, and the icon flashed in between. The fallback of a new cover is now the covers before it, nested (`cover(new, cover(older, cover(oldest, icon)))`, the last `COVERS_TRIED` = 3), which the host still has, since a fallback's cover is wanted too. The first one there shows. One isn't enough: Chrome writes each cover to a temporary file and deletes it as soon as it writes the next, two or three times a track within ~40 ms, so the one just before is often a file that was gone before it could be read. A track sent with no cover keeps the last one for `GAP` (1 s), then shows the icon.
 - **Cache:** past 4 covers, the ones not on screen are dropped.
 
 **Alternatives:**
@@ -1169,3 +1172,57 @@ RSS and CPU are in D-56: a cover costs about 1 MB of RSS whether it came from a 
 **Cost:**
 - This is the first time the bar reaches the network. The URLs come from programs on the user's own session bus.
 - https is most of the binary growth (+1.5 MB, 16%). It's worth revisiting if a lighter TLS stack appears, or if Spotify starts handing over local files.
+
+---
+
+## D-58: A collapsed item that nudges comes out for a moment
+
+**Status:** accepted (2026-10-13). Extends [D-55](#d-55-several-islands-per-zone-collapsible-items-and-dividers-set-in-configtoml) and [D-32](#d-32-plugins-can-nudge-their-island).
+
+**What:** when a widget whose item is collapsed asks for a nudge, the host shows that item (only that one, not the island's other collapsible items) for `REVEAL_SHOWN` (2 s) after the last nudge, then hides it again. Raising the volume with a collapsed volume item shows the new level. Each instance remembers which reveal shows it (`Instance::revealed`, numbered by `Bar::reveals`), and a timer per reveal sends `Unreveal(id, reveal)`. Only the last one counts, so every nudge keeps it out longer. While the item's popover is open it stays out, and the timer starts again when it fires. Expanding the island makes reveals moot and clears them.
+
+**Why the nudge is the signal:** a nudge already means "what this item shows just changed, and it's worth seeing". Every widget that nudges (volume, media tracks, a future brightness) gets the reveal with no new API, and widgets don't need to know whether they're collapsed. The item comes and goes through the island's morph (D-27), the same motion as pressing the chevron.
+
+**Alternatives:**
+- **`Effect::reveal()`:** an explicit request, separate from the motion. It's more API for what is, so far, always said together with a nudge. It can still be added if a widget ever needs one without the other.
+- **Expanding the whole island:** shows items that didn't change, and pulls the chevron's state into a timer.
+
+**Cost:** one sleeping task per nudge from a collapsed item. Nothing polls.
+
+---
+
+## D-59: `ui::center` and a centered media popover
+
+**Status:** accepted (2026-10-13). Extends [D-40](#d-40-a-popover-vocabulary-lists-sections-controls-one-panel-width) and [D-56](#d-56-media-over-mpris-in-eave-mpris-on-the-session-bus).
+
+**What:** the media popover was a plain column, with everything on its left. Long titles wrapped onto several lines, the player's name showed twice for a track with no title, and `.prominent()` did nothing on the icon-only play button. Now:
+- **`ui::center(node)`** centers `node` across the panel's width (`container(..).center_x(Fill)`). In the bar it's just `node`. Labels inside it keep to one line and are cut and faded at the edge (`Clip`, which is only as wide as its text, so short text centers).
+- **A `heading` in a popover keeps to one line**, cut like the header's title. Every heading so far is a title, and a two-line title pushed the panel taller as tracks changed.
+- **A prominent icon button** is a filled accent circle, `PROMINENT_ICON_BUTTON` (36 px), with the icon in `ON_ACCENT`.
+- **The media popover** is the header with the player's name, then the cover, the title and "artist · album" centered, the seek bar, and previous, play/pause and next centered, play/pause prominent. The player list follows as before.
+
+**Alternatives:**
+- **An alignment option on `column`:** it would center everything in it, the seek bar's times and the player list included, so a popover would need columns inside columns. `center` wraps just what should be centered.
+- **Cover beside the text:** more compact, but the cover is the popover's picture. The centered layout was picked.
+
+**Cost:** none measurable. One `container` per centered node while the popover is open.
+
+---
+
+## D-60: Live islands, set on the island marker
+
+**Status:** accepted (2026-10-13). Extends [D-55](#d-55-several-islands-per-zone-collapsible-items-and-dividers-set-in-configtoml) and [D-26](#d-26-squircle-islands-that-squeeze-and-spring-back).
+
+**What:** `live = true` beside `island = true` makes that island a live one. For now that only changes its shape:
+- **Snug:** `LIVE_ISLAND_PADDING` (4 px) at its ends instead of `ISLAND_PADDING` (14), and never narrower than it is tall. An island of one icon is about 36 × 30, nearly round.
+- **Rounder:** `LIVE_ISLAND_RADIUS`, half the island's height, with the same smoothing, so it's still a squircle. As it grows into a popover the radius eases back to `ISLAND_RADIUS` over the first island height, so its panel looks like any other.
+
+A marker before the zone's first item sets the first island, so no island has to be empty to be live. `live` that isn't a boolean is warned about and ignored. Every entry of the island carries `live` (`Entry::live`), and the view reads it the way it reads `collapsible`. The island rebuilds its cached shape when it changes.
+
+**Why a property of the island, not a shape flag:** "live" is meant to grow. A live island is one showing something happening now, and it may get more behaviour later. The shape is only the first thing it changes.
+
+**Alternatives:**
+- **`live = true` on an item,** making its island live: like `collapsible`. But it describes the island, and with several items it would be unclear which one decides.
+- **Settable padding and radius:** more knobs than anyone needs, and it makes the look the config's, not the host's (D-13).
+
+**Cost:** none. One more branch in layout and drawing.

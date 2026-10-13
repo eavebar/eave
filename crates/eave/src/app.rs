@@ -66,6 +66,9 @@ pub struct Bar {
     alarm: Option<Instant>,
     /// Islands showing their collapsible items. The rest start, and stay, collapsed.
     expanded: Vec<IslandId>,
+    /// How many times a collapsed item has come out on its own, so only the last timer of each
+    /// puts it back.
+    reveals: u64,
 }
 
 /// One island: its zone, and which of the zone's islands it is, counted in bar order.
@@ -90,6 +93,9 @@ struct Instance {
     window: Option<window::Id>,
     /// The last nudge it asked for, numbered by [`Bar::nudges`].
     nudge: Option<(u64, NudgeRequest)>,
+    /// While a collapsed item shows because its widget nudged: which reveal, numbered by
+    /// [`Bar::reveals`].
+    revealed: Option<u64>,
 }
 
 impl Instance {
@@ -193,6 +199,8 @@ pub enum Message {
     NoticesHovered(bool),
     /// The expiry timer with this number went off.
     ToastTimer(u64),
+    /// A collapsed item's time out is up, if this is still its last reveal.
+    Unreveal(u64, u64),
     /// A bar surface opened: it takes the pointer only over its strip.
     WindowOpened(window::Id),
     WindowClosed(window::Id),
@@ -227,6 +235,7 @@ impl Bar {
             timer: 0,
             alarm: None,
             expanded: Vec::new(),
+            reveals: 0,
         };
         let task = bar.apply(config);
         (bar, task)
@@ -270,6 +279,7 @@ impl Bar {
                         widget,
                         window: None,
                         nudge: None,
+                        revealed: None,
                     });
                 }
                 Err(error) => eprintln!("eave: widget `{}`: {error}, skipping it", entry.widget),
@@ -444,6 +454,25 @@ impl Bar {
 
     fn is_open(&self) -> bool {
         self.popovers.iter().any(|popover| popover.open)
+    }
+
+    /// Brings a collapsed item out for [`style::REVEAL_SHOWN`], or keeps it out that long again.
+    /// Nothing to do for one that shows anyway.
+    fn reveal(&mut self, id: u64) -> Task<Message> {
+        let Some(instance) = self.instances.iter().find(|instance| instance.id == id) else {
+            return Task::none();
+        };
+        if !instance.entry.collapsible || self.expanded.contains(&instance.island()) {
+            return Task::none();
+        }
+        self.reveals += 1;
+        let reveal = self.reveals;
+        if let Some(instance) = self.find_mut(id) {
+            instance.revealed = Some(reveal);
+        }
+        // Built inside the future: a tokio timer needs the runtime, which only runs tasks.
+        let sleep = async { tokio::time::sleep(style::REVEAL_SHOWN).await };
+        Task::perform(sleep, move |_| Message::Unreveal(id, reveal))
     }
 
     fn popover_of(&self, id: u64) -> Option<&Popover> {
@@ -765,12 +794,15 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             instance.has_popover = instance.widget.popover().is_some();
             let has_popover = instance.has_popover;
             bar.sync_notices(id);
+            let mut reveal = Task::none();
             if let Some(nudge) = nudge {
                 bar.nudges += 1;
                 let generation = bar.nudges;
                 if let Some(instance) = bar.find_mut(id) {
                     instance.nudge = Some((generation, nudge));
                 }
+                // Something happened worth showing: a collapsed item comes out for a while.
+                reveal = bar.reveal(id);
             }
 
             let popover = match request {
@@ -783,6 +815,7 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             Task::batch([
                 task.map(move |message| Message::Widget(id, message)),
                 send(popover),
+                reveal,
             ])
         }
         Message::Pressed(window, id, on_press) => {
@@ -829,6 +862,11 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         // Clicks on our own surfaces are handled where they land.
         Message::BarPressed => send(bar.close_popover()),
         Message::ToggleCollapse(island) => {
+            for instance in &mut bar.instances {
+                if instance.island() == island {
+                    instance.revealed = None;
+                }
+            }
             match bar.expanded.iter().position(|expanded| *expanded == island) {
                 Some(position) => {
                     bar.expanded.remove(position);
@@ -906,6 +944,18 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             }
         }
         Message::ToastTimer(timer) if timer == bar.timer => send(bar.expire(Instant::now())),
+        Message::Unreveal(id, reveal) => {
+            // Its popover is open: it stays out until that closes, and a while after.
+            if bar.popover_of(id).is_some() {
+                return bar.reveal(id);
+            }
+            if let Some(instance) = bar.find_mut(id)
+                && instance.revealed == Some(reveal)
+            {
+                instance.revealed = None;
+            }
+            Task::none()
+        }
         Message::WindowOpened(window) => {
             if !bar.windows.contains(&window) {
                 bar.windows.push(window);
@@ -959,7 +1009,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         let mut items = Vec::new();
         let mut groups = Vec::new();
         for instance in instances() {
-            if instance.entry.collapsible && !expanded {
+            if instance.entry.collapsible && !expanded && instance.revealed.is_none() {
                 continue;
             }
             let Some(item) = item_view(instance, window, &bar.icons) else {
@@ -1012,6 +1062,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                 .nudges(nudges)
                 .width_groups(groups)
                 .toggle(toggle)
+                .live(instances().any(|instance| instance.entry.live))
                 .into(),
         )
     };
@@ -1706,6 +1757,57 @@ mod tests {
         let _ = update(&mut bar, Message::ToggleCollapse(island));
         let _ = update(&mut bar, Message::ToggleCollapse(island));
         assert!(bar.expanded.is_empty());
+    }
+
+    struct Nudger;
+
+    impl Widget for Nudger {
+        type Config = toml::Table;
+        type Message = ();
+
+        fn new(_: Self::Config) -> (Self, eave_api::Task<()>) {
+            (Self, eave_api::Task::none())
+        }
+
+        fn update(&mut self, _: ()) -> Effect<()> {
+            Effect::none().nudge(eave_api::Nudge::Up)
+        }
+
+        fn item(&self) -> eave_api::ui::Item<()> {
+            eave_api::ui::Item::new(label("nudger"))
+        }
+    }
+
+    #[test]
+    fn a_collapsed_item_that_nudges_comes_out_until_its_last_reveal_is_up() {
+        let mut registry = Registry::new();
+        registry.widget::<Nudger>("a");
+        let source = "[[left]]\nwidget = \"a\"\ncollapsible = true";
+        let (mut bar, _) = Bar::new(registry, config(source));
+        let nudge = |bar: &mut Bar| {
+            let _ = update(bar, Message::Widget(0, AnyMessage::new(())));
+        };
+        assert_eq!(bar.instances[0].revealed, None);
+
+        nudge(&mut bar);
+        let first = bar.instances[0].revealed.expect("it comes out");
+        nudge(&mut bar);
+        let second = bar.instances[0].revealed.unwrap();
+        assert_ne!(first, second);
+        let _ = update(&mut bar, Message::Unreveal(0, first));
+        assert_eq!(
+            bar.instances[0].revealed,
+            Some(second),
+            "a later nudge keeps it out"
+        );
+        let _ = update(&mut bar, Message::Unreveal(0, second));
+        assert_eq!(bar.instances[0].revealed, None);
+
+        // An expanded island shows it anyway.
+        let island = bar.instances[0].island();
+        let _ = update(&mut bar, Message::ToggleCollapse(island));
+        nudge(&mut bar);
+        assert_eq!(bar.instances[0].revealed, None);
     }
 
     #[test]

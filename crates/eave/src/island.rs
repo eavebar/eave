@@ -52,6 +52,8 @@ pub struct Island<'a, M> {
     /// Where the toggle is, and whether the collapsible items show.
     toggle_side: Horizontal,
     expanded: bool,
+    /// A live island: snug around its items and rounder.
+    live: bool,
 }
 
 /// The control at one end of an island that shows and hides its collapsible items: there while
@@ -98,7 +100,15 @@ impl<'a, M> Island<'a, M> {
             toggle: None,
             toggle_side: Horizontal::Right,
             expanded: false,
+            live: false,
         }
+    }
+
+    /// Makes it a live island: less room at its ends and rounder corners, so one item in it is
+    /// nearly round. Still a squircle. Its popover panel is like any other.
+    pub fn live(mut self, live: bool) -> Self {
+        self.live = live;
+        self
     }
 
     pub fn align(mut self, align: Horizontal) -> Self {
@@ -175,6 +185,8 @@ struct State {
     /// Whether the last layout made room for the toggle. A hidden one is still laid out, but
     /// takes no room and gets no events.
     toggle_shown: bool,
+    /// Whether it's a live island, so `shape` is rebuilt when that changes.
+    live: bool,
 }
 
 /// How a spring moves: how hard it pulls toward its target, and its damping ratio (below 1 it
@@ -354,6 +366,8 @@ struct ItemMotion {
     key: u64,
     x: Spring,
     shown: Spring,
+    /// How far its own sideways nudge moves it, on top of the island's push.
+    kick: Spring,
 }
 
 #[derive(Debug)]
@@ -453,7 +467,9 @@ impl Motion {
                 && self.press.is_none()
                 && !self.popover.present
             {
-                self.nudge(nudge.into(), center(key));
+                let request = nudge.into();
+                self.nudge(request, center(key));
+                self.kick(key, request.nudge);
             }
         }
         self.seen = Some(newest);
@@ -588,6 +604,7 @@ impl Motion {
                         target: 1.0,
                         ..Spring::new(0.0, MORPH)
                     },
+                    kick: Spring::new(0.0, NUDGE),
                 }),
             }
         }
@@ -761,14 +778,29 @@ impl Motion {
     }
 
     /// The springs a nudge moves, which run at its pace.
-    fn paced(&mut self) -> [&mut Spring; 2] {
+    fn paced(&mut self) -> impl Iterator<Item = &mut Spring> {
         [&mut self.push_x, &mut self.push_y]
+            .into_iter()
+            .chain(self.items.iter_mut().map(|item| &mut item.kick))
+    }
+
+    /// Sends the item that nudged sideways a little further than its island, so what changed
+    /// (the cover of the next track, the active workspace) gets a push of its own.
+    fn kick(&mut self, key: u64, nudge: Nudge) {
+        let way = match nudge {
+            Nudge::Left => -1.0,
+            Nudge::Right => 1.0,
+            Nudge::Up | Nudge::Down => return,
+        };
+        if let Some(item) = self.items.iter_mut().find(|item| item.key == key) {
+            item.kick.velocity = way * theme::NUDGE_KICK_SPEED;
+        }
     }
 
     fn at_rest(&mut self) -> bool {
         self.jelly.at_rest()
             && self.springs().all(|spring| spring.at_rest())
-            && self.paced().iter().all(|spring| spring.at_rest())
+            && self.paced().all(|spring| spring.at_rest())
     }
 
     /// Advances to `now`. Returns whether another frame is needed.
@@ -800,7 +832,7 @@ impl Motion {
         self.aim();
         if self.at_rest() {
             self.springs().for_each(Spring::settle);
-            self.paced().into_iter().for_each(Spring::settle);
+            self.paced().for_each(Spring::settle);
             self.jelly.settle();
             self.let_go_of_grab();
             self.last = None;
@@ -883,6 +915,19 @@ impl Motion {
         )
     }
 
+    /// How squished an item is by its own kick ([`Motion::kick`]): narrower and a little taller the
+    /// further out it is, as if it bumped into where it's going.
+    fn kicked(&self, key: u64) -> Squish {
+        let Some(item) = self.items.iter().find(|item| item.key == key) else {
+            return Squish::NONE;
+        };
+        let out = item.kick.value.abs();
+        Squish {
+            x: 1.0 - theme::NUDGE_KICK_SQUISH * out,
+            y: 1.0 + theme::NUDGE_KICK_SQUISH / 2.0 * out,
+        }
+    }
+
     /// How far the whole island has moved: its share of the drag, and any nudge.
     fn offset(&self) -> Vector {
         Vector::new(
@@ -914,7 +959,7 @@ impl Motion {
     fn item(&self, key: u64, x: f32) -> (f32, f32) {
         let fade = self.popover.items.value;
         match self.items.iter().find(|item| item.key == key) {
-            Some(item) => (item.x.value - x, item.shown.value * fade),
+            Some(item) => (item.x.value + item.kick.value - x, item.shown.value * fade),
             // Not arranged yet: new, so not shown yet.
             None => (0.0, 0.0),
         }
@@ -1068,6 +1113,18 @@ fn panel_offset(place: Size, content: Size) -> Vector {
     )
 }
 
+/// The island's corner radius at `height`. A live one's corners are rounder, until it grows into
+/// a popover: they ease to the usual radius over the first island height it grows, so the panel
+/// looks like any other.
+fn radius(live: bool, height: f32) -> f32 {
+    if !live {
+        return theme::ISLAND_RADIUS;
+    }
+    let island = theme::ISLAND_HEIGHT as f32;
+    let grown = ((height - island) / island).clamp(0.0, 1.0);
+    theme::LIVE_ISLAND_RADIUS + (theme::ISLAND_RADIUS - theme::LIVE_ISLAND_RADIUS) * grown
+}
+
 /// Draws the island as it is right now: the shape, the items that show, and the popover panel if
 /// one is given (with its layout).
 #[allow(clippy::too_many_arguments)]
@@ -1118,7 +1175,7 @@ fn draw_island<M>(
             let frame_size = Size::new(shape.width + 2.0 * room.x, shape.height + 2.0 * room.y);
             let geometry = state.shape.draw(renderer, frame_size, |frame| {
                 let size = shape.size();
-                let radius = theme::ISLAND_RADIUS;
+                let radius = radius(state.live, size.height);
                 let smoothing = theme::ISLAND_SMOOTHING;
                 let outline = Rectangle::new(Point::ORIGIN + room, size);
                 // Bent by the jelly and stretched by the drag while they move, both paths the
@@ -1172,6 +1229,11 @@ fn draw_island<M>(
                         continue;
                     }
                     let (squished, down) = motion.squish_at(shape, bounds.center_x() + dx);
+                    let kicked = motion.kicked(*key);
+                    let squished = Squish {
+                        x: squished.x * kicked.x,
+                        y: squished.y * kicked.y,
+                    };
                     let moved = Vector::new(dx, down);
                     // It rides along with the jelly where it is, and with the overshoot, to where
                     // the stretch takes its center. It squishes with both.
@@ -1264,6 +1326,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             toggle_shown: false,
             expanded: None,
             own: (0.0, 0.0),
+            live: false,
         })
     }
 
@@ -1280,10 +1343,18 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         _limits: &layout::Limits,
     ) -> layout::Node {
         let height = theme::ISLAND_HEIGHT as f32;
-        let padding = f32::from(theme::ISLAND_PADDING);
+        let padding = f32::from(if self.live {
+            theme::LIVE_ISLAND_PADDING
+        } else {
+            theme::ISLAND_PADDING
+        });
         let spacing = theme::ITEM_SPACING as f32;
         let limits = layout::Limits::new(Size::new(0.0, height), Size::new(f32::INFINITY, height));
         let state = tree.state.downcast_mut::<State>();
+        if state.live != self.live {
+            state.live = self.live;
+            state.shape.clear();
+        }
         state.toggle_shown = (state.hovered || self.expanded) && self.popover.is_none();
         // A hidden toggle takes no room.
         let hidden = (!state.toggle_shown).then_some(self.toggle).flatten();
@@ -1319,6 +1390,8 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         } else {
             x - spacing + padding
         };
+        // A live island is never narrower than round.
+        let width = if self.live { width.max(height) } else { width };
         // An open popover takes the panel's width in the row, so it pushes the islands beside it
         // away instead of covering them. They glide there and back on their own springs. The
         // island itself stays where its popover grows from: at the zone's side, or centered.
@@ -2370,6 +2443,31 @@ mod tests {
             top > 0.5 && bulge > 1.5,
             "the top widens and bulges: {top} {bulge}"
         );
+    }
+
+    #[test]
+    fn a_sideways_nudge_kicks_its_item_a_little_further_and_back() {
+        let mut motion = nudged(&[(2, (2, Nudge::Left))]);
+        let (mut one, mut two) = (0.0f32, 0.0f32);
+        let mut narrowest: f32 = 1.0;
+        run(&mut motion, Instant::now(), |motion| {
+            one = one.max(motion.item(1, 10.0).0.abs());
+            two = two.min(motion.item(2, 50.0).0);
+            narrowest = narrowest.min(motion.kicked(2).x);
+        });
+        assert!(
+            (0.85..0.98).contains(&narrowest),
+            "squished a little: {narrowest}"
+        );
+        assert_eq!(motion.kicked(1), Squish::NONE);
+        assert_eq!(one, 0.0, "only the item that nudged");
+        assert!((-4.0..-1.0).contains(&two), "a few px left: {two}");
+        assert_eq!(motion.item(2, 50.0), (0.0, 1.0), "and back");
+        assert_eq!(motion.kicked(2), Squish::NONE, "unsquished");
+
+        // Up and down bump the edge instead.
+        let motion = nudged(&[(2, (2, Nudge::Up))]);
+        assert_eq!(motion.items[1].kick.velocity, 0.0);
     }
 
     #[test]

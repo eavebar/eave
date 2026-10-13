@@ -6,11 +6,22 @@
 
 use std::time::Instant;
 
-use eave_api::time::{Duration, every};
+use eave_api::time::{Duration, every, sleep};
 use eave_api::ui::{self, Icon, Item, Panel, Tone};
 use eave_api::{Effect, Nudge, Registry, Subscription, Task, Widget};
 use eave_mpris::{Player, Status};
 use serde::Deserialize;
+
+/// How long the last track stays on screen once its player has nothing to show. Players go
+/// stopped with no track for a moment between songs, and that gap shouldn't hide the item.
+const GAP: Duration = Duration::from_millis(1000);
+/// How long after a skip we asked for its track can still come. A skip back that only restarts
+/// the track brings none.
+const SKIP_LANDS: Duration = Duration::from_secs(3);
+/// How many of a player's last covers are tried, newest first, until one is there.
+const COVERS_TRIED: usize = 3;
+/// How many tracks back a player's history goes.
+const TRACKS_KEPT: usize = 32;
 
 pub fn register(registry: &mut Registry) {
     registry.widget::<Media>("media");
@@ -58,8 +69,18 @@ pub struct Media {
     now: Instant,
     /// Where the seek bar is being dragged to. Sent when it's let go.
     dragging: Option<Duration>,
-    /// Asked to skip on this player, and which way: the next track it reports nudges that way.
-    skipping: Option<(String, Nudge)>,
+    /// Asked to skip on this player, which way, and when: a new track it reports soon after went
+    /// that way, if the tracks it played don't already say.
+    skipping: Option<(String, Nudge, Instant)>,
+    /// The tracks the followed player went through, to tell going back from going on.
+    tracks: Tracks,
+    /// The covers the followed player showed last, so a new track doesn't flash its icon while
+    /// its cover comes.
+    art: Art,
+    /// The player as it last showed, kept on screen for a `GAP` after it stopped showing.
+    held: Option<Player>,
+    /// Counts the holds, so only the last one's timer lets go.
+    holds: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +98,10 @@ pub enum Message {
     Tick(Instant),
     Opened,
     Closed,
+    /// The hold with this number is up.
+    Release(u64),
+    /// The cover that went missing at this time is let go, if it's still missing.
+    ArtGone(Instant),
 }
 
 impl Widget for Media {
@@ -96,6 +121,10 @@ impl Widget for Media {
             now: Instant::now(),
             dragging: None,
             skipping: None,
+            tracks: Tracks::default(),
+            art: Art::default(),
+            held: None,
+            holds: 0,
         };
         (media, Task::none())
     }
@@ -152,6 +181,18 @@ impl Widget for Media {
                 self.now = now;
                 Effect::none()
             }
+            Message::Release(hold) => {
+                if hold == self.holds {
+                    self.held = None;
+                }
+                Effect::none()
+            }
+            Message::ArtGone(lost) => {
+                if self.art.lost == Some(lost) {
+                    self.art = Art::default();
+                }
+                Effect::none()
+            }
             Message::Opened => {
                 self.open = true;
                 self.now = Instant::now();
@@ -176,10 +217,10 @@ impl Widget for Media {
     }
 
     fn item(&self) -> Item<Message> {
-        let Some(player) = self.current().filter(|p| shown(p)) else {
+        let Some(player) = self.showing() else {
             return Item::hidden();
         };
-        let icon = || picture(player);
+        let icon = || self.picture(player, false);
         let text = || ui::label(shorten(&track(player), self.config.max_chars));
         let content = match self.config.show {
             Show::Title => ui::row([icon(), text()]),
@@ -197,21 +238,23 @@ impl Widget for Media {
     }
 
     fn popover(&self) -> Option<Panel<Message>> {
-        let player = self.current().filter(|p| shown(p))?;
+        let player = self.showing()?;
         let mut lines = vec![ui::header(player.identity.clone())];
-        if !player.art_url.is_empty() {
-            lines.push(ui::cover(player.art_url.clone(), ui::empty()).large());
+        // The track, centered under its cover. The header already names the player, so a track
+        // with no title has no heading.
+        if !self.art.covers(player).is_empty() {
+            lines.push(ui::center(self.picture(player, true)));
         }
-        let title = if player.title.is_empty() {
-            player.identity.clone()
-        } else {
-            player.title.clone()
-        };
-        lines.push(ui::heading(title));
-        for line in [&player.artist, &player.album] {
-            if !line.is_empty() {
-                lines.push(ui::label(line.clone()).tone(Tone::Dim));
-            }
+        if !player.title.is_empty() {
+            lines.push(ui::center(ui::heading(player.title.clone())));
+        }
+        let from: Vec<_> = [&player.artist, &player.album]
+            .into_iter()
+            .filter(|line| !line.is_empty())
+            .map(String::as_str)
+            .collect();
+        if !from.is_empty() {
+            lines.push(ui::center(ui::label(from.join(" · ")).tone(Tone::Dim)));
         }
         if let Some(seek) = self.seek_bar(player) {
             lines.push(seek);
@@ -221,11 +264,11 @@ impl Widget for Media {
         } else {
             Icon::Play
         };
-        lines.push(ui::row([
+        lines.push(ui::center(ui::row([
             ui::button(ui::icon(Icon::Previous), Message::Previous),
             ui::button(ui::icon(play_pause), Message::PlayPause).prominent(),
             ui::button(ui::icon(Icon::Next), Message::Next),
-        ]));
+        ])));
         if self.players.len() > 1 {
             lines.push(ui::section("Players"));
             let rows = self.players.iter().map(|other| {
@@ -257,12 +300,18 @@ impl Media {
         self.players.iter().find(|p| &p.bus_name == current)
     }
 
+    /// The player on screen: the one followed while it has something to show, or for a `GAP`
+    /// after, as it last was.
+    fn showing(&self) -> Option<&Player> {
+        self.current().filter(|p| shown(p)).or(self.held.as_ref())
+    }
+
     fn current_mut(&mut self) -> Option<&mut Player> {
         let current = self.current.as_ref()?;
         self.players.iter_mut().find(|p| &p.bus_name == current)
     }
 
-    /// Takes in the players' reading, picks the one to follow, and nudges if a skip we asked for
+    /// Takes in the players' reading, picks the one to follow, and nudges if its track changed.
     /// has landed.
     fn read(&mut self, players: Vec<Player>) -> Effect<Message> {
         // A player that starts playing takes over from one picked by hand.
@@ -277,7 +326,7 @@ impl Media {
         if started {
             self.chosen = None;
         }
-        let before = self.current().map(|p| (p.bus_name.clone(), identify(p)));
+        let was = self.current().filter(|p| shown(p)).cloned();
         self.current = pick(&players, self.chosen.as_deref(), self.current.as_deref());
         if self.chosen.as_ref() != self.current.as_ref() {
             self.chosen = None;
@@ -285,16 +334,48 @@ impl Media {
         self.players = players;
         self.now = Instant::now();
 
-        let after = self.current().map(|p| (p.bus_name.clone(), identify(p)));
-        match (&self.skipping, before, after) {
-            (Some((skipped, nudge)), Some((from, old)), Some((to, new)))
-                if *skipped == from && from == to && old != new =>
-            {
-                let nudge = *nudge;
-                self.skipping = None;
-                Effect::none().nudge(nudge)
+        // Gone with nothing to show: keep the last of it on screen for a moment, in case it's
+        // only between tracks.
+        let mut tasks = Vec::new();
+        let current = self.current().cloned();
+        if let Some(lost) = self.art.read(current.as_ref()) {
+            tasks.push(Task::future(sleep(GAP)).map(move |()| Message::ArtGone(lost)));
+        }
+        if self.current().is_some_and(shown) {
+            self.held = None;
+        } else if let Some(was) = was {
+            self.held = Some(was);
+            self.holds += 1;
+            let hold = self.holds;
+            tasks.push(Task::future(sleep(GAP)).map(move |()| Message::Release(hold)));
+        }
+        let effect = Effect::task(Task::batch(tasks));
+
+        // Another track on the same player nudges the way it went: back to the one before, or
+        // on. MPRIS doesn't say which, so the tracks it played do, or failing that the skip we
+        // asked for. A gap between tracks has no title, and doesn't count.
+        let Some((bus_name, key)) = self
+            .current()
+            .filter(|p| !p.title.is_empty())
+            .map(|p| (p.bus_name.clone(), p.title.clone()))
+        else {
+            return effect;
+        };
+        let asked = match self.skipping.take() {
+            Some((skipped, nudge, at)) if skipped == bus_name && at.elapsed() < SKIP_LANDS => {
+                Some(nudge)
             }
-            _ => Effect::none(),
+            _ => None,
+        };
+        match self.tracks.went(&bus_name, key, asked) {
+            Some(nudge) => effect.nudge(nudge),
+            None => {
+                // Not a new track yet: the skip is still on its way.
+                if let Some(nudge) = asked {
+                    self.skipping = Some((bus_name, nudge, Instant::now()));
+                }
+                effect
+            }
         }
     }
 
@@ -304,7 +385,7 @@ impl Media {
             return Effect::none();
         };
         let bus_name = player.bus_name.clone();
-        self.skipping = Some((bus_name.clone(), nudge));
+        self.skipping = Some((bus_name.clone(), nudge, Instant::now()));
         let task = match nudge {
             Nudge::Left => run(async move { eave_mpris::previous(&bus_name).await }),
             _ => run(async move { eave_mpris::next(&bus_name).await }),
@@ -356,20 +437,92 @@ fn pick(players: &[Player], chosen: Option<&str>, current: Option<&str>) -> Opti
         .map(|p| p.bus_name.clone())
 }
 
-/// The track's cover, or until it's there and when there's none, the player's icon; the media
-/// bars for a player that doesn't say which app it is.
-fn picture(player: &Player) -> ui::Node<Message> {
-    let placeholder = if player.desktop_entry.is_empty() {
-        ui::icon(Icon::Media {
-            playing: player.playing(),
-        })
-    } else {
-        ui::app_icon(player.desktop_entry.clone())
-    };
-    if player.art_url.is_empty() {
-        placeholder
-    } else {
-        ui::cover(player.art_url.clone(), placeholder)
+/// The covers the followed player showed last. A new track's cover takes a moment to come, and
+/// some players send the track first, with no cover or one still to fetch: meanwhile the last
+/// cover stays instead of the player's icon. Chrome writes each cover to a file it deletes as soon
+/// as it writes the next, a few times a track, so some of them can't be had: the newest of the
+/// last few that could is shown.
+#[derive(Default)]
+struct Art {
+    bus_name: String,
+    /// Its covers, newest first: the one it has, or had last, then the ones before.
+    recent: Vec<String>,
+    /// When it went without a cover, if it has none now. The last one is kept for a `GAP` after.
+    lost: Option<Instant>,
+}
+
+impl Art {
+    /// Takes in the followed player's reading. Returns when its cover went missing, if it just
+    /// did, to let it go a `GAP` later.
+    fn read(&mut self, player: Option<&Player>) -> Option<Instant> {
+        let player = player?;
+        if self.bus_name != player.bus_name {
+            *self = Self {
+                bus_name: player.bus_name.clone(),
+                ..Self::default()
+            };
+        }
+        if !player.art_url.is_empty() {
+            if self.recent.first() != Some(&player.art_url) {
+                self.recent.retain(|url| *url != player.art_url);
+                self.recent.insert(0, player.art_url.clone());
+                self.recent.truncate(COVERS_TRIED);
+            }
+            self.lost = None;
+            return None;
+        }
+        if self.recent.is_empty() || self.lost.is_some() {
+            return None;
+        }
+        let now = Instant::now();
+        self.lost = Some(now);
+        Some(now)
+    }
+
+    /// The covers to try for `player`, best first: its own, or between covers the last one, then
+    /// the ones before.
+    fn covers<'a>(&'a self, player: &'a Player) -> Vec<&'a str> {
+        if self.bus_name != player.bus_name {
+            return [player.art_url.as_str()]
+                .into_iter()
+                .filter(|url| !url.is_empty())
+                .collect();
+        }
+        let own = Some(player.art_url.as_str()).filter(|url| !url.is_empty());
+        let mut urls: Vec<_> = own.into_iter().collect();
+        for url in &self.recent {
+            if !urls.contains(&url.as_str()) {
+                urls.push(url);
+            }
+        }
+        urls
+    }
+}
+
+impl Media {
+    /// The track's cover, or until it's there and when there's none, the player's icon; the media
+    /// bars for a player that doesn't say which app it is. Between tracks, the last cover stays
+    /// until the next one is there. `large` for the popover, where nothing shows without one.
+    fn picture(&self, player: &Player, large: bool) -> ui::Node<Message> {
+        let placeholder = if large {
+            ui::empty()
+        } else if player.desktop_entry.is_empty() {
+            ui::icon(Icon::Media {
+                playing: player.playing(),
+            })
+        } else {
+            ui::app_icon(player.desktop_entry.clone())
+        };
+        let cover = |url: &str, fallback| {
+            let cover = ui::cover(url.to_owned(), fallback);
+            if large { cover.large() } else { cover }
+        };
+        // Each falls back to the next: the first one there shows.
+        self.art
+            .covers(player)
+            .into_iter()
+            .rev()
+            .fold(placeholder, |fallback, url| cover(url, fallback))
     }
 }
 
@@ -378,10 +531,52 @@ fn shown(player: &Player) -> bool {
     player.status != Status::Stopped || !player.title.is_empty()
 }
 
-/// What tells one track from the next.
-fn identify(player: &Player) -> (Option<String>, String) {
-    let id = player.track_id.as_ref().map(|id| id.as_str().to_owned());
-    (id, player.title.clone())
+/// The tracks one player went through, in order, and which of them it's on: going to the one
+/// before is going back, to the one after or a new one is going on.
+#[derive(Default)]
+struct Tracks {
+    bus_name: String,
+    /// Each track's title. Not its id: Chrome gives every track the same one. Not its artist
+    /// either: Chrome sends a new track's title first, and its artist a moment after.
+    list: Vec<String>,
+    at: usize,
+}
+
+impl Tracks {
+    /// The player is on `track` now: which way that went from the one before, if it's another
+    /// one on the same player. `asked` is the way we skipped, for a track it hasn't seen.
+    fn went(&mut self, bus_name: &str, track: String, asked: Option<Nudge>) -> Option<Nudge> {
+        if self.bus_name != bus_name {
+            *self = Self {
+                bus_name: bus_name.to_owned(),
+                list: vec![track],
+                at: 0,
+            };
+            return None;
+        }
+        if self.list.get(self.at) == Some(&track) {
+            return None;
+        }
+        if self.at > 0 && self.list[self.at - 1] == track {
+            self.at -= 1;
+            return Some(Nudge::Left);
+        }
+        if self.list.get(self.at + 1) == Some(&track) {
+            self.at += 1;
+            return Some(Nudge::Right);
+        }
+        if asked == Some(Nudge::Left) {
+            self.list.insert(self.at, track);
+            return Some(Nudge::Left);
+        }
+        self.list.truncate(self.at + 1);
+        self.list.push(track);
+        if self.list.len() > TRACKS_KEPT {
+            self.list.remove(0);
+        }
+        self.at = self.list.len() - 1;
+        Some(Nudge::Right)
+    }
 }
 
 /// "Title · Artist", the title alone, or the player's name when there's no title.
@@ -484,6 +679,33 @@ mod tests {
     }
 
     #[test]
+    fn a_gap_between_tracks_keeps_the_last_one_on_screen() {
+        let mut media = media(Config::default());
+        media.update(Message::Players(vec![player("a", Status::Playing, "One")]));
+        media.update(Message::Players(vec![player("a", Status::Stopped, "")]));
+        assert!(media.item().into_parts().content.is_some(), "held");
+        assert_eq!(media.showing().unwrap().title, "One");
+        // The next track comes before the hold is up: no gap, and the old timer does nothing.
+        media.update(Message::Players(vec![player("a", Status::Playing, "Two")]));
+        media.update(Message::Release(1));
+        assert_eq!(media.showing().unwrap().title, "Two");
+        // Really stopped: hidden once the hold is up.
+        media.update(Message::Players(vec![player("a", Status::Stopped, "")]));
+        media.update(Message::Release(1));
+        assert!(media.item().into_parts().content.is_some(), "a stale timer");
+        media.update(Message::Release(2));
+        assert!(media.item().into_parts().content.is_none());
+        // The player leaving altogether is held the same way.
+        media.update(Message::Players(vec![player(
+            "a",
+            Status::Playing,
+            "Three",
+        )]));
+        media.update(Message::Players(Vec::new()));
+        assert!(media.item().into_parts().content.is_some());
+    }
+
+    #[test]
     fn follows_the_player_that_plays() {
         let mut media = media(Config::default());
         media.update(Message::Players(vec![
@@ -557,6 +779,50 @@ mod tests {
     }
 
     #[test]
+    fn the_last_cover_stays_until_the_next_one_is_there() {
+        let mut media = media(Config {
+            show: Show::Icon,
+            ..Config::default()
+        });
+        let with = |title: &str, art: &str| {
+            let mut playing = player("a", Status::Playing, title);
+            playing.art_url = art.into();
+            Message::Players(vec![playing])
+        };
+        // The covers tried, best first, down to the player's icon.
+        fn chain(node: ui::Kind<Message>) -> Vec<String> {
+            match node {
+                ui::Kind::Cover { url, fallback, .. } => {
+                    let mut urls = vec![url];
+                    urls.extend(chain(fallback.into_kind()));
+                    urls
+                }
+                ui::Kind::AppIcon { .. } => vec!["icon".to_owned()],
+                _ => vec!["?".to_owned()],
+            }
+        }
+        let shown = |media: &Media| chain(content(media));
+        media.update(with("One", "file:///one"));
+        assert_eq!(shown(&media), ["file:///one", "icon"]);
+        // The next track, its cover not sent yet: the last one stays.
+        media.update(with("Two", ""));
+        assert_eq!(shown(&media), ["file:///one", "icon"]);
+        // Chrome sends a cover, then another as it deletes the first: the last few are tried.
+        media.update(with("Two", "file:///two-a"));
+        media.update(with("Two", "file:///two-b"));
+        assert_eq!(
+            shown(&media),
+            ["file:///two-b", "file:///two-a", "file:///one", "icon"]
+        );
+        // A track that really has none shows the player's icon, a moment later.
+        media.update(with("Three", ""));
+        let lost = media.art.lost.unwrap();
+        assert_eq!(shown(&media)[0], "file:///two-b");
+        media.update(Message::ArtGone(lost));
+        assert_eq!(shown(&media), ["icon"]);
+    }
+
+    #[test]
     fn shows_only_what_it_is_told_to() {
         let players = vec![player("a", Status::Paused, "Song")];
         let mut hover = media(Config {
@@ -613,33 +879,70 @@ mod tests {
     }
 
     #[test]
-    fn a_skip_nudges_when_the_track_changes() {
+    fn a_new_track_nudges_the_way_it_went() {
         let nudge = |effect: Effect<Message>| effect.into_parts().2.map(|request| request.nudge);
         let mut media = media(Config::default());
-        media.update(Message::Players(vec![player("a", Status::Playing, "One")]));
-        assert_eq!(nudge(media.update(Message::Next)), None, "not yet");
+        let play = |media: &mut Media, title: &str| {
+            nudge(media.update(Message::Players(vec![player("a", Status::Playing, title)])))
+        };
+        assert_eq!(play(&mut media, "One"), None, "the first track");
+        assert_eq!(play(&mut media, "One"), None, "the same track");
+        assert_eq!(play(&mut media, "Two"), Some(Nudge::Right));
+        assert_eq!(play(&mut media, "Three"), Some(Nudge::Right));
+        // Back and forth, from a media key or the player's own buttons: the tracks say which way.
+        assert_eq!(play(&mut media, "Two"), Some(Nudge::Left));
+        assert_eq!(play(&mut media, "One"), Some(Nudge::Left));
+        assert_eq!(play(&mut media, "Two"), Some(Nudge::Right));
+        // Through a gap between tracks: one nudge, when the next one comes.
         assert_eq!(
-            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "One")]))),
-            None,
-            "same track"
-        );
-        assert_eq!(
-            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "Two")]))),
-            Some(Nudge::Right)
-        );
-        // A change nobody asked for here doesn't.
-        assert_eq!(
-            nudge(media.update(Message::Players(vec![player(
-                "a",
-                Status::Playing,
-                "Three"
-            )]))),
+            nudge(media.update(Message::Players(vec![player("a", Status::Stopped, "")]))),
             None
         );
-        media.update(Message::Previous);
+        assert_eq!(play(&mut media, "Three"), Some(Nudge::Right));
+        // Chrome sends the title first, then the artist: one track, one nudge.
+        let mut half = player("a", Status::Stopped, "Four");
+        half.artist = String::new();
         assert_eq!(
-            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "Two")]))),
+            nudge(media.update(Message::Players(vec![half]))),
+            Some(Nudge::Right)
+        );
+        assert_eq!(play(&mut media, "Four"), None);
+        let mut half = player("a", Status::Stopped, "Three");
+        half.artist = String::new();
+        assert_eq!(
+            nudge(media.update(Message::Players(vec![half]))),
             Some(Nudge::Left)
+        );
+        assert_eq!(play(&mut media, "Three"), None);
+        // Another player taking over isn't a track change.
+        assert_eq!(
+            nudge(media.update(Message::Players(vec![
+                player("a", Status::Paused, "Three"),
+                player("b", Status::Playing, "Other"),
+            ]))),
+            None
+        );
+    }
+
+    #[test]
+    fn a_skip_back_to_a_track_never_seen_goes_left() {
+        let nudge = |effect: Effect<Message>| effect.into_parts().2.map(|request| request.nudge);
+        let mut media = media(Config::default());
+        media.update(Message::Players(vec![player("a", Status::Playing, "Five")]));
+        assert_eq!(nudge(media.update(Message::Previous)), None, "not yet");
+        assert_eq!(
+            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "Five")]))),
+            None,
+            "the same track"
+        );
+        assert_eq!(
+            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "Four")]))),
+            Some(Nudge::Left)
+        );
+        // And on from there is the track it came from.
+        assert_eq!(
+            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "Five")]))),
+            Some(Nudge::Right)
         );
     }
 

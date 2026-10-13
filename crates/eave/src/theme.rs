@@ -39,6 +39,10 @@ pub const ISLAND_RADIUS: f32 = 14.0;
 /// 0.6 is the iOS look). On an island too short for the full spread, the curve is squeezed to fit
 /// rather than the smoothing reduced, so a radius up to half the island's height stays smooth.
 pub const ISLAND_SMOOTHING: f32 = 0.6;
+/// A live island's padding at its ends: snug, so an island of one icon is nearly round.
+pub const LIVE_ISLAND_PADDING: u16 = 4;
+/// A live island's corner radius, before smoothing: half its height, as round as it gets.
+pub const LIVE_ISLAND_RADIUS: f32 = ISLAND_HEIGHT as f32 / 2.0;
 /// How far each side of a pressed island moves in, in logical pixels.
 pub const PRESS_INSET: f32 = 1.5;
 /// The most the part of a dragged island under the pointer moves, sideways and up or down. It only
@@ -94,6 +98,12 @@ pub const NUDGE_DAMPING: f32 = 0.85;
 /// about 5 px. Up or down, the whole island moves about half a pixel.
 pub const NUDGE_PUSH_SPEED: f32 = 300.0;
 pub const NUDGE_LIFT_SPEED: f32 = 30.0;
+/// How fast a sideways nudge sets off the item that asked for it, on top of its island's push:
+/// about 2.5 px further, and back.
+pub const NUDGE_KICK_SPEED: f32 = 150.0;
+/// How much a kicked item squishes per pixel it's out: narrower by this much, taller by half.
+/// About 7 % narrower at the furthest.
+pub const NUDGE_KICK_SQUISH: f32 = 0.03;
 /// About how long a nudge takes to settle: a push is back within 5 % of its peak by then. A
 /// nudge asked to last longer (`Effect::nudge_lasting`) plays the same motion slowed down by as
 /// much.
@@ -120,6 +130,8 @@ pub const PUSH_LEAN: f32 = 45.0;
 /// How long the squash of an island showing or hiding its collapsible items lasts: a nudge's
 /// motion, slowed down to this.
 pub const COLLAPSE_SQUASH: Duration = Duration::from_millis(450);
+/// How long a collapsed item stays out after its widget nudges, from the last nudge.
+pub const REVEAL_SHOWN: Duration = Duration::from_millis(2000);
 pub const PUSH_BUILD: Duration = Duration::from_millis(250);
 pub const PUSH_WIGGLE: f32 = 90.0;
 pub const PUSH_FULL_SPEED: f32 = 600.0;
@@ -175,6 +187,8 @@ pub const SELECTED_BG: Color = SWITCHER_MARK;
 pub const SELECTED_SUBTITLE: Color = Color::from_rgb(0.66, 0.73, 0.84);
 /// Square buttons holding just an icon, and the height of text buttons.
 pub const ICON_BUTTON: f32 = 28.0;
+/// A prominent icon button in a popover, the one main action (play/pause): a filled circle.
+pub const PROMINENT_ICON_BUTTON: f32 = 36.0;
 pub const BUTTON_HEIGHT: f32 = 30.0;
 /// A text button at rest in a popover, so it reads as a button and not a label.
 pub const BUTTON_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
