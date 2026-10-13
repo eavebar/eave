@@ -38,8 +38,8 @@ pub trait Widget: Sized + 'static {
 
     /// Notifications to show on screen now, newest first.
     ///
-    /// The host shows them as cards that grow out of the bar, and takes each one away once its
-    /// key is no longer in the list. Keep the notices you mean to show in your state, and drop
+    /// While there are any, the bar's right island turns into a panel of them, like a popover. The
+    /// host takes each one away once its key is no longer in the list. Keep the notices you mean to show in your state, and drop
     /// one when it's dismissed or expires.
     fn notices(&self) -> Vec<Notice<Self::Message>> {
         Vec::new()

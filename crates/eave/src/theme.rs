@@ -133,8 +133,8 @@ pub const PANEL_WIDTH: f32 = 320.0;
 pub const NOTICE_CLOSE: f32 = 22.0;
 /// How many lines of a notification's body show before it's cut off.
 pub const NOTICE_BODY_LINES: f32 = 4.0;
-/// How far below the island, and below each other, notification cards sit.
-pub const NOTICE_GAP: f32 = 8.0;
+/// The room above and below the line between two notifications.
+pub const NOTICE_SPACING: u32 = 10;
 /// A list row with one line, and with a subtitle under it.
 pub const ROW_HEIGHT: f32 = 36.0;
 pub const ROW_HEIGHT_TALL: f32 = 46.0;

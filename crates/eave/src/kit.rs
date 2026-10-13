@@ -37,10 +37,35 @@ pub fn panel<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessag
     render(node, Ctx::new(Place::Panel), icons)
 }
 
+/// Notifications' cards, newest first, as one popover's content, with a line between each and
+/// the next.
+pub fn notices<'a, M: 'a>(cards: impl IntoIterator<Item = Element<'a, M>>) -> Element<'a, M> {
+    let mut column = column![].spacing(theme::NOTICE_SPACING);
+    for (index, card) in cards.into_iter().enumerate() {
+        if index > 0 {
+            column = column.push(separator());
+        }
+        column = column.push(card);
+    }
+    column.into()
+}
+
+/// A thin horizontal line between groups.
+fn separator<'a, M: 'a>() -> Element<'a, M> {
+    rule::horizontal(1)
+        .style(|_| rule::Style {
+            color: theme::SEPARATOR,
+            radius: 0.0.into(),
+            fill_mode: rule::FillMode::Full,
+            snap: true,
+        })
+        .into()
+}
+
 /// The line height of a notification's body, relative to its size: iced's default.
 const LINE_HEIGHT: f32 = 1.3;
 
-/// A notification's card, laid out at the panel's width: where it's from and a close button, the
+/// One notification, laid out at the panel's width: where it's from and a close button, the
 /// summary, the body cut off after a few lines, then its actions. A click anywhere else on it
 /// sends its `on_press`.
 pub fn notice<'a>(notice: NoticeParts<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage> {
@@ -328,14 +353,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             });
             Switcher::new(row(options).spacing(theme::SPACING / 2), current).into()
         }
-        Kind::Separator => rule::horizontal(1)
-            .style(|_| rule::Style {
-                color: theme::SEPARATOR,
-                radius: 0.0.into(),
-                fill_mode: rule::FillMode::Full,
-                snap: true,
-            })
-            .into(),
+        Kind::Separator => separator(),
         Kind::Empty => text("").into(),
         Kind::Fill if ctx.panel() => Space::new().width(Length::Fill).into(),
         Kind::Fill => Space::new().into(),

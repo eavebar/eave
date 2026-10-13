@@ -60,15 +60,15 @@ A popover isn't a surface of its own: the island holding the item turns into it 
 4. Once the surface is tall enough, the island morphs into the panel: its edges spring to the panel's, its items fade out, and the panel's content fades in once the shape is halfway there. It squishes as it sets off, squeezed in from the sides, and eases back as it grows ([D-44](decisions.md)).
 5. It closes on a second click on the item, when the widget returns `close_popover()` or stops offering a popover, on a click anywhere else, or on any key press: the bar takes the keyboard only while a popover is open ([D-36](decisions.md)). While a popover is open, a non-consuming Hyprland bind reports every left click on socket2, and the host ignores the ones that land on the bar. Clicks on the bar are handled by the bar itself, and the island captures presses on its panel ([D-14](decisions.md)). Closing runs the morph backwards, and the island splats against the top as it lands ([D-44](decisions.md)). When the island is back, it reports `PopoverClosed` and the host shrinks the surface again.
 
-## Notification cards
+## Notifications
 
-A widget's `notices()` are shown as cards that grow out of the right island ([D-47](decisions.md)). Like a popover, a card isn't a surface of its own, but the island stays itself while it has cards:
+While widgets list notices, the right island turns into a panel of them, the same way it turns into a popover ([D-47](decisions.md)):
 
-1. After each of a widget's messages, the host compares its notices with the cards it keeps (`Bar::toasts`), by key. New ones go on top, changed ones are updated in place, and missing ones start leaving, or just go if they were never on screen.
-2. `view` hands the cards to the right island on the toast bar (the first bar surface, for now the only one). The island lays each one out in an overlay at popover width, stacked down from the island newest first and lined up with its right edge, and reports where each goes (`ToastPlaced`). The host grows the surface to fit and adds each card to the input region, as for popovers.
-3. Once the surface is tall enough, each card's edges spring out from a sliver along the island's underside to its place, and its content fades in. A leaving card fades and folds back up into the island, and reports `ToastGone`. The cards under it slide up into its place.
-4. The host runs each card's clock while it's on screen, staying and not pointed at (`ToastHovered`), with one timer set for the next to expire (`ToastTimer`). When it runs out, the widget gets the notice's `expires` message.
-5. While the right island is a popover, or turning back from one, its cards wait off screen with their clocks stopped. The cards never take the keyboard, and the island captures presses on them, so a click on a card isn't a click on the bar.
+1. After each of a widget's messages, the host compares its notices with the ones it keeps (`Bar::toasts`), by key. New ones go on top, changed ones are updated in place, and missing ones go.
+2. While there are any, and no popover is open on the right island, the host keeps a `NoticePanel`, and `view` hands it to the right island of the toast bar (the first bar surface, for now the only one) as its popover, with the key `NOTICES`. A popover still turning back there gives way. Placing, growing the surface, the input region and the morph are a popover's (`NoticesPlaced`). Unlike a popover's, nobody opens it, it doesn't take the keyboard, and clicks elsewhere don't close it.
+3. As notices come and go, the panel springs to its new size. When the last one goes, it folds back into the island, still showing them while they fade, and reports `NoticesClosed`.
+4. The host runs each notice's clock while the panel is on screen and not pointed at (`NoticesHovered`), with one timer set for the next to expire (`ToastTimer`). When it runs out, the widget gets the notice's `expires` message.
+5. An open popover on the right island takes the island over, and the notices wait with their clocks stopped. The island's popover key changes, so it morphs straight from one to the other, both ways.
 
 ## Data sources by widget
 
@@ -100,14 +100,14 @@ crates/eave-api/           the plugin SDK: what plugin authors depend on
 crates/eave/               the host, as a library (`eave::run`) plus the default binary
   src/main.rs              default binary: host + built-in plugins
   src/lib.rs               run(): registry, layer-shell settings, daemon
-  src/app.rs               state, Message, update/view/subscription, popover lifecycle, notification cards and their clocks, surface fit, reload
+  src/app.rs               state, Message, update/view/subscription, popover lifecycle, the notifications panel and its clocks, surface fit, reload
   src/config.rs            config.toml → zone entries
   src/watch.rs             inotify watch on the config directory
   src/kit.rs               ui nodes → iced elements, styled
   src/icon.rs              status icons (volume, Wi-Fi, wired, battery) as vector paths
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
   src/theme.rs             every color, size and font
-  src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay, notification cards
+  src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay, switching popovers mid-morph
   src/squish.rs            how squished the items being drawn are, set by their island
   src/label.rs             a label that can squish (outlines while squished)
   src/squircle.rs          the squircle path
@@ -136,7 +136,7 @@ plugins/keyboard/          keyboard layout (eave-keyboard)
 plugins/battery/           battery from sysfs (eave-battery)
 plugins/network/           primary connection, via eave-net; Wi-Fi to join via eave-iwd (eave-network)
 plugins/volume/            output volume and switching (eave-volume)
-plugins/notifications/     notification cards, bell and history, via eave-notify (eave-notifications)
+plugins/notifications/     notifications in the island, bell and history, via eave-notify (eave-notifications)
 vendor/softbuffer/         softbuffer 0.4.8 with an alpha-carrying Wayland buffer (D-25)
 dist/systemd/              user units: the bar, and the rebuild-on-config.toml pair
 dist/config.toml           the starter config `eave-build init` writes

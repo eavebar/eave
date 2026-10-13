@@ -21,7 +21,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **4. Battery.** `plugins/battery`: `/sys/class/power_supply`, re-read on the kernel's `power_supply` uevents and every 30 s while there's a battery. No UPower ([D-23](decisions.md), first done over UPower in [D-18](decisions.md)).
 - [x] **4.5 Network.** `plugins/network` on `crates/eave-net`: the interface with the default route, from rtnetlink, with SSID, signal and band from nl80211, and address and gateway in the popover. It works with any network manager (NetworkManager, iwd, systemd-networkd, dhcpcd) ([D-23](decisions.md)).
 - [x] **5.8 Install and update.** `install.sh` (curl | sh), `eave-build init`, plugins named in config.toml as `owner/repo[@rev]` instead of a separate plugins.toml, only used widgets compiled in, and updates only through `eave-build update` ([D-30](decisions.md), [D-31](decisions.md), [running.md](running.md)).
-- [x] **5.11 Notifications.** Plugins list notices and the host grows them out of the right island as cards ([D-47](decisions.md)). `plugins/notifications` on `crates/eave-notify`, eave's own notification server, with the latest ones in its popover and do not disturb ([D-48](decisions.md)).
+- [x] **5.11 Notifications.** Plugins list notices and the right island morphs into a panel of them ([D-47](decisions.md)). `plugins/notifications` on `crates/eave-notify`, eave's own notification server, with the latest ones in its popover and do not disturb ([D-48](decisions.md)).
 - [x] **5. Volume.** `plugins/volume` on `crates/eave-pulse`: the PulseAudio protocol served by pipewire-pulse ([D-19](decisions.md)). Scroll changes it, right click mutes, and the popover has −/+, mute and output switching.
 
 ## Next

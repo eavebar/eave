@@ -949,7 +949,7 @@ pub enum Urgency {
 
 /// A notification to show on screen, from [`Widget::notices`](crate::Widget::notices).
 ///
-/// It says what the notification is, not how it looks: the host lays out the card, places it and
+/// It says what the notification is, not how it looks: the host lays out the notification, places it and
 /// animates it in and out. Its `key` is how the host tells notices apart from one view to the
 /// next: a notice that keeps its key and changes its text is updated in place, and one whose key
 /// is gone from the list leaves the screen.
@@ -1005,26 +1005,26 @@ impl<M> Notice<M> {
         self
     }
 
-    /// A button on the card that sends `message`. The first one is the main action.
+    /// A button on the notification that sends `message`. The first one is the main action.
     pub fn action(mut self, label: impl Into<String>, message: M) -> Self {
         self.actions.push((label.into(), message));
         self
     }
 
-    /// Sent on a click on the card itself, outside its buttons.
+    /// Sent on a click on the notification itself, outside its buttons.
     pub fn on_press(mut self, message: M) -> Self {
         self.on_press = Some(message);
         self
     }
 
-    /// Sent when the card's close button is clicked. Without it, the card has none.
+    /// Sent when its close button is clicked. Without it, it has none.
     pub fn on_dismiss(mut self, message: M) -> Self {
         self.on_dismiss = Some(message);
         self
     }
 
-    /// Sent once the card has been on screen for `after`. The host doesn't count while the
-    /// pointer is on the card or the card is waiting to be shown. Without it, the card stays
+    /// Sent once it has been on screen for `after`. The host doesn't count while the pointer is
+    /// on it or it's waiting to be shown. Without it, it stays
     /// until it leaves the list.
     pub fn expires(mut self, after: std::time::Duration, message: M) -> Self {
         self.expires = Some((after, message));

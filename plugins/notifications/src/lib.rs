@@ -1,6 +1,6 @@
-//! Notifications, through eave's own notification server ([`eave_notify`]). Each one grows out of
-//! the bar as a card, and goes away after a few seconds, when dismissed, or when one of its
-//! actions is picked. The bar shows a bell, with a count of the ones that arrived since the
+//! Notifications, through eave's own notification server ([`eave_notify`]). While there are any,
+//! the right island turns into a panel of them. Each goes away after a few seconds, when
+//! dismissed, or when one of its actions is picked. The bar shows a bell, with a count of the ones that arrived since the
 //! popover was last opened. The popover lists the latest ones. Right click on the bell for do not
 //! disturb: notifications only go to the list, except critical ones.
 //!
@@ -22,7 +22,7 @@ pub fn register(registry: &mut Registry) {
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// Seconds a card shows, for notifications that don't say.
+    /// Seconds a notification shows, for notifications that don't say.
     timeout: u64,
     /// How many notifications the popover keeps.
     history: usize,
@@ -52,7 +52,7 @@ pub struct Notifications {
     status: Status,
     /// The latest notifications, newest first.
     history: Vec<Notification>,
-    /// The ones shown as cards, newest first.
+    /// The ones shown in the island, newest first.
     shown: Vec<u32>,
     /// How many arrived since the popover was last opened.
     unread: usize,
@@ -65,7 +65,7 @@ pub struct Notifications {
 #[derive(Debug, Clone)]
 pub enum Message {
     Server(Event),
-    /// A card has shown long enough.
+    /// One has shown long enough.
     Expired(u32),
     /// Closed by its close button.
     Dismiss(u32),
@@ -295,7 +295,7 @@ impl Notifications {
             self.unread += 1;
         }
         if self.quiet && !critical {
-            // No card, so the bell says it instead.
+            // Not shown, so the bell says it instead.
             return if replaced {
                 Effect::none()
             } else {
@@ -334,7 +334,7 @@ impl Notifications {
             notice = notice.body(&notification.body);
         }
         for (key, label) in &notification.actions {
-            // The default action is a click on the card, not a button.
+            // The default action is a click on the notification, not a button.
             if key != "default" {
                 notice = notice.action(label, Message::Action(id, key.clone()));
             }
@@ -446,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn arrivals_show_as_cards_and_stay_in_the_list_after_expiring() {
+    fn arrivals_show_and_stay_in_the_list_after_expiring() {
         let mut widget = notifications();
         arrive(&mut widget, 1);
         arrive(&mut widget, 2);
@@ -478,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn quiet_keeps_cards_away_except_critical_ones() {
+    fn quiet_keeps_them_away_except_critical_ones() {
         let mut widget = notifications();
         let _ = widget.update(Message::ToggleQuiet);
         arrive(&mut widget, 1);
