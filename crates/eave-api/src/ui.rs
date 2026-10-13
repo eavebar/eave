@@ -199,7 +199,9 @@ pub enum Kind<M> {
     },
     Header {
         title: String,
+        subtitle: Option<String>,
         on_back: Option<M>,
+        leading: Option<Box<Node<M>>>,
         trailing: Option<Box<Node<M>>>,
     },
     Detail {
@@ -497,11 +499,15 @@ pub fn section<M>(title: impl Into<String>) -> Node<M> {
 }
 
 /// The title of a popover page. Sub-pages get a back button with [`on_back`](Node::on_back); a
-/// [`trailing`](Node::trailing) node sits at the far end (a switch, a count).
+/// [`leading`](Node::leading) picture goes before the title, a [`subtitle`](Node::subtitle)
+/// under it (where it is, what it's about), and a [`trailing`](Node::trailing) node sits at the
+/// far end (a switch, a count).
 pub fn header<M>(title: impl Into<String>) -> Node<M> {
     Node(Kind::Header {
         title: title.into(),
+        subtitle: None,
         on_back: None,
+        leading: None,
         trailing: None,
     })
 }
@@ -727,18 +733,22 @@ impl<M> Node<M> {
         self
     }
 
-    /// For a [`list_item`]: a second, dimmer line under the title. Other nodes ignore it.
+    /// For a [`list_item`] or [`header`]: a second, dimmer line under the title. Other nodes
+    /// ignore it.
     pub fn subtitle(mut self, text: impl Into<String>) -> Self {
-        if let Kind::ListItem { subtitle, .. } = &mut self.0 {
+        if let Kind::ListItem { subtitle, .. } | Kind::Header { subtitle, .. } = &mut self.0 {
             *subtitle = Some(text.into());
         }
         self
     }
 
-    /// For a [`list_item`]: an icon before the title. For a [`step`]: a small picture on the line,
-    /// in place of its mark. Other nodes ignore it.
+    /// For a [`list_item`] or [`header`]: an icon or small picture before the title. For a
+    /// [`step`]: a small picture on the line, in place of its mark. Other nodes ignore it.
     pub fn leading(mut self, node: Node<M>) -> Self {
-        if let Kind::ListItem { leading, .. } | Kind::Step { leading, .. } = &mut self.0 {
+        if let Kind::ListItem { leading, .. }
+        | Kind::Header { leading, .. }
+        | Kind::Step { leading, .. } = &mut self.0
+        {
             *leading = Some(Box::new(node));
         }
         self
@@ -889,6 +899,9 @@ impl<M> Node<M> {
             | Kind::Detail { value: content, .. } => content.set_tone(new),
             Kind::ListItem {
                 leading, trailing, ..
+            }
+            | Kind::Header {
+                leading, trailing, ..
             } => {
                 leading
                     .iter_mut()
@@ -910,7 +923,6 @@ impl<M> Node<M> {
             | Kind::Diff { .. }
             | Kind::Empty
             | Kind::Section { .. }
-            | Kind::Header { .. }
             | Kind::Fill
             | Kind::Slider { .. }
             | Kind::TextArea { .. }
@@ -1030,11 +1042,15 @@ impl<M> Node<M> {
             },
             Kind::Header {
                 title,
+                subtitle,
                 on_back,
+                leading,
                 trailing,
             } => Kind::Header {
                 title,
+                subtitle,
                 on_back: on_back.map(f),
+                leading: map_box(leading),
                 trailing: map_box(trailing),
             },
             Kind::Detail { name, value } => Kind::Detail {
@@ -1785,6 +1801,39 @@ mod tests {
             Kind::Button {
                 on_press: 1,
                 prominent: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_header_takes_a_picture_and_a_subtitle() {
+        let node = header("t")
+            .subtitle("s")
+            .leading(button(icon(Icon::Info), 1))
+            .tone(Tone::Dim)
+            .map(&|n: i32| n * 10);
+        let Kind::Header {
+            subtitle: Some(subtitle),
+            leading: Some(leading),
+            ..
+        } = node.into_kind()
+        else {
+            panic!("header lost its picture or subtitle");
+        };
+        assert_eq!(subtitle, "s");
+        let Kind::Button {
+            content,
+            on_press: 10,
+            ..
+        } = leading.into_kind()
+        else {
+            panic!("picture lost its message");
+        };
+        assert!(matches!(
+            content.into_kind(),
+            Kind::Icon {
+                tone: Some(Tone::Dim),
                 ..
             }
         ));

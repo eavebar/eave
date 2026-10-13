@@ -300,8 +300,14 @@ pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
             .chain(trailing)
             .map(|node| *node)
             .collect()),
+        Kind::Header {
+            leading, trailing, ..
+        } => all(leading
+            .into_iter()
+            .chain(trailing)
+            .map(|node| *node)
+            .collect()),
         Kind::Section { trailing, .. }
-        | Kind::Header { trailing, .. }
         | Kind::TextInput { trailing, .. }
         | Kind::TextArea { trailing, .. } => all(trailing.into_iter().map(|node| *node).collect()),
         Kind::Scroll { content, .. } => all(vec![*content]),
@@ -703,7 +709,9 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
         }
         Kind::Header {
             title,
+            subtitle,
             on_back,
+            leading,
             trailing,
         } => {
             let back = on_back.map(|message| {
@@ -723,9 +731,27 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                     .wrapping(text::Wrapping::None),
                 theme::ISLAND_BG,
             );
+            // A subtitle sits under the title, one line too, cut if it's long.
+            let title: Element<'a, AnyMessage> = match subtitle {
+                Some(subtitle) => column![
+                    title,
+                    Clip::new(
+                        text(subtitle)
+                            .size(theme::SMALL_SIZE)
+                            .color(theme::tone(Tone::Dim))
+                            .wrapping(text::Wrapping::None),
+                        theme::ISLAND_BG,
+                    )
+                ]
+                .width(Length::Fill)
+                .into(),
+                None => title.into(),
+            };
+            let leading = leading.map(|node| render(*node, ctx, icons));
             let trailing = trailing.map(|node| render(*node, ctx, icons));
             row![]
                 .push(back)
+                .push(leading)
                 .push(title)
                 .push(trailing)
                 .spacing(6)
