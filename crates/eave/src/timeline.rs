@@ -40,6 +40,10 @@ pub fn view<'a, M: 'a>(steps: Vec<Step<'a, M>>) -> Element<'a, M> {
                     .center_x(theme::RAIL_GUTTER)
                     .center_y(theme::SPRITE_HEIGHT_PANEL),
             ]
+            // As tall as the step, like a bare strip: a stack shrinks by default, and a strip
+            // in it would then reach for all the height a scroll has.
+            .width(theme::RAIL_GUTTER)
+            .height(Length::Fill)
             .into(),
             None => strip.into(),
         };
