@@ -390,7 +390,10 @@ mod tests {
 
     #[test]
     fn islands_end_where_the_notch_does() {
-        assert_eq!(Screen::default().island_height(), theme::ISLAND_HEIGHT as f32);
+        assert_eq!(
+            Screen::default().island_height(),
+            theme::ISLAND_HEIGHT as f32
+        );
         let mut screen = macbook(config::Islands::default());
         assert_eq!(screen.island_height(), 26.0);
         // A row hidden under the bezel moves the islands' top, not the notch's bottom.

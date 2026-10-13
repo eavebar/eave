@@ -557,10 +557,7 @@ impl Bar {
         let height = rects
             .iter()
             .map(|rect| (rect.y + rect.height).ceil() as u32 + u32::from(style::EDGE_GAP))
-            .fold(
-                style::surface_height(self.screen.island_height()),
-                u32::max,
-            );
+            .fold(style::surface_height(self.screen.island_height()), u32::max);
         let bar_height = style::bar_height(self.screen.island_height());
         let callback = ActionCallback::new(move |region| {
             // iced_layershell reuses one region and only clears the surface's current size, which
@@ -1279,7 +1276,14 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             let fused = [before.last(), after.first()]
                 .map(|next| next.is_some_and(|(_, attach)| attach.top));
             let below = top + f32::from(style::EDGE_GAP);
-            Zones::around_notch(left, [zone(before), zone(after)], right, notch, below, fused)
+            Zones::around_notch(
+                left,
+                [zone(before), zone(after)],
+                right,
+                notch,
+                below,
+                fused,
+            )
         }
     };
 

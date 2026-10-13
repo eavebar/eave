@@ -1598,9 +1598,9 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
 
         match event {
             // Watched whether or not an item handled it: the island reacts to every press on it.
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-                if self.popover.is_none() =>
-            {
+            Event::Mouse(mouse::Event::ButtonPressed(
+                mouse::Button::Left | mouse::Button::Right,
+            )) if self.popover.is_none() => {
                 if let Some(at) = cursor.position_over(own) {
                     motion.press(at);
                 }
@@ -1609,7 +1609,9 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             Event::Mouse(mouse::Event::CursorMoved { position }) if motion.press.is_some() => {
                 motion.drag(*position);
             }
-            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+            Event::Mouse(mouse::Event::ButtonReleased(
+                mouse::Button::Left | mouse::Button::Right,
+            ))
             | Event::Mouse(mouse::Event::CursorLeft)
                 if motion.press.is_some() =>
             {

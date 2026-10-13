@@ -16,7 +16,7 @@ How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs
    Color never means "this is selected" or "you can press this". When everything is black and white, the one green bolt or red number gets noticed.
 3. **What's current is brighter.** The workspace you're on, the row in use, the open tab and today in the calendar are all marked the same way: with light, as a soft white fill, a white ring or a heavier weight. Never with a hue.
 4. **Everything morphs.** Nothing pops in or out. A popover grows out of its island and back into it, an island springs to its new width, a mark slides to the new option, a number counts through the values in between, and a page slides as it hands over to the next. Each of these motions has one spring or one duration in `theme.rs`, shared by everything that does it.
-5. **It responds to the hand.** What's under the pointer reacts: an island squeezes when pressed and stretches when dragged, a slider's line thickens, a button lights up. At rest everything is thin and quiet.
+5. **It responds to the hand.** What's under the pointer reacts: an island squeezes when pressed, with either button, and stretches when dragged, a slider's line thickens, a button lights up. At rest everything is thin and quiet.
 
 ## Palette
 
