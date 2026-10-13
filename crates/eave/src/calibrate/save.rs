@@ -36,6 +36,10 @@ pub fn edit(source: &str, shape: &Shape) -> Result<String, toml_edit::TomlError>
     table.insert("corners", four(screen.corners));
     table.insert("smoothing", smoothing(screen.smoothing));
     table.insert("inset", four(screen.inset));
+    // Not measured, but the user's: kept as they had it (D-81).
+    if screen.grow != 0.0 {
+        table.insert("grow", number(screen.grow));
+    }
     set(root, "screen", Value::InlineTable(table));
 
     Ok(document.to_string())
@@ -109,6 +113,7 @@ mod tests {
                 corners: [20.0, 20.0, 12.5, 12.5],
                 smoothing: 0.6,
                 inset: [0.0; 4],
+                grow: 0.0,
             },
             notch: Some(NotchShape {
                 width: 370.0,
@@ -169,6 +174,19 @@ widget = \"clock\"   # every minute
         assert!(edited.contains("top = 0, grow = [4, 2] }"), "{edited}");
         let config = config::parse(&edited).unwrap();
         assert_eq!(config.notch, config::Notch::Fixed(shape.notch.unwrap()));
+    }
+
+    #[test]
+    fn a_grown_edge_stays_grown() {
+        let mut shape = measured();
+        shape.screen.grow = 4.0;
+        let edited = edit("", &shape).unwrap();
+        assert!(
+            edited.contains("inset = [0, 0, 0, 0], grow = 4 }"),
+            "{edited}"
+        );
+        let config = config::parse(&edited).unwrap();
+        assert_eq!(config.screen, shape.screen);
     }
 
     #[test]

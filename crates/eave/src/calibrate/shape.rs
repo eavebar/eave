@@ -28,6 +28,7 @@ pub fn outline(sink: &mut impl Sink, shape: &Shape, size: Size) {
         corners,
         smoothing,
         inset,
+        ..
     } = shape.screen;
     let [top, right, bottom, left] = inset;
     let (l, t, r, b) = (left, top, size.width - right, size.height - bottom);

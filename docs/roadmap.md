@@ -55,7 +55,7 @@ Every item from here on is a plugin, written against `eave-api` like a third-par
 ## Later
 
 - [ ] One bar per monitor, following monitor hotplug. The host already runs as an `iced_layershell::daemon` (0.5), so this needs `StartMode::AllScreens` plus per-output state.
-- [x] Notch-aware layout on Asahi when `appledrm.show_notch=1` ([platform.md](platform.md#asahi-specifics), [D-69](decisions.md)), islands attached to the screen's edges ([D-70](decisions.md)), and `eave calibrate` to measure the notch and the screen's corners ([D-71](decisions.md), [D-72](decisions.md)). The islands' corners follow them ([D-73](decisions.md)), the bar draws the notch, grown if asked ([D-75](decisions.md)), and islands end where it does ([D-76](decisions.md)).
+- [x] Notch-aware layout on Asahi when `appledrm.show_notch=1` ([platform.md](platform.md#asahi-specifics), [D-69](decisions.md)), islands attached to the screen's edges ([D-70](decisions.md)), and `eave calibrate` to measure the notch and the screen's corners ([D-71](decisions.md), [D-72](decisions.md)). The islands' corners follow them ([D-73](decisions.md)), the bar draws the notch, grown if asked ([D-75](decisions.md)), and the top edge, thicker if asked ([D-81](decisions.md)), and islands end where it does ([D-76](decisions.md)).
 - [x] `PKGBUILD` for Asahi and CachyOS: the AUR package builds on aarch64 and x86_64 ([D-54](decisions.md)).
 - [ ] Maybe: external monitors' brightness over DDC/CI, as rows in the brightness popover ([D-80](decisions.md)).
 - [ ] Maybe: OSD for volume and brightness, launcher, each built on the same foundations. (Notifications are done: 5.11.)

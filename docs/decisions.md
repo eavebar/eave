@@ -1664,3 +1664,25 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 **Alternative:** sysfs writes with a shipped udev rule (one more thing to install); `brightnessctl` (a binary); linear percents (matches sysfs, looks uneven); polling the backlight (wakes up for nothing).
 
 **Cost:** one thread blocked on a netlink socket, one small dependency set already in the tree (rustix, zbus through eave-dbus). External monitors (DDC/CI over `/dev/i2c-*`, which needs `i2c-dev` and group access) are left for later; night light is the compositor's job and out of scope.
+
+---
+
+## D-81: The top edge can be grown too
+
+**Status:** accepted (2026-10-13).
+
+**What:** `screen = { …, grow = N }`, in physical pixels and 0 by default, makes the bar draw the screen's top edge N pixels thicker than it is: a black band from the top of what shows, under the islands, whose lower ends curve down into the sides with the screen's top `corners` and `smoothing`. What shows below it looks like the same screen, a little shorter. Everything that hung from the top edge hangs from the grown one:
+- the islands start a gap below it, and the shoulders of those attached to the top (D-72) are where they meet it;
+- a notch hanging from the top (`top = 0`) hangs from it too, with its own height, so its depth below the edge, its shoulders and the islands' height (D-76) are as before. Its own `grow` (D-75) adds on top. A cut-out notch (`top` above 0) is a hole in the panel and stays where it is, so the islands beside it get shorter;
+- the exclusive zone, the input strip and the surface are N taller (`notch::Screen::bar_height`, `surface_height`), so windows move down that much;
+- islands facing the screen's corners keep their concentric corners (D-73): the band's corners are the screen's, moved down.
+
+`eave calibrate` models the real screen and writes `grow` back as it was, like the notch's.
+
+**Why:** the same as D-75's. A squish of the islands hanging from the top, or of the edge itself, needs black pixels of the bar's own to move into, beyond the bezel's.
+
+**Why its own key, not the notch's `grow`:** the top edge is there without a notch (any desktop monitor), so it can't live in `notch`. It's about the screen's edge, next to `inset`, the rows the bezel hides: `grow` is rows the bar adds to it. And the edge and the notch may want different room to squish into. Sharing `notch.grow[1]` would tie the two together and leave a screen without a notch with nothing to set.
+
+**Alternative:** a bigger `inset`. It moves the bar down the same way, but draws nothing: the rows above the bar would show the wallpaper, and the bar would have no pixels there to move.
+
+**Cost:** one cached path, redrawn when the grow, the corners or the bar's width change. No new dependency.

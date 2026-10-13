@@ -27,7 +27,7 @@ Two more keys there describe the screen. `eave calibrate` measures them for you 
 
 ```toml
 notch = { width = 370, height = 66, radius = 20, smoothing = 0.6, shoulder = 8, top = 0, grow = [4, 4] }
-screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
+screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0], grow = 4 }
 ```
 
 - `notch = "auto"` (the default) finds a MacBook's on Asahi, and `notch = false` ignores it. The bar splits the center zone around it ([D-69](decisions.md)).
@@ -37,6 +37,7 @@ screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
 - With a notch, the islands end where it does, grown: their height plus the gap above them is the notch's bottom ([D-76](decisions.md)).
 - `smoothing` 0 is a circle's corner, and up to 1 a squircle's.
 - A screen's `corners` go top left, top right, bottom right, bottom left. `inset` goes top, right, bottom, left: rows and columns the bezel hides, which the bar keeps off. Either takes one number for all four.
+- A screen's `grow` draws its top edge that much thicker, in black, rounded into the sides by its top `corners`. Islands, their shoulders and a notch hanging from the top all hang from the grown edge, so the notch keeps its depth and the islands their height ([D-81](decisions.md)). It's `0` by default. `eave calibrate` keeps it, and the notch's `grow`, as they were.
 
 The islands take their corners from these ([D-73](decisions.md)):
 - The top corner of the first island on the left, and of the last on the right, follows the screen's corner at an even distance (its radius less the bar's 6 px gap).
