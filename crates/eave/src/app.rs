@@ -23,7 +23,7 @@ use crate::config::{self, Config, Entry, Zone};
 use crate::countdown::Countdown;
 use crate::cover::{self, Cover};
 use crate::island::{self, Island, Toggle};
-use crate::notch::{self, Notch};
+use crate::notch::{self, Notch, Place, Side};
 use crate::slot::Slot;
 use crate::squircle::CornerShape;
 use crate::zones::Zones;
@@ -1130,84 +1130,86 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
 
     // Each island is as wide as its items. One with nothing to show draws nothing, unless it has
     // collapsed items to bring back.
-    let island = |island: IslandId, align: Horizontal| -> Option<Island<'_, Message>> {
-        let instances = || {
-            bar.instances
-                .iter()
-                .filter(move |instance| instance.island() == island)
-        };
-        let collapsible = instances().any(|instance| instance.entry.collapsible);
-        let expanded = bar.expanded.contains(&island);
-        let mut items = Vec::new();
-        let mut groups = Vec::new();
-        for instance in instances() {
-            if instance.entry.collapsible && !expanded && instance.revealed.is_none() {
-                continue;
-            }
-            let Some(item) = item_view(instance, window, &bar.icons) else {
-                continue;
+    let island =
+        |island: IslandId, align: Horizontal| -> Option<(Island<'_, Message>, config::Edges)> {
+            let instances = || {
+                bar.instances
+                    .iter()
+                    .filter(move |instance| instance.island() == island)
             };
-            // Only between two items that show: one next to a hidden item goes with it.
-            if instance.entry.divider && !items.is_empty() {
-                items.push((instance.id | DIVIDER_KEY, kit::divider()));
-                groups.push(None);
+            let collapsible = instances().any(|instance| instance.entry.collapsible);
+            let expanded = bar.expanded.contains(&island);
+            let mut items = Vec::new();
+            let mut groups = Vec::new();
+            for instance in instances() {
+                if instance.entry.collapsible && !expanded && instance.revealed.is_none() {
+                    continue;
+                }
+                let Some(item) = item_view(instance, window, &bar.icons) else {
+                    continue;
+                };
+                // Only between two items that show: one next to a hidden item goes with it.
+                if instance.entry.divider && !items.is_empty() {
+                    items.push((instance.id | DIVIDER_KEY, kit::divider()));
+                    groups.push(None);
+                }
+                items.push((instance.id, item));
+                groups.push(instance.entry.width_group.as_deref());
             }
-            items.push((instance.id, item));
-            groups.push(instance.entry.width_group.as_deref());
-        }
-        let nudges = instances()
-            .filter_map(|instance| Some((instance.id, instance.nudge?)))
-            .collect();
-        // The open one wins over one still closing in the same island.
-        let popover = bar
-            .popovers
-            .iter()
-            .filter(|popover| popover.window == window)
-            .filter(|popover| instances().any(|instance| instance.id == popover.instance))
-            .max_by_key(|popover| popover.open);
-        // A popover there wins: the notifications wait for it.
-        let popover = match popover {
-            Some(popover) => Some(popover_view(bar, popover)),
-            None => notices
-                .filter(|_| island == notice_island)
-                .map(|panel| notices_view(bar, panel)),
-        };
+            let nudges = instances()
+                .filter_map(|instance| Some((instance.id, instance.nudge?)))
+                .collect();
+            // The open one wins over one still closing in the same island.
+            let popover = bar
+                .popovers
+                .iter()
+                .filter(|popover| popover.window == window)
+                .filter(|popover| instances().any(|instance| instance.id == popover.instance))
+                .max_by_key(|popover| popover.open);
+            // A popover there wins: the notifications wait for it.
+            let popover = match popover {
+                Some(popover) => Some(popover_view(bar, popover)),
+                None => notices
+                    .filter(|_| island == notice_island)
+                    .map(|panel| notices_view(bar, panel)),
+            };
 
-        if items.is_empty() && popover.is_none() && !collapsible {
-            return None;
-        }
-        // On the side facing the middle of the screen; a center island's on its right.
-        let side = match island.zone {
-            Zone::Right => Horizontal::Left,
-            Zone::Left | Zone::Center => Horizontal::Right,
+            if items.is_empty() && popover.is_none() && !collapsible {
+                return None;
+            }
+            // On the side facing the middle of the screen; a center island's on its right.
+            let side = match island.zone {
+                Zone::Right => Horizontal::Left,
+                Zone::Left | Zone::Center => Horizontal::Right,
+            };
+            // Hovering shows it; while the items are out, it stays to put them back.
+            let toggle = collapsible.then(|| Toggle {
+                element: toggle_view(island, side, expanded),
+                side,
+                expanded,
+            });
+            let attach = instances()
+                .next()
+                .map(|instance| instance.entry.attach)
+                .unwrap_or_default();
+            Some((
+                Island::new(items)
+                    .align(align)
+                    .popover(popover)
+                    .nudges(nudges)
+                    .width_groups(groups)
+                    .toggle(toggle)
+                    .live(instances().any(|instance| instance.entry.live))
+                    .bleed(bleed(attach))
+                    .notch(bar.screen.notch.map(|notch| notch.width))
+                    .shoulders(shoulders)
+                    .corners(bar.screen.island_corners(Place::default())),
+                attach,
+            ))
         };
-        // Hovering shows it; while the items are out, it stays to put them back.
-        let toggle = collapsible.then(|| Toggle {
-            element: toggle_view(island, side, expanded),
-            side,
-            expanded,
-        });
-        let attach = instances()
-            .next()
-            .map(|instance| instance.entry.attach)
-            .unwrap_or_default();
-        Some(
-            Island::new(items)
-                .align(align)
-                .popover(popover)
-                .nudges(nudges)
-                .width_groups(groups)
-                .toggle(toggle)
-                .live(instances().any(|instance| instance.entry.live))
-                .bleed(bleed(attach))
-                .notch(bar.screen.notch.map(|notch| notch.width))
-                .shoulders(shoulders),
-        )
-    };
-
     // A zone's islands sit side by side, and the zones across the bar: the center ones stay
     // centered on screen unless a side's islands reach them, and then they're pushed aside.
-    let islands = |zone: Zone, align: Horizontal| -> Vec<Island<'_, Message>> {
+    let islands = |zone: Zone, align: Horizontal| -> Vec<(Island<'_, Message>, config::Edges)> {
         let mut indices: Vec<_> = bar
             .instances
             .iter()
@@ -1226,24 +1228,39 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             .collect()
     };
 
-    let left = zone(islands(Zone::Left, Horizontal::Left));
-    let right = zone(islands(Zone::Right, Horizontal::Right));
+    // The first island on the left and the last on the right face the screen's top corners.
+    let corner = |side| Place {
+        screen_corner: Some(side),
+        ..Place::default()
+    };
+    let mut left = islands(Zone::Left, Horizontal::Left);
+    if !left.is_empty() {
+        let (first, attach) = left.remove(0);
+        left.insert(0, (placed(first, &bar.screen, corner(Side::Left)), attach));
+    }
+    let mut right = islands(Zone::Right, Horizontal::Right);
+    if let Some((last, attach)) = right.pop() {
+        right.push((placed(last, &bar.screen, corner(Side::Right)), attach));
+    }
+    let (left, right) = (zone(left), zone(right));
     let zones = match bar.screen.notch {
         None => Zones::new(left, zone(islands(Zone::Center, Horizontal::Center)), right),
-        // The center's first half of islands goes before the notch, the rest after it. The two
-        // against it reach under it and up to the top, so they and the notch read as one island.
+        // The center's first half of islands goes before the notch, the rest after it.
         Some(notch) => {
             let mut before = islands(Zone::Center, Horizontal::Center);
-            let after = before.split_off(before.len().div_ceil(2));
-            if let Some(last) = before.pop() {
-                before.push(fused(last, Horizontal::Right, notch, top));
+            let mut after = before.split_off(before.len().div_ceil(2));
+            if let Some((last, attach)) = before.pop() {
+                let last = beside_notch(last, attach, Side::Right, &bar.screen, notch, top);
+                before.push((last, attach));
             }
-            let mut after = after.into_iter();
-            let first = after
-                .next()
-                .map(|first| fused(first, Horizontal::Left, notch, top));
-            let after = first.into_iter().chain(after).collect();
-            Zones::around_notch(left, [zone(before), zone(after)], right, notch.width)
+            if !after.is_empty() {
+                let (first, attach) = after.remove(0);
+                let first = beside_notch(first, attach, Side::Left, &bar.screen, notch, top);
+                after.insert(0, (first, attach));
+            }
+            let fused = [before.last(), after.first()]
+                .map(|next| next.is_some_and(|(_, attach)| attach.top));
+            Zones::around_notch(left, [zone(before), zone(after)], right, notch.width, fused)
         }
     };
 
@@ -1260,31 +1277,48 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
 }
 
 /// A zone's islands, side by side.
-fn zone(islands: Vec<Island<'_, Message>>) -> Element<'_, Message> {
-    row(islands.into_iter().map(Element::from))
+fn zone(islands: Vec<(Island<'_, Message>, config::Edges)>) -> Element<'_, Message> {
+    row(islands.into_iter().map(|(island, _)| Element::from(island)))
         .spacing(style::ISLAND_SPACING)
         .into()
 }
 
-/// An island against the notch, on its `side`: attached to the top, ending as low as the notch
-/// does, and reaching under it to its middle, past any rounding of its corners. The surface starts
-/// `top` below the screen's top edge, where the notch starts.
-fn fused(
-    island: Island<'_, Message>,
-    side: Horizontal,
+/// `island` rounded for what it's next to (D-73). A corner that's attached somewhere is out of
+/// sight, so it doesn't matter what it would be there.
+fn placed<'a>(
+    island: Island<'a, Message>,
+    screen: &notch::Screen,
+    place: Place,
+) -> Island<'a, Message> {
+    island.corners(screen.island_corners(place))
+}
+
+/// An island against the notch, which is on its `side`. Attached to the top, it's fused to the
+/// notch: it ends as low as the notch does, and reaches under it to its middle, past any rounding
+/// of its corners, so they read as one island. The surface starts `top` below the screen's top
+/// edge, where the notch starts. Otherwise it's rounded like the notch, a gap away (D-73).
+fn beside_notch<'a>(
+    island: Island<'a, Message>,
+    attach: config::Edges,
+    side: Side,
+    screen: &notch::Screen,
     notch: Notch,
     top: f32,
-) -> Island<'_, Message> {
-    let mut bleed = bleed(config::Edges {
-        top: true,
-        ..Default::default()
-    });
+) -> Island<'a, Message> {
+    let place = Place {
+        notch: Some(side),
+        ..Place::default()
+    };
+    let island = placed(island, screen, place);
+    if !attach.top {
+        return island;
+    }
+    let mut bleed = bleed(attach);
     let island_bottom = f32::from(style::EDGE_GAP) + style::ISLAND_HEIGHT as f32;
     bleed.bottom = notch.top + notch.height - top - island_bottom;
-    if side == Horizontal::Right {
-        bleed.right = notch.width / 2.0;
-    } else {
-        bleed.left = notch.width / 2.0;
+    match side {
+        Side::Right => bleed.right = notch.width / 2.0,
+        Side::Left => bleed.left = notch.width / 2.0,
     }
     island.bleed(bleed)
 }

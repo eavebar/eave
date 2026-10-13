@@ -4,7 +4,8 @@
 //! spring to wherever layout puts them, so a pushed one glides away instead of jumping.
 //!
 //! With a notch (D-69), the center zone can't be centered: it comes in two halves, one each side
-//! of the notch and right against it, so the islands there and the notch read as one.
+//! of the notch. A half whose island there is fused to the notch is right against it, so they read
+//! as one; any other keeps `ISLAND_SPACING` from it (D-73).
 
 use iced::advanced::widget::{Operation, Tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
@@ -15,8 +16,8 @@ use crate::theme;
 pub struct Zones<'a, M> {
     /// Left, center and right; or left, the center's two halves and right, around a notch.
     zones: Vec<Element<'a, M>>,
-    /// The notch's width, centered.
-    notch: Option<f32>,
+    /// The notch's width, centered, and the gap each half keeps from it.
+    notch: Option<(f32, [f32; 2])>,
 }
 
 impl<'a, M> Zones<'a, M> {
@@ -27,16 +28,25 @@ impl<'a, M> Zones<'a, M> {
         }
     }
 
-    /// Around a notch `width` wide, centered: the center zone's halves go each side of it.
+    /// Around a notch `width` wide, centered: the center zone's halves go each side of it, right
+    /// against it where `fused`.
     pub fn around_notch(
         left: Element<'a, M>,
         [before, after]: [Element<'a, M>; 2],
         right: Element<'a, M>,
         width: f32,
+        fused: [bool; 2],
     ) -> Self {
+        let gaps = fused.map(|fused| {
+            if fused {
+                0.0
+            } else {
+                theme::ISLAND_SPACING as f32
+            }
+        });
         Self {
             zones: vec![left, before, after, right],
-            notch: Some(width),
+            notch: Some((width, gaps)),
         }
     }
 }
@@ -56,10 +66,11 @@ fn center_x(width: f32, left: f32, center: f32, right: f32, gap: f32) -> f32 {
 }
 
 /// Where the center's halves start around a notch `notch` wide, centered in `width`: the first,
-/// `before` wide, ends where the notch starts, and the second starts where it ends.
-fn around(width: f32, notch: f32, before: f32) -> (f32, f32) {
+/// `before` wide, ends `gaps[0]` before the notch starts, and the second starts `gaps[1]` after it
+/// ends.
+fn around(width: f32, notch: f32, before: f32, gaps: [f32; 2]) -> (f32, f32) {
     let start = (width - notch) / 2.0;
-    (start - before, start + notch)
+    (start - gaps[0] - before, start + notch + gaps[1])
 }
 
 impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
@@ -90,8 +101,8 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
                 center_x(width, widths[0], widths[1], widths[2], gap).round(),
                 (width - widths[2]).round(),
             ],
-            Some(notch) => {
-                let (before, after) = around(width, notch, widths[1]);
+            Some((notch, gaps)) => {
+                let (before, after) = around(width, notch, widths[1], gaps);
                 vec![
                     0.0,
                     before.round(),
@@ -243,10 +254,16 @@ mod tests {
     }
 
     #[test]
-    fn the_centers_halves_hug_the_notch() {
+    fn the_centers_fused_halves_hug_the_notch() {
         // 1000 wide, a 200-wide notch from 400 to 600: a 150-wide half before it starts at 250.
-        assert_eq!(around(1000.0, 200.0, 150.0), (250.0, 600.0));
+        assert_eq!(around(1000.0, 200.0, 150.0, [0.0; 2]), (250.0, 600.0));
         // Nothing before it: an empty half, ending where the notch starts.
-        assert_eq!(around(1000.0, 200.0, 0.0), (400.0, 600.0));
+        assert_eq!(around(1000.0, 200.0, 0.0, [0.0; 2]), (400.0, 600.0));
+    }
+
+    #[test]
+    fn the_centers_other_halves_keep_a_gap_from_the_notch() {
+        assert_eq!(around(1000.0, 200.0, 150.0, [6.0, 0.0]), (244.0, 600.0));
+        assert_eq!(around(1000.0, 200.0, 150.0, [0.0, 6.0]), (250.0, 606.0));
     }
 }
