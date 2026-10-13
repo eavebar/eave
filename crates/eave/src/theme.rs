@@ -32,7 +32,6 @@ pub const SURFACE_HEIGHT: u32 = EDGE_GAP as u32 + ISLAND_HEIGHT + DRAG_ROOM as u
 pub const ATTACH_OVERHANG: f32 = 32.0;
 
 pub const ISLAND_BG: Color = Color::BLACK;
-pub const ISLAND_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 pub const HOVER_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 pub const PRESSED_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.14);
 pub const SEPARATOR: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);

@@ -27,7 +27,7 @@ use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::alignment::Horizontal;
 use iced::keyboard::{self, key};
-use iced::widget::canvas::{Cache, Path, Stroke};
+use iced::widget::canvas::{Cache, Path};
 use iced::{
     Color, Element, Event, Length, Padding, Point, Rectangle, Size, Transformation, Vector, window,
 };
@@ -1194,33 +1194,15 @@ fn draw_island<M>(
                     let sides = [bleed.left <= 0.0, bleed.right <= 0.0];
                     (room.y - body.y, shoulder, sides)
                 });
-                // `out` widens the shoulders and tightens the corners by as much.
-                let outline_of = |bounds: Rectangle, out: f32| {
-                    let corners = corners.map(|corner| {
-                        CornerShape::new((corner.radius - out).max(0.0), corner.smoothing)
-                    });
-                    match hanging {
-                        Some((edge, shoulder, sides)) => Path::new(|builder| {
-                            let shoulder =
-                                CornerShape::new(shoulder.radius + out, shoulder.smoothing);
-                            squircle::hanging(builder, bounds, corners, edge, shoulder, sides);
-                        }),
-                        None => squircle_corners(bounds, corners),
-                    }
+                // Black on black, with no border: what touches the notch or the bezel reads as
+                // one shape with it (D-74).
+                let outline = match hanging {
+                    Some((edge, shoulder, sides)) => Path::new(|builder| {
+                        squircle::hanging(builder, outline, corners, edge, shoulder, sides);
+                    }),
+                    None => squircle_corners(outline, corners),
                 };
-                frame.fill(&bend(outline_of(outline, 0.0)), theme::ISLAND_BG);
-                // Half a pixel in, so the whole hairline lands inside the fill; and half a pixel
-                // rounder round the shoulders, which curve the other way.
-                let inset = Rectangle::new(
-                    Point::new(room.x + 0.5, room.y + 0.5),
-                    Size::new(size.width - 1.0, size.height - 1.0),
-                );
-                frame.stroke(
-                    &bend(outline_of(inset, 0.5)),
-                    Stroke::default()
-                        .with_color(theme::ISLAND_BORDER)
-                        .with_width(1.0),
-                );
+                frame.fill(&bend(outline), theme::ISLAND_BG);
             });
             renderer.with_translation(Vector::new(body.x, body.y) - room, |renderer| {
                 renderer.draw_geometry(geometry);

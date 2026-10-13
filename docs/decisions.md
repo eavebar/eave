@@ -369,7 +369,7 @@ Both new watchers publish through a `tokio::sync::watch` channel, so every widge
 
 **Status:** accepted (2026-10-12)
 
-**What:** the bar no longer paints a full-width strip. Each zone (left, center, right) is an island: a rounded container (`ISLAND_RADIUS`, `ISLAND_BG`, the popover's hairline border) as wide as its items. A zone with no visible items has no island. Each zone still takes a third of the width, so the center island stays centered on screen. The islands sit `EDGE_GAP` (6 px, the same as `PANEL_GAP`) from the top, left and right edges. All of it is drawn on the one transparent layer surface. The gap is padding inside the surface, which is `ISLAND_HEIGHT + EDGE_GAP` tall, and that's also the exclusive zone. *(Superseded in part by [D-26](#d-26-squircle-islands-that-squeeze-and-spring-back): the surface and exclusive zone also include `DRAG_ROOM` below the islands, and islands are squircles instead of rounded rectangles.)*
+**What:** the bar no longer paints a full-width strip. Each zone (left, center, right) is an island: a rounded container (`ISLAND_RADIUS`, `ISLAND_BG`, the popover's hairline border, *dropped in [D-74](#d-74-islands-have-no-border)*) as wide as its items. A zone with no visible items has no island. Each zone still takes a third of the width, so the center island stays centered on screen. The islands sit `EDGE_GAP` (6 px, the same as `PANEL_GAP`) from the top, left and right edges. All of it is drawn on the one transparent layer surface. The gap is padding inside the surface, which is `ISLAND_HEIGHT + EDGE_GAP` tall, and that's also the exclusive zone. *(Superseded in part by [D-26](#d-26-squircle-islands-that-squeeze-and-spring-back): the surface and exclusive zone also include `DRAG_ROOM` below the islands, and islands are squircles instead of rounded rectangles.)*
 
 **Alternatives:**
 - one layer surface per island: clicks between islands would reach the desktop, but it costs three buffers, and popovers would need anchoring across surfaces. Every surface would also have to resize whenever its content's width changes.
@@ -1549,3 +1549,15 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 - **`islands` inside `screen`:** all the geometry in one table, but `eave calibrate` writes `screen` and has nothing to measure for islands. It's a choice, not a measurement.
 
 **Cost:** no new dependency. The corners are resolved when the setting changes, and an island's shape is cached as before, so nothing new runs per frame.
+
+---
+
+## D-74: Islands have no border
+
+**Status:** accepted (2026-10-13).
+
+**What:** the 1 px hairline drawn just inside every island's edge (`ISLAND_BORDER`, white at 8 %) is gone, here and on `eave calibrate`'s panel. An island is black on black and nothing else.
+
+**Why:** an island fused to the notch, or hanging from the top, is meant to read as one shape with the hardware around it (D-69, D-72). The notch and the bezel have no border, so the island's hairline drew a line along the bottom under the notch and round the shoulders, right where it should have disappeared. A black border would look the same as none, and none is less to draw.
+
+**Alternative:** no border only where an island touches the notch or an edge. Islands would then look different depending on where they sit, for a line that's hardly visible on a dark wallpaper anyway.
