@@ -1216,8 +1216,8 @@ RSS and CPU are in D-56: a cover costs about 1 MB of RSS whether it came from a 
 **Status:** accepted (2026-10-13). Extends [D-55](#d-55-several-islands-per-zone-collapsible-items-and-dividers-set-in-configtoml) and [D-26](#d-26-squircle-islands-that-squeeze-and-spring-back).
 
 **What:** `live = true` beside `island = true` makes that island a live one. For now that only changes its shape:
-- **Snug:** `LIVE_ISLAND_PADDING` (4 px) at its ends instead of `ISLAND_PADDING` (14), and never narrower than it is tall. An island of one icon is about 36 × 30, nearly round.
-- **Rounder:** `LIVE_ISLAND_RADIUS`, half the island's height *(half its own height since [D-76](#d-76-islands-are-as-tall-as-the-notch))*, with the same smoothing, so it's still a squircle. As it grows into a popover the radius eases back to `ISLAND_RADIUS` over the first island height, so its panel looks like any other.
+- **Snug:** `LIVE_ISLAND_PADDING` (4 px) at its ends instead of `ISLAND_PADDING` (14), and never narrower than it is tall. An island of one icon is about 36 × 30, nearly round. *(Since [D-78](#d-78-live-islands-take-their-corners-from-where-they-sit), the room at its ends is the room above and below its items.)*
+- **Rounder:** `LIVE_ISLAND_RADIUS`, half the island's height *(half its own height since [D-76](#d-76-islands-are-as-tall-as-the-notch))*, with the same smoothing, so it's still a squircle. As it grows into a popover the radius eases back to `ISLAND_RADIUS` over the first island height, so its panel looks like any other. *(Superseded by [D-78](#d-78-live-islands-take-their-corners-from-where-they-sit): a live island's corners are any island's where it sits.)*
 
 A marker before the zone's first item sets the first island, so no island has to be empty to be live. `live` that isn't a boolean is warned about and ignored. Every entry of the island carries `live` (`Entry::live`), and the view reads it the way it reads `collapsible`. The island rebuilds its cached shape when it changes.
 
@@ -1538,7 +1538,7 @@ screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
 - **The notch:** a center island beside the notch that isn't attached to the top sits a gap away from it. On that side, its top corner is rounded like the notch's shoulder and its bottom one like the notch's lower corner, so each corner matches the part of the notch it faces. A notch with no measured shoulder or lower corner leaves that corner to `islands`. With `attach = "top"`, it's fused to the notch, as D-69 had it for every island there.
 - **Anything else:** `islands = { radius, smoothing }` in config.toml, in physical pixels. Each is `"auto"` by default: the notch's corners, then the screen's top corners at an even distance, then the theme's 14 px and 0.6. With nothing measured, the bar looks as before. A notch found by `"auto"` has no measured corners, so it's skipped.
 
-A corner that's attached somewhere is out of sight, so whatever it would be doesn't matter. An attached island's items sit in the middle of what shows of it, not of its layout: 3 px toward each edge it reaches, and up again by what a notch shorter than the island leaves below it. A live island is still round until it grows into a popover, and then eases into these corners. `notch::Screen` resolves all of this once per setting, so drawing reads four `CornerShape`s per island.
+A corner that's attached somewhere is out of sight, so whatever it would be doesn't matter. An attached island's items sit in the middle of what shows of it, not of its layout: 3 px toward each edge it reaches, and up again by what a notch shorter than the island leaves below it. A live island is still round until it grows into a popover, and then eases into these corners. *(Since D-78, it has these corners from the start.)* `notch::Screen` resolves all of this once per setting, so drawing reads four `CornerShape`s per island.
 
 **Why concentric:** two curves the same distance apart all the way round read as one shape nested in the other, which is what the islands near the screen's corners should look like. With the MacBook's 19.5 px corners at scale 2, that's 13.5 px. D-72 thought this would be invisible against the theme's 14 px. With the notch setting the rest at 10 px, it isn't.
 
@@ -1613,4 +1613,20 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 - **A spring:** nothing pulls a flung list anywhere. It runs out.
 
 **Cost:** no new dependency. Frames only while a fling or a wheel step moves.
+
+---
+
+## D-78: Live islands take their corners from where they sit
+
+**Status:** accepted (2026-10-13). Supersedes D-60's "rounder".
+
+**Problem:** since D-73, every island takes its corners from what it faces. Live islands were the exception: they were round, with a radius of half their height, wherever they sat. Beside the notch, a round island didn't match the notch's shoulder, which every island near it now did.
+
+**What:** a live island's corners are any island's in the same place: the screen's corner at an even distance, the notch's shoulder and lower corner beside it, `islands` elsewhere. It's still snug. Its ends have as much room as there is above and below its tallest item, in what's seen of the island (`shows`, D-73), so the gap around an item is even. On a 26 px island, a 16 px icon has 5 px all round. A live island with no items keeps `LIVE_ISLAND_PADDING`, and it's still never narrower than it is tall.
+
+**Why:** a live island is about what it shows, not about a shape of its own. Matching its neighbors keeps the bar one family of shapes, and the even padding is what still makes it read as snug.
+
+**Alternative:** keep a fixed 4 px at its ends. It was close to the even gap on a 30 px island, but not on the notch's 26 px.
+
+**Cost:** nothing at run time. The easing from round into the panel's corners is gone.
 

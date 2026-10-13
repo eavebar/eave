@@ -16,7 +16,7 @@
 //!
 //! [[right]]
 //! island = true   # the next items are another island, beside this one
-//! live = true     # optional: a live island, rounder and snugger around its items
+//! live = true     # optional: a live island, snug around its items
 //! attach = ["top", "right"]   # optional: flush with these screen edges (D-70)
 //! ```
 //!
