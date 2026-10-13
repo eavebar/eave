@@ -79,7 +79,10 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     for path in entries {
         if path.is_dir() {
             collect(&path, out);
-        } else if path.extension().is_some_and(|extension| extension == "desktop") {
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "desktop")
+        {
             out.push(path);
         }
     }
@@ -352,7 +355,10 @@ mod tests {
         write("system", "readme.txt", "not an entry");
 
         let apps = scan(&[root.join("home"), root.join("system")], &[]);
-        let found: Vec<_> = apps.iter().map(|app| (app.id.as_str(), app.name.as_str())).collect();
+        let found: Vec<_> = apps
+            .iter()
+            .map(|app| (app.id.as_str(), app.name.as_str()))
+            .collect();
         assert_eq!(found, [("editor", "My Editor"), ("kde-tool", "Tool")]);
         fs::remove_dir_all(root).unwrap();
     }

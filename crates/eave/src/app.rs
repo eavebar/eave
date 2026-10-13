@@ -548,7 +548,11 @@ impl Bar {
     fn dormer_entries(&self) -> Vec<dormer::Entry> {
         let mut entries = Vec::new();
         for instance in &self.instances {
-            let actions = instance.widget.actions().into_iter().map(Action::into_parts);
+            let actions = instance
+                .widget
+                .actions()
+                .into_iter()
+                .map(Action::into_parts);
             for (index, action) in actions.enumerate() {
                 entries.push(dormer::Entry {
                     instance: instance.id,
@@ -1604,9 +1608,8 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         ui::column([field, ui::label("Nothing found").tone(Tone::Dim)])
     };
     // Its rows hold pictures only, so every message in it is the dormer's own.
-    let content = kit::panel(node, &bar.icons).map(|message: AnyMessage| {
-        Message::Dormer(message.downcast().unwrap_or(Event::Move(0)))
-    });
+    let content = kit::panel(node, &bar.icons)
+        .map(|message: AnyMessage| Message::Dormer(message.downcast().unwrap_or(Event::Move(0))));
     island::Popover {
         key: DORMER,
         content,

@@ -242,19 +242,28 @@ mod tests {
     #[test]
     fn a_prefix_beats_letters_spread_out() {
         let entries = [entry(0, "Previous track"), entry(0, "Pause")];
-        assert_eq!(titles("pa", &entries, &Recent::default()), ["Pause", "Previous track"]);
+        assert_eq!(
+            titles("pa", &entries, &Recent::default()),
+            ["Pause", "Previous track"]
+        );
     }
 
     #[test]
     fn word_starts_beat_letters_inside_words() {
         let entries = [entry(0, "Disconnect"), entry(0, "Do not disturb")];
-        assert_eq!(titles("dnd", &entries, &Recent::default())[0], "Do not disturb");
+        assert_eq!(
+            titles("dnd", &entries, &Recent::default())[0],
+            "Do not disturb"
+        );
     }
 
     #[test]
     fn spaces_in_the_query_are_ignored() {
         let entries = [entry(0, "Workspace 3"), entry(0, "Workspace 4")];
-        assert_eq!(titles("work 3", &entries, &Recent::default()), ["Workspace 3"]);
+        assert_eq!(
+            titles("work 3", &entries, &Recent::default()),
+            ["Workspace 3"]
+        );
     }
 
     #[test]
@@ -270,7 +279,11 @@ mod tests {
 
     #[test]
     fn recent_picks_come_first_and_rank_higher() {
-        let entries = [entry(0, "Brighter"), entry(1, "Bluetooth"), entry(2, "Battery")];
+        let entries = [
+            entry(0, "Brighter"),
+            entry(1, "Bluetooth"),
+            entry(2, "Battery"),
+        ];
         let mut recent = Recent::default();
         assert_eq!(
             titles("", &entries, &recent),

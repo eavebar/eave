@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use eave_api::ui::{self, Icon, Item, Panel};
+use eave_api::ui::{self, Action, Icon, Item, Panel};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
 use eave_hyprland::types::{Devices, Keyboard as Device};
 use eave_hyprland::{Event, Update};
@@ -160,6 +160,46 @@ impl Widget for Keyboard {
         let content = ui::column([ui::header("Keyboard"), ui::list(rows)]);
         Some(Panel::new(content).on_open(Message::Opened))
     }
+
+    fn actions(&self) -> Vec<Action<Message>> {
+        if !self.switchable {
+            return Vec::new();
+        }
+        let words = ["keyboard", "layout", "language", "input"];
+        let mut actions = vec![
+            ui::action("Next keyboard layout", Message::Next)
+                .subtitle(self.layout.clone())
+                .keywords(words),
+        ];
+        for (index, layout) in self.layouts.iter().enumerate() {
+            if self.active == Some(index) {
+                continue;
+            }
+            let key = (layout.code.clone(), layout.variant.clone());
+            // Long names once the popover has read them; codes until then.
+            let name = self
+                .names
+                .as_ref()
+                .and_then(|names| names.get(&key))
+                .cloned()
+                .unwrap_or_else(|| match layout.variant.as_str() {
+                    "" => layout.code.clone(),
+                    variant => format!("{} {variant}", layout.code),
+                });
+            actions.push(
+                ui::action(format!("Switch to {name}"), Message::Switch(index))
+                    .subtitle("Keyboard layout")
+                    .keywords(
+                        words
+                            .into_iter()
+                            .map(str::to_owned)
+                            .chain([layout.code.clone(), layout.variant.clone()]),
+                    )
+                    .leading(ui::badge(layout.code.to_uppercase())),
+            );
+        }
+        actions
+    }
 }
 
 /// Where xkb lists every layout and variant with its long name.
@@ -254,6 +294,24 @@ mod tests {
             main: true,
             ..Device::default()
         })
+    }
+
+    #[test]
+    fn its_actions_switch_to_the_other_layouts() {
+        let titles = |keyboard: &Keyboard| {
+            keyboard
+                .actions()
+                .into_iter()
+                .map(|action| action.title().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let (mut keyboard, _) = Keyboard::new(Config::default());
+        keyboard.update(Message::Refreshed(device("us", "English (US)")));
+        assert!(titles(&keyboard).is_empty(), "nothing to switch to");
+        let mut two = device("us,it", "English (US)").unwrap();
+        two.active_layout_index = Some(0);
+        keyboard.update(Message::Refreshed(Some(two)));
+        assert_eq!(titles(&keyboard), ["Next keyboard layout", "Switch to it"]);
     }
 
     #[test]

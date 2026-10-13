@@ -589,7 +589,10 @@ mod tests {
         assert!(config.warnings.is_empty());
         assert_eq!(config.entries.len(), 1);
         assert_eq!(config.entries[0].zone, Zone::Dormer);
-        assert_eq!(config.entries[0].options.get("terminal"), Some(&"foot".into()));
+        assert_eq!(
+            config.entries[0].options.get("terminal"),
+            Some(&"foot".into())
+        );
     }
 
     #[test]

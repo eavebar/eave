@@ -57,7 +57,9 @@ impl Widget for Apps {
 
     fn new(config: Config) -> (Self, Task<Message>) {
         let apps = Self {
-            terminal: config.terminal.filter(|terminal| !terminal.trim().is_empty()),
+            terminal: config
+                .terminal
+                .filter(|terminal| !terminal.trim().is_empty()),
             apps: Vec::new(),
             scanning: true,
             stale: false,
