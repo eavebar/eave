@@ -366,6 +366,8 @@ struct ItemMotion {
     key: u64,
     x: Spring,
     shown: Spring,
+    /// How far its own sideways nudge moves it, on top of the island's push.
+    kick: Spring,
 }
 
 #[derive(Debug)]
@@ -465,7 +467,9 @@ impl Motion {
                 && self.press.is_none()
                 && !self.popover.present
             {
-                self.nudge(nudge.into(), center(key));
+                let request = nudge.into();
+                self.nudge(request, center(key));
+                self.kick(key, request.nudge);
             }
         }
         self.seen = Some(newest);
@@ -600,6 +604,7 @@ impl Motion {
                         target: 1.0,
                         ..Spring::new(0.0, MORPH)
                     },
+                    kick: Spring::new(0.0, NUDGE),
                 }),
             }
         }
@@ -773,14 +778,29 @@ impl Motion {
     }
 
     /// The springs a nudge moves, which run at its pace.
-    fn paced(&mut self) -> [&mut Spring; 2] {
+    fn paced(&mut self) -> impl Iterator<Item = &mut Spring> {
         [&mut self.push_x, &mut self.push_y]
+            .into_iter()
+            .chain(self.items.iter_mut().map(|item| &mut item.kick))
+    }
+
+    /// Sends the item that nudged sideways a little further than its island, so what changed
+    /// (the cover of the next track, the active workspace) gets a push of its own.
+    fn kick(&mut self, key: u64, nudge: Nudge) {
+        let way = match nudge {
+            Nudge::Left => -1.0,
+            Nudge::Right => 1.0,
+            Nudge::Up | Nudge::Down => return,
+        };
+        if let Some(item) = self.items.iter_mut().find(|item| item.key == key) {
+            item.kick.velocity = way * theme::NUDGE_KICK_SPEED;
+        }
     }
 
     fn at_rest(&mut self) -> bool {
         self.jelly.at_rest()
             && self.springs().all(|spring| spring.at_rest())
-            && self.paced().iter().all(|spring| spring.at_rest())
+            && self.paced().all(|spring| spring.at_rest())
     }
 
     /// Advances to `now`. Returns whether another frame is needed.
@@ -812,7 +832,7 @@ impl Motion {
         self.aim();
         if self.at_rest() {
             self.springs().for_each(Spring::settle);
-            self.paced().into_iter().for_each(Spring::settle);
+            self.paced().for_each(Spring::settle);
             self.jelly.settle();
             self.let_go_of_grab();
             self.last = None;
@@ -926,7 +946,7 @@ impl Motion {
     fn item(&self, key: u64, x: f32) -> (f32, f32) {
         let fade = self.popover.items.value;
         match self.items.iter().find(|item| item.key == key) {
-            Some(item) => (item.x.value - x, item.shown.value * fade),
+            Some(item) => (item.x.value + item.kick.value - x, item.shown.value * fade),
             // Not arranged yet: new, so not shown yet.
             None => (0.0, 0.0),
         }
@@ -2405,6 +2425,23 @@ mod tests {
             top > 0.5 && bulge > 1.5,
             "the top widens and bulges: {top} {bulge}"
         );
+    }
+
+    #[test]
+    fn a_sideways_nudge_kicks_its_item_a_little_further_and_back() {
+        let mut motion = nudged(&[(2, (2, Nudge::Left))]);
+        let (mut one, mut two) = (0.0f32, 0.0f32);
+        run(&mut motion, Instant::now(), |motion| {
+            one = one.max(motion.item(1, 10.0).0.abs());
+            two = two.min(motion.item(2, 50.0).0);
+        });
+        assert_eq!(one, 0.0, "only the item that nudged");
+        assert!((-4.0..-1.0).contains(&two), "a few px left: {two}");
+        assert_eq!(motion.item(2, 50.0), (0.0, 1.0), "and back");
+
+        // Up and down bump the edge instead.
+        let motion = nudged(&[(2, (2, Nudge::Up))]);
+        assert_eq!(motion.items[1].kick.velocity, 0.0);
     }
 
     #[test]
