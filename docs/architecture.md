@@ -28,7 +28,7 @@ eave keeps these apart. The **host** does the first job and owns everything visu
 
 - **Host** ([D-11](decisions.md)): owns every surface, the layout, the look and the motion. It is not pluggable.
 - **Widgets** implement `eave_api::Widget`. They can't pick colors or sizes, can't build raw iced elements, and can't move other items or the bar ([D-13](decisions.md)).
-- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-net` holds one netlink listener for links, addresses, routes and Wi-Fi ([D-23](decisions.md)). `crates/eave-dbus` shares one system bus connection ([D-18](decisions.md)). `crates/eave-pulse` holds the one audio event subscription ([D-19](decisions.md)). `crates/eave-iwd` controls Wi-Fi through iwd, watched only while the network popover is open ([D-42](decisions.md)).
+- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-net` holds one netlink listener for links, addresses, routes and Wi-Fi ([D-23](decisions.md)). `crates/eave-dbus` shares one system bus connection and one session bus connection ([D-18](decisions.md)). `crates/eave-pulse` holds the one audio event subscription ([D-19](decisions.md)). `crates/eave-iwd` controls Wi-Fi through iwd, watched only while the network popover is open ([D-42](decisions.md)). `crates/eave-mpris` follows media players on the session bus ([D-56](decisions.md)).
 
 Core plugins depend only on Hyprland and the kernel, plus an audio server for volume. They don't need UPower, NetworkManager or any other daemon or binary to be installed ([D-23](decisions.md)).
 
@@ -78,14 +78,14 @@ Notifications travel only over the session bus ([D-52](decisions.md)). The plugi
 | Clock | system time | 1 s timer (`eave_api::time::every`) |
 | Battery | kernel (`/sys/class/power_supply`) | `power_supply` uevents over netlink, plus a 30 s re-read while a battery exists ([D-23](decisions.md)) |
 | Volume | PipeWire (through pipewire-pulse) | PulseAudio native protocol, pure Rust, subscribed to sink/server events ([D-19](decisions.md)) |
-| Media | MPRIS | D-Bus (`zbus`) |
+| Media | MPRIS players | D-Bus on the session bus: name changes, `PropertiesChanged` and `Seeked` from every player ([D-56](decisions.md)) |
 | Network | kernel (rtnetlink, nl80211) | link/address/route multicast events, plus a 10 s signal re-read while on Wi-Fi ([D-23](decisions.md)) |
 | Bluetooth | BlueZ | D-Bus (`zbus`) |
 | Tray | StatusNotifierItem | D-Bus. We must act as the watcher/host. The hardest widget. |
 | Notifications | apps, through the freedesktop notification spec | D-Bus: eave serves `org.freedesktop.Notifications` on the session bus, from the plugin in [eaveshell/eave-notifications](https://github.com/eaveshell/eave-notifications) ([D-48](decisions.md), [D-50](decisions.md)) |
 | CPU / RAM / temps | `/proc`, `/sys` | timer (the only legitimate polling) |
 
-So far: clock, workspaces, active window, keyboard layout, battery, network, volume and notifications. Media is next. See [roadmap.md](roadmap.md).
+So far: clock, workspaces, active window, keyboard layout, battery, network, volume, media and notifications. Bluetooth is next. See [roadmap.md](roadmap.md).
 
 ## Code layout
 
@@ -104,8 +104,9 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/config.rs            config.toml → zone entries, with their island, divider and collapsible
   src/watch.rs             inotify watch on the config directory
   src/kit.rs               ui nodes → iced elements, styled
-  src/icon.rs              status icons (volume, Wi-Fi, wired, battery) as vector paths
+  src/icon.rs              status icons (volume, Wi-Fi, wired, battery, media) as vector paths
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
+  src/cover.rs             covers: a file or https URL → cropped, rounded 32 and 256 px bitmaps, off the UI thread
   src/theme.rs             every color, size and font
   src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay, switching popovers mid-morph, the collapse chevron on hover
   src/squish.rs            how squished the items being drawn are, set by their island
@@ -124,7 +125,8 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/clip.rs              a line of text cut at its room, fading at the end
   src/ease.rs              a number eased to each new value on the frame clock
 crates/eave-build/         builds the widgets config.toml uses, installs and restarts; `update`, `init`
-crates/eave-dbus/          service: shared system bus, snapshot-on-PropertiesChanged watcher
+crates/eave-dbus/          service: shared system and session buses, snapshot-on-PropertiesChanged watcher
+crates/eave-mpris/         service: MPRIS media players on the session bus, and their controls
 crates/eave-iwd/           service: Wi-Fi networks and controls through iwd's D-Bus API, and a passphrase agent
 crates/eave-net/           service: network state from the kernel over netlink (one event thread)
 crates/eave-pulse/         service: audio over the PulseAudio protocol (one event thread)
@@ -134,6 +136,7 @@ plugins/clock/             the clock plugin (crate eave-clock) + its eave-plugin
 plugins/workspaces/        Hyprland workspaces (eave-workspaces)
 plugins/window/            focused window title (eave-window)
 plugins/keyboard/          keyboard layout (eave-keyboard)
+plugins/media/             now playing over MPRIS, with cover art (eave-media)
 plugins/battery/           battery from sysfs (eave-battery)
 plugins/network/           primary connection, via eave-net; Wi-Fi to join via eave-iwd (eave-network)
 plugins/volume/            output volume and switching (eave-volume)

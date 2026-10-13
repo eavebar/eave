@@ -118,6 +118,12 @@ fn swell(t: f32) -> f32 {
     (PI * (t / length - index)).sin().powi(2) * (1.0 - 0.2 * index)
 }
 
+/// The media icon's bars, in grid units: uneven while playing, low and level while not. They
+/// don't dance: that would redraw the bar for as long as music plays
+/// ([D-56](../../../docs/decisions.md)).
+const BARS_PLAYING: [f32; 3] = [6.5, 11.0, 8.5];
+const BARS_PAUSED: [f32; 3] = [3.0; 3];
+
 struct Glyph {
     icon: Icon,
     color: Color,
@@ -211,6 +217,25 @@ impl<M> canvas::Program<M> for Glyph {
             Icon::Headphones => pen.headphones(),
             Icon::Display => pen.display(),
             Icon::Bell { muted } => pen.bell(muted),
+            Icon::Media { playing: true } => pen.bars(BARS_PLAYING),
+            Icon::Media { playing: false } => pen.bars(BARS_PAUSED),
+            Icon::Play => pen
+                .frame
+                .fill(&polygon(&[(4.5, 2.5), (13.0, 8.0), (4.5, 13.5)]), pen.on),
+            Icon::Pause => {
+                pen.block(3.5, 2.5, 3.25, 11.0, 1.0);
+                pen.block(9.25, 2.5, 3.25, 11.0, 1.0);
+            }
+            Icon::Previous => {
+                pen.block(2.5, 3.0, 2.25, 10.0, 1.0);
+                pen.frame
+                    .fill(&polygon(&[(13.5, 3.0), (5.5, 8.0), (13.5, 13.0)]), pen.on);
+            }
+            Icon::Next => {
+                pen.frame
+                    .fill(&polygon(&[(2.5, 3.0), (10.5, 8.0), (2.5, 13.0)]), pen.on);
+                pen.block(11.25, 3.0, 2.25, 10.0, 1.0);
+            }
         }
         vec![frame.into_geometry()]
     }
@@ -378,6 +403,16 @@ impl Pen<'_> {
         self.line(&arc(Point::new(8.0, 12.75), 1.75, 0.0, PI), self.on);
         if muted {
             self.slash(Point::new(2.5, 2.5), Point::new(13.5, 13.5));
+        }
+    }
+
+    /// Three bars standing on a common floor, `heights` tall.
+    fn bars(&mut self, heights: [f32; 3]) {
+        const FLOOR: f32 = 14.0;
+        const WIDTH: f32 = 3.0;
+        for (index, height) in heights.into_iter().enumerate() {
+            let x = 1.75 + index as f32 * 4.75;
+            self.block(x, FLOOR - height, WIDTH, height, 1.0);
         }
     }
 

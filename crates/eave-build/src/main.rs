@@ -932,6 +932,7 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
         "eave-dbus",
         "eave-hyprland",
         "eave-iwd",
+        "eave-mpris",
         "eave-net",
         "eave-pulse",
     ] {

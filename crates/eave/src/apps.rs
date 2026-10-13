@@ -24,6 +24,7 @@ use iced::advanced::widget::Tree;
 use iced::advanced::{Layout, Widget, layout, mouse, renderer};
 use iced::{Color, Element, Length, Rectangle, Size};
 
+use crate::cover::Cover;
 use crate::{squish, theme};
 
 /// A loaded icon, ready to draw.
@@ -36,23 +37,22 @@ impl AppIcon {
         Element::new(Picture {
             handle: self.0.clone(),
             opacity,
+            size: theme::ICON_SIZE,
         })
     }
 }
 
-/// An app icon on screen. Unlike iced's image, it squishes with its island ([`squish`]): an image
-/// can be drawn into any rectangle, so it's drawn into a stretched one.
-struct Picture {
-    handle: image::Handle,
-    opacity: f32,
+/// An icon or cover on screen, `size` square. Unlike iced's image, it squishes with its island
+/// ([`squish`]): an image can be drawn into any rectangle, so it's drawn into a stretched one.
+pub struct Picture {
+    pub handle: image::Handle,
+    pub opacity: f32,
+    pub size: f32,
 }
 
 impl<M> Widget<M, iced::Theme, iced::Renderer> for Picture {
     fn size(&self) -> Size<Length> {
-        Size::new(
-            Length::Fixed(theme::ICON_SIZE),
-            Length::Fixed(theme::ICON_SIZE),
-        )
+        Size::new(Length::Fixed(self.size), Length::Fixed(self.size))
     }
 
     fn layout(
@@ -61,7 +61,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Picture {
         _renderer: &iced::Renderer,
         _limits: &layout::Limits,
     ) -> layout::Node {
-        layout::Node::new(Size::new(theme::ICON_SIZE, theme::ICON_SIZE))
+        layout::Node::new(Size::new(self.size, self.size))
     }
 
     fn draw(
@@ -98,6 +98,8 @@ pub struct Icons {
     pub apps: HashMap<String, Option<AppIcon>>,
     /// The files plugins ship: `None` for one that isn't an SVG or PNG it can draw.
     pub files: HashMap<FileKey, Option<FileIcon>>,
+    /// Covers by URL: `None` for one that couldn't be had.
+    pub covers: HashMap<String, Option<Cover>>,
 }
 
 /// The icons a view shows, so the host can load the ones it doesn't have.
@@ -105,6 +107,7 @@ pub struct Icons {
 pub struct Wanted {
     pub apps: Vec<String>,
     pub files: Vec<&'static [u8]>,
+    pub covers: Vec<String>,
 }
 
 /// Which shipped file: its address and length. The bytes are `'static`, compiled into a plugin,

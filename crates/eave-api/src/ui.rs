@@ -63,6 +63,17 @@ pub enum Icon {
     Display,
     /// A bell: notifications, struck through when they're silenced.
     Bell { muted: bool },
+    /// Three level bars, like an equalizer: media. Uneven while `playing`, low and level when
+    /// not.
+    Media { playing: bool },
+    /// A triangle pointing right: play.
+    Play,
+    /// Two upright bars: pause.
+    Pause,
+    /// A triangle pointing left against a bar: back to the previous track.
+    Previous,
+    /// A triangle pointing right against a bar: on to the next track.
+    Next,
 }
 
 /// A piece of UI. Build it with the functions in this module.
@@ -89,6 +100,14 @@ pub enum Kind<M> {
     Image {
         file: &'static [u8],
         tint: bool,
+        tone: Option<Tone>,
+    },
+    Cover {
+        url: String,
+        /// Shown until the picture is loaded, and instead of it if it can't be.
+        fallback: Box<Node<M>>,
+        /// The main picture of a popover, not an icon.
+        large: bool,
         tone: Option<Tone>,
     },
     Counter {
@@ -233,6 +252,19 @@ pub fn symbol<M>(file: &'static [u8]) -> Node<M> {
     Node(Kind::Image {
         file,
         tint: true,
+        tone: None,
+    })
+}
+
+/// A picture a program hands over at runtime, by URL: a track's cover art. `file://` and
+/// `https://` URLs load; the host fetches, crops it square and rounds it, off the UI thread, and
+/// keeps the few latest. Drawn at icon size, or big with [`Node::large`]. Until it's there, or if
+/// it can't be loaded, `fallback` shows in its place. A tone only dims it.
+pub fn cover<M>(url: impl Into<String>, fallback: Node<M>) -> Node<M> {
+    Node(Kind::Cover {
+        url: url.into(),
+        fallback: Box::new(fallback),
+        large: false,
         tone: None,
     })
 }
@@ -592,6 +624,15 @@ impl<M> Node<M> {
         self
     }
 
+    /// For a [`cover`]: drawn big, as the main picture of a popover, not as an icon. Other nodes
+    /// ignore it.
+    pub fn large(mut self) -> Self {
+        if let Kind::Cover { large, .. } = &mut self.0 {
+            *large = true;
+        }
+        self
+    }
+
     /// For a [`meter`]: marks a limit along it (0.0 to 1.0). Other nodes ignore it.
     pub fn limit(mut self, at: f32) -> Self {
         if let Kind::Meter { limit, .. } = &mut self.0 {
@@ -612,6 +653,10 @@ impl<M> Node<M> {
             | Kind::TextInput { tone, .. }
             | Kind::Badge { tone, .. } => {
                 tone.get_or_insert(new);
+            }
+            Kind::Cover { tone, fallback, .. } => {
+                tone.get_or_insert(new);
+                fallback.set_tone(new);
             }
             Kind::Alternate {
                 options: children, ..
@@ -673,6 +718,17 @@ impl<M> Node<M> {
             Kind::Icon { icon, tone } => Kind::Icon { icon, tone },
             Kind::AppIcon { app_id, tone } => Kind::AppIcon { app_id, tone },
             Kind::Image { file, tint, tone } => Kind::Image { file, tint, tone },
+            Kind::Cover {
+                url,
+                fallback,
+                large,
+                tone,
+            } => Kind::Cover {
+                url,
+                fallback: Box::new(fallback.map(f)),
+                large,
+                tone,
+            },
             Kind::Counter {
                 value,
                 range,

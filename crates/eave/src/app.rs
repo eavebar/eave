@@ -21,6 +21,7 @@ use iced_layershell::to_layer_message;
 use crate::apps::{self, AppIcon, FileIcon, FileKey, Icons, Wanted};
 use crate::config::{self, Config, Entry, Zone};
 use crate::countdown::Countdown;
+use crate::cover::{self, Cover};
 use crate::island::{self, Island, Toggle};
 use crate::slot::Slot;
 use crate::zones::Zones;
@@ -51,6 +52,8 @@ pub struct Bar {
     loading: Vec<String>,
     /// Icon files being drawn.
     drawing: Vec<FileKey>,
+    /// Covers being fetched, by URL.
+    fetching: Vec<String>,
     /// Widgets' notifications, on screen or waiting to be, newest first.
     toasts: Vec<Toast>,
     /// The right island while it's a panel of notifications.
@@ -154,6 +157,8 @@ const NOTICES: u64 = u64::MAX;
 /// The time a notification gets back when the pointer leaves the panel, if it had less: enough
 /// to read the last words or reach for its close button.
 const TOAST_GRACE: Duration = Duration::from_secs(1);
+/// How many covers are kept before the ones not on screen are let go. Each is about 260 KB.
+const COVERS_KEPT: usize = 4;
 
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
@@ -197,6 +202,8 @@ pub enum Message {
     AppIcon(String, Option<AppIcon>),
     /// A plugin's icon file has been drawn, or turned out not to be one.
     FileIcon(FileKey, Option<FileIcon>),
+    /// A cover has been fetched and drawn, or couldn't be.
+    Cover(String, Option<Cover>),
 }
 
 impl Bar {
@@ -213,6 +220,7 @@ impl Bar {
             icons: Icons::default(),
             loading: Vec::new(),
             drawing: Vec::new(),
+            fetching: Vec::new(),
             toasts: Vec::new(),
             notices: None,
             windows: Vec::new(),
@@ -328,6 +336,21 @@ impl Bar {
             self.drawing.push(key);
             tasks.push(Task::perform(apps::load_file(file), move |icon| {
                 Message::FileIcon(key, icon)
+            }));
+        }
+        // Covers come and go with tracks: past a few, keep only the ones on screen.
+        if self.icons.covers.len() > COVERS_KEPT {
+            self.icons
+                .covers
+                .retain(|url, _| wanted.covers.contains(url));
+        }
+        for url in wanted.covers {
+            if self.icons.covers.contains_key(&url) || self.fetching.contains(&url) {
+                continue;
+            }
+            self.fetching.push(url.clone());
+            tasks.push(Task::perform(cover::load(url.clone()), move |cover| {
+                Message::Cover(url.clone(), cover)
             }));
         }
         for app_id in wanted.apps {
@@ -795,6 +818,11 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         Message::FileIcon(key, icon) => {
             bar.drawing.retain(|drawing| *drawing != key);
             bar.icons.files.insert(key, icon);
+            Task::none()
+        }
+        Message::Cover(url, cover) => {
+            bar.fetching.retain(|fetching| *fetching != url);
+            bar.icons.covers.insert(url, cover);
             Task::none()
         }
         Message::InnerPressed(id) if bar.popover_of(id).is_none() => send(bar.close_popover()),

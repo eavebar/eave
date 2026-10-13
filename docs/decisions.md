@@ -1019,7 +1019,7 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 - **A path to a file installed beside the binary:** the bar is one binary (D-12), and a missing file would be a new way to fail.
 - **Asking users to install the icon in their theme** (what eave-claude's README said): most never do, and the bar showed a C.
 - **iced's `svg` feature:** rejected in D-38 for its size and for drawing on the UI thread.
-- **Bytes taken at runtime (`Vec<u8>`), e.g. notification images:** the host would have to hash or compare them on every view to know them again. That's for later, with its own decision, if notification images come.
+- **Bytes taken at runtime (`Vec<u8>`), e.g. notification images:** the host would have to hash or compare them on every view to know them again. That's for later, with its own decision, if notification images come. *Later:* runtime pictures came as `ui::cover`, keyed by URL instead of by bytes ([D-56](#d-56-runtime-pictures-uicover-loaded-by-the-host-from-files-or-https)).
 
 **Measured** (Asahi, release, two clocks, 8 s after start then 10 s windows, three alternating runs each): binary 9,465,184 → 9,530,720 bytes (+64 KiB). RSS 14.6–14.7 MB with it, 14.8 MB without, and 1–2 ticks per 10 s on both. No new dependencies: resvg, tiny-skia's PNG decoding and iced's `image-without-codecs` were already in for D-38.
 
@@ -1077,3 +1077,95 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 
 **Cost:** an island with collapsible items handles pointer motion over it (a bounds check per event) and relayouts on enter and leave. Islands without any collapsible item run the same per-event code as before. Binary size unchanged (9,530,720 bytes, aarch64 release, before and after).
 
+---
+
+## D-56: Media over MPRIS, in `eave-mpris` on the session bus
+
+**Status:** accepted (2026-10-13).
+
+**What:** `plugins/media` (`widget = "media"`) shows what any MPRIS player is playing. It is built on a new service crate, `crates/eave-mpris`. `eave-dbus` gains `session()`, a shared session bus connection like `system()`.
+- **Watching:** one stream follows players coming and going (`NameOwnerChanged` for `org.mpris.MediaPlayer2.*`) and every signal from their object `/org/mpris/MediaPlayer2`: property changes and `Seeked`. A burst is drained, then after 50 ms every player is read again with `GetAll`, and an unchanged list isn't yielded. `eave-dbus::watch` doesn't fit, because it watches one fixed service, and players have names of their own.
+- **Position:** players don't signal it as it advances. It's read with everything else, and `position_at(now)` works it out from the time it was read and the rate. The seek bar moves on a 1 s timer, but only while the popover is open and something plays.
+- **`playerctld` is left out.** It mirrors the last active player, so that player would show twice.
+- **Which player the bar follows:**
+  1. One picked in the popover, until another one starts playing.
+  2. Otherwise the one followed so far, if it's still playing.
+  3. Otherwise the first one playing.
+  4. Otherwise the one followed so far, then the first one.
+  - Starting to play is the change of state from not playing to playing, so a player that has been playing the whole time doesn't take over from one picked by hand.
+- **The item:** the track's cover ([D-57](#d-57-runtime-pictures-uicover-loaded-by-the-host-from-files-or-https)), then "Title · Artist", dimmed while paused.
+  - `show = "hover"` shows the text only while hovered, and `show = "icon"` never shows it.
+  - Right click plays or pauses, and the status changes at once, before the player confirms it. Scrolling skips tracks, and a skip nudges `Right` or `Left` when the player reports the new track, not when the request is sent.
+  - The popover has a large cover, the title, artist and album, a seek bar, previous, play/pause and next, and a list of players when there are several.
+- **New `Icon`s:** `Media { playing }` (three level bars), `Play`, `Pause`, `Previous`, `Next`.
+
+**The bars don't dance.** At first `Icon::Media` danced while playing, frame by frame like the charging battery (D-37). Measured on the full bar (workspaces, media, volume, network, battery, clock) with a player playing, in ticks per 10 s (100 is one core):
+
+| Build | Ticks per 10 s |
+|---|---|
+| paused, or `main` | ~7 |
+| dancing, 30 fps | ~113 |
+| dancing, 15 fps | ~60 |
+| dancing, 10 fps | ~45 |
+| the icon alone on an empty bar, 30 fps | ~34 |
+
+The host redraws the whole surface every frame, so the cost grows with everything else on the bar, not with the icon. It would also last as long as music plays, on battery power too. The user chose the cover in the bar instead, and the bars are now still: uneven while playing, low and level while paused. They show only when a player has no cover and doesn't name its app.
+
+**Alternatives:**
+- **Dancing in bursts** (a few seconds when a track starts, then still): it was offered, but the user preferred cover art.
+- **Talking to `playerctld` only:** it would be one more daemon to have installed ([D-23](#d-23-core-plugins-depend-only-on-hyprland-and-the-kernel)), and the popover couldn't list players.
+- **Polling `Position`:** it would be a timer for as long as anything plays, and the seek bar only needs it while it's on screen.
+
+**Measured** (Asahi, release; 8 s after start, then a 10 s window; config: workspaces, volume, network, battery, clock, plus media where noted):
+
+| Build | RSS | Idle CPU |
+|---|---|---|
+| `main` | 16.8–16.9 MB | 3–4 ticks |
+| this branch, without media | 17.7 MB | 3 ticks |
+| this branch, with media, no player | 18.1 MB | 3 ticks |
+| this branch, a paused player with a cover from a file | 19.0–19.1 MB | 4–5 ticks |
+| this branch, a playing player with an https cover | 18.7–18.9 MB | 3–4 ticks |
+
+Run side by side, `main` and this branch read the same CPU through spikes caused by other activity on the machine.
+
+Binary: 9,530,720 bytes on `main`. The plugin and `eave-mpris` add 459 KB, making 9,989,528. Covers add the rest ([D-57](#d-57-runtime-pictures-uicover-loaded-by-the-host-from-files-or-https)).
+
+---
+
+## D-57: Runtime pictures: `ui::cover`, loaded by the host from files or https
+
+**Status:** accepted (2026-10-13). Adds what D-53 left for later: pictures that come at runtime. Shipped files stay `ui::image`.
+
+**What:** `ui::cover(url, fallback)` is a picture a program hands over by URL, like a track's cover art from `mpris:artUrl`. `.large()` makes it a popover's main picture, `COVER_SIZE` (128 px) square. Otherwise it's drawn at icon size.
+- The plugin still only describes. It gives a URL and what to show in its place. The host fetches, decodes and draws, and picks the size and the corner radius.
+- **Keyed by URL.** Comparing a string on every view is cheap, which is what made runtime bytes a problem in D-53: the host would have to hash or compare the bytes themselves.
+- **Loading** runs on tokio's blocking pool, once per URL:
+  - `file://` URLs are read, percent-decoded.
+  - `https://` URLs are downloaded with `ureq` (rustls on ring), checked against the system's CA certificates (`rustls-platform-verifier`), with a 10 s timeout. A fresh agent is made for each download, because a kept one held rustls and the certificates in memory: 22.5 MB RSS after one cover, against 18.8 MB with a fresh agent.
+  - Anything else (`http://`, `data:`) isn't loaded.
+  - Files and downloads are capped at 8 MB, and pictures at 4096 px a side.
+- **Decoding:** PNG through tiny-skia, which was already in the build for icons. JPEG through `zune-jpeg` (pure Rust, no default features), the format most covers come in.
+- **Drawing:** the middle square is cropped (a video's 16:9 thumbnail shows its middle), shrunk by averaging, and given rounded corners. This is done twice, at 32 px for the icon and 256 px for the popover, and only those bitmaps are kept (~4 KB and ~256 KB). Smaller pictures aren't enlarged when drawn; the renderer scales them.
+- **Fallback:** it shows until the cover is there, and in its place if the cover can't be had. Media uses the player's app icon (Spotify, Firefox, mpv), so a missing or slow cover never leaves a hole. In the popover the fallback is `empty()`: the popover springs to the cover's size when it arrives.
+- **Cache:** past 4 covers, the ones not on screen are dropped.
+
+**Alternatives:**
+- **Local files only:** Spotify and some web players give https URLs, and the user wanted those covers too.
+- **The plugin reading the bytes and passing them in** (`Vec<u8>` or a handle): this would put I/O and decoding in every plugin, and the host would still need a stable key.
+- **The `image` crate's JPEG feature:** it brings the same `zune-jpeg` through a larger API.
+- **WebP:** not seen from the players tried so far. It can be added if a player needs it.
+- **`webpki-roots` (bundled certificates):** a copy of the CA list to keep up to date inside the binary, where the system's own list already is.
+
+**Measured** (Asahi, release):
+
+| Build | Binary (bytes) |
+|---|---|
+| media, no covers | 9,989,528 |
+| + covers from files: `zune-jpeg`, cropping and rounding | 10,186,136 (+197 KB) |
+| + covers over https: `ureq`, `rustls`, `ring`, the platform verifier | 11,693,568 (+1.51 MB) |
+
+RSS and CPU are in D-56: a cover costs about 1 MB of RSS whether it came from a file or https, and nothing in idle CPU.
+
+**Cost:**
+- This is the first time the bar reaches the network. The URLs come from programs on the user's own session bus.
+- https is most of the binary growth (+1.5 MB, 16%). It's worth revisiting if a lighter TLS stack appears, or if Spotify starts handing over local files.

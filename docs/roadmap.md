@@ -25,9 +25,10 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **5.11 Notifications.** The notification engine lists notices and the right island morphs into a panel of them ([D-47](decisions.md)). Plugins send theirs over the bus, like any app ([D-52](decisions.md)). eave's own notification server and its plugin, with the latest ones in its popover, history, inline replies and do not disturb ([D-48](decisions.md), [D-49](decisions.md)), now in [eaveshell/eave-notifications](https://github.com/eaveshell/eave-notifications) ([D-50](decisions.md)).
 - [x] **5. Volume.** `plugins/volume` on `crates/eave-pulse`: the PulseAudio protocol served by pipewire-pulse ([D-19](decisions.md)). Scroll changes it, right click mutes, and the popover has −/+, mute and output switching.
 
+- [x] **6. Media.** `plugins/media` on `crates/eave-mpris`: any MPRIS player over the session bus. The track's cover in the bar, title and artist, right click to play or pause, scroll to skip; cover, seek bar, controls and players in the popover ([D-56](decisions.md)). Covers through a new `ui::cover`, from files or https ([D-57](decisions.md)).
+
 ## Next
 
-- [ ] **6. Media.** MPRIS over zbus.
 - [ ] **7. Bluetooth.** BlueZ over zbus, on `eave-dbus`.
 - [ ] **8. System tray.** StatusNotifierItem watcher and host, with menus.
 

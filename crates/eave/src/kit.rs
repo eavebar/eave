@@ -208,6 +208,10 @@ pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
     match node.into_kind() {
         Kind::AppIcon { app_id, .. } => out.apps.push(app_id),
         Kind::Image { file, .. } => out.files.push(file),
+        Kind::Cover { url, fallback, .. } => {
+            out.covers.push(url);
+            wanted(*fallback, out);
+        }
         Kind::Alternate { options, .. } => all(options),
         Kind::Row(children) | Kind::Column(children) | Kind::List(children) => all(children),
         Kind::Grid { cells, .. } => all(cells),
@@ -331,6 +335,15 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 .width(theme::ICON_SIZE)
                 .height(theme::ICON_SIZE)
                 .into(),
+        },
+        Kind::Cover {
+            url,
+            fallback,
+            large,
+            tone,
+        } => match icons.covers.get(&url) {
+            Some(Some(cover)) => cover.view(large, dim_opacity(tone.unwrap_or(ctx.tone))),
+            _ => render(*fallback, ctx, icons),
         },
         Kind::Counter {
             value,

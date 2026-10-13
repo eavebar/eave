@@ -1,6 +1,6 @@
 //! D-Bus for eave plugins ([D-7](https://github.com/eaveshell/eave/blob/main/docs/decisions.md)).
 //!
-//! One system bus connection, shared by every widget. [`watch`] gives a widget a snapshot of a
+//! One system bus connection and one session bus connection, each shared by every widget. [`watch`] gives a widget a snapshot of a
 //! service's state and a fresh one whenever the service reports a property change on an object
 //! the snapshot depends on, with no polling:
 //!
@@ -26,6 +26,13 @@ pub use zbus;
 pub async fn system() -> zbus::Result<Connection> {
     static SYSTEM: OnceCell<Connection> = OnceCell::const_new();
     SYSTEM.get_or_try_init(Connection::system).await.cloned()
+}
+
+/// The shared session bus connection, opened on first use: media players, notifications, the
+/// tray.
+pub async fn session() -> zbus::Result<Connection> {
+    static SESSION: OnceCell<Connection> = OnceCell::const_new();
+    SESSION.get_or_try_init(Connection::session).await.cloned()
 }
 
 /// What a snapshot function returns: the state, and the objects whose changes make it stale.

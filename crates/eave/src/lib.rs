@@ -7,6 +7,7 @@ mod clip;
 mod config;
 mod countdown;
 mod counter;
+mod cover;
 mod ease;
 mod field;
 mod gulp;

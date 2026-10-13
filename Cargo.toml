@@ -7,11 +7,13 @@ members = [
     "crates/eave-dbus",
     "crates/eave-hyprland",
     "crates/eave-iwd",
+    "crates/eave-mpris",
     "crates/eave-net",
     "crates/eave-pulse",
     "plugins/battery",
     "plugins/clock",
     "plugins/keyboard",
+    "plugins/media",
     "plugins/network",
     "plugins/volume",
     "plugins/window",
@@ -33,10 +35,12 @@ eave-dbus = { path = "crates/eave-dbus", version = "0.1.0" }
 eave-pulse = { path = "crates/eave-pulse", version = "0.1.0" }
 eave-hyprland = { path = "crates/eave-hyprland", version = "0.1.0" }
 eave-iwd = { path = "crates/eave-iwd", version = "0.1.0" }
+eave-mpris = { path = "crates/eave-mpris", version = "0.1.0" }
 eave-net = { path = "crates/eave-net", version = "0.1.0" }
 eave-battery = { path = "plugins/battery", version = "0.1.0" }
 eave-clock = { path = "plugins/clock", version = "0.1.0" }
 eave-keyboard = { path = "plugins/keyboard", version = "0.1.0" }
+eave-media = { path = "plugins/media", version = "0.1.0" }
 eave-network = { path = "plugins/network", version = "0.1.0" }
 eave-volume = { path = "plugins/volume", version = "0.1.0" }
 eave-window = { path = "plugins/window", version = "0.1.0" }
