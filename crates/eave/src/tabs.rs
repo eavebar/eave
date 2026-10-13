@@ -3,14 +3,21 @@
 //! the switcher's. Which tab is current is ours, not the plugin's: it lives in the widget state,
 //! which goes with the panel, so every popover opens on its first tab. Pages that aren't showing
 //! keep their state, so a list scrolled on one tab is still scrolled when it comes back.
+//!
+//! Switching hands the page over: the old one slides away from the new tab as it fades out, then
+//! the new one slides in from that side. The tabs take the new page's height at once, so the
+//! panel's shape eases to it while the old page goes.
 
 use iced::advanced::text::{self, Renderer as _};
 use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::{
-    Border, Element, Event, Font, Length, Pixels, Point, Rectangle, Size, Vector, alignment, window,
+    Border, Element, Event, Font, Length, Padding, Pixels, Point, Rectangle, Size, Vector,
+    alignment, window,
 };
 
+use crate::handover::Handover;
+use crate::island;
 use crate::switcher::Motion;
 use crate::theme;
 
@@ -25,12 +32,31 @@ impl<'a, M> Tabs<'a, M> {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct State {
     current: usize,
     hovered: Option<usize>,
     /// The mark, relative to the tabs.
     motion: Motion,
+    /// The page on screen, and the fade from one to the next.
+    pages: Handover,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            current: 0,
+            hovered: None,
+            motion: Motion::default(),
+            pages: Handover::new(Some(0), theme::TAB_FADE),
+        }
+    }
+}
+
+/// The way the old page leaves when going from tab `from` to `to`: away from the new one, which
+/// comes in from its own side.
+fn away(from: usize, to: usize) -> Vector {
+    Vector::new(if to > from { -1.0 } else { 1.0 }, 0.0)
 }
 
 /// Which of `count` equal segments across `width` the point `x` falls in.
@@ -66,6 +92,16 @@ impl<M> Tabs<'_, M> {
         showing(tree.state.downcast_ref::<State>().current, self.pages.len())
     }
 
+    /// The page on its way out, if there is one and it's still there.
+    fn leaving(&self, tree: &Tree) -> Option<usize> {
+        let current = self.current(tree);
+        tree.state
+            .downcast_ref::<State>()
+            .pages
+            .leaving()
+            .filter(|&leaving| leaving != current && leaving < self.pages.len())
+    }
+
     /// The segment under the cursor, if it is over the strip.
     fn under(&self, layout: Layout<'_>, cursor: mouse::Cursor) -> Option<usize> {
         let bounds = layout.bounds();
@@ -98,14 +134,10 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
         limits: &layout::Limits,
     ) -> layout::Node {
         let current = self.current(tree);
-        let limits = limits.width(Length::Fill);
+        let limits = limits.width(Length::Fill).shrink(Size::new(0.0, PAGE_TOP));
         let page = self.pages[current]
             .as_widget_mut()
-            .layout(
-                &mut tree.children[current],
-                renderer,
-                &limits.shrink(Size::new(0.0, PAGE_TOP)),
-            )
+            .layout(&mut tree.children[current], renderer, &limits)
             .move_to(Point::new(0.0, PAGE_TOP));
         let width = limits.max().width;
         let width = if width.is_finite() {
@@ -114,7 +146,17 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
             page.size().width
         };
         let size = Size::new(width, PAGE_TOP + page.size().height);
-        layout::Node::with_children(size, vec![page])
+        // The page going out is laid out too, after the current one, until it's gone.
+        let mut children = vec![page];
+        if let Some(leaving) = self.leaving(tree) {
+            children.push(
+                self.pages[leaving]
+                    .as_widget_mut()
+                    .layout(&mut tree.children[leaving], renderer, &limits)
+                    .move_to(Point::new(0.0, PAGE_TOP)),
+            );
+        }
+        layout::Node::with_children(size, children)
     }
 
     fn draw(
@@ -197,9 +239,20 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
             );
         }
 
-        if let Some(page) = layout.children().next() {
-            self.pages[current].as_widget().draw(
-                &tree.children[current],
+        let (index, shown, slide) = state.pages.shown(current);
+        let (index, page) = if index == current {
+            (index, layout.children().next())
+        } else if self.leaving(tree) == Some(index) {
+            (index, layout.children().nth(1))
+        } else {
+            (current, layout.children().next())
+        };
+        let Some(page) = page else {
+            return;
+        };
+        let draw = |renderer: &mut iced::Renderer| {
+            self.pages[index].as_widget().draw(
+                &tree.children[index],
                 renderer,
                 theme,
                 style,
@@ -207,7 +260,27 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
                 cursor,
                 viewport,
             );
+        };
+        if shown >= 1.0 && slide == Vector::ZERO {
+            draw(renderer);
+            return;
         }
+        // Clipped to where the slide can reach, within what the shape shows: a layer isn't
+        // clipped by the ones around it.
+        let slide = slide * theme::TAB_SLIDE;
+        let cover = page.bounds().expand(2.0);
+        let Some(reach) = cover
+            .expand(Padding::from([0.0, theme::TAB_SLIDE]))
+            .intersection(viewport)
+        else {
+            return;
+        };
+        renderer.with_layer(reach, |renderer| {
+            renderer.with_translation(slide, |renderer| {
+                draw(renderer);
+                island::fade(renderer, cover, reach - slide, shown);
+            });
+        });
     }
 
     fn children(&self) -> Vec<Tree> {
@@ -263,6 +336,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
                 if let Some(index) = under {
                     if index != current {
                         state.current = index;
+                        state.pages.set(index, away(current, index));
                         shell.invalidate_layout();
                         shell.request_redraw();
                     }
@@ -273,7 +347,9 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
             // Every frame starts with this event, after layout, so the target is current.
             Event::Window(window::Event::RedrawRequested(now)) => {
                 let target = segment(layout.bounds().width, self.names.len(), current);
-                if state.motion.step(Some(target), *now) {
+                let mark = state.motion.step(Some(target), *now);
+                let pages = state.pages.step(*now);
+                if mark || pages {
                     shell.request_redraw();
                 }
             }
@@ -367,6 +443,47 @@ mod tests {
     fn falls_back_to_the_first_tab_when_tabs_go_away() {
         assert_eq!(showing(2, 3), 2);
         assert_eq!(showing(2, 2), 0);
+    }
+
+    #[test]
+    fn the_old_page_leaves_away_from_the_new_tab() {
+        assert_eq!(away(0, 2), Vector::new(-1.0, 0.0), "to the right: out left");
+        assert_eq!(away(2, 1), Vector::new(1.0, 0.0), "to the left: out right");
+    }
+
+    #[test]
+    fn switching_lays_out_both_pages_until_the_old_one_is_gone() {
+        let mut tabs: Tabs<'_, ()> = Tabs::new(
+            vec!["a".into(), "b".into()],
+            vec![
+                iced::widget::Space::new().width(10).height(100).into(),
+                iced::widget::Space::new().width(10).height(40).into(),
+            ],
+        );
+        let mut tree = Tree::new(&tabs as &dyn Widget<_, _, _>);
+        let renderer = iced::Renderer::new(Font::DEFAULT, Pixels(14.0));
+        let limits = layout::Limits::new(Size::ZERO, Size::new(300.0, 1000.0));
+        let node = tabs.layout(&mut tree, &renderer, &limits);
+        assert_eq!(node.children().len(), 1);
+
+        let state = tree.state.downcast_mut::<State>();
+        state.current = 1;
+        state.pages.set(1, away(0, 1));
+        let node = tabs.layout(&mut tree, &renderer, &limits);
+        assert_eq!(
+            node.size().height,
+            PAGE_TOP + 40.0,
+            "the new page's height at once"
+        );
+        assert_eq!(node.children().len(), 2, "the old page, while it goes");
+        assert_eq!(node.children()[1].size().height, 100.0);
+
+        let state = tree.state.downcast_mut::<State>();
+        let start = std::time::Instant::now();
+        state.pages.step(start);
+        assert!(!state.pages.step(start + theme::TAB_FADE));
+        let node = tabs.layout(&mut tree, &renderer, &limits);
+        assert_eq!(node.children().len(), 1);
     }
 
     #[test]

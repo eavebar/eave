@@ -682,5 +682,4 @@ mod tests {
         );
         assert_eq!(toward(item, None, None, false), Vector::ZERO);
     }
-
 }

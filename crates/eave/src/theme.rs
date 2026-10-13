@@ -191,6 +191,11 @@ pub const TAB_HEIGHT: f32 = 28.0;
 pub const TAB_INSET: f32 = 2.0;
 pub const TAB_TRACK: Color = BUTTON_BG;
 pub const TAB_MARK: Color = SELECTED_BG;
+/// Switching tabs hands the page over: the old one slides `TAB_SLIDE` away from the new tab as it
+/// fades out, then the new one slides in from that side, over `TAB_FADE` in all. Further than an
+/// alternate's slide, since pages are wide.
+pub const TAB_FADE: Duration = Duration::from_millis(240);
+pub const TAB_SLIDE: f32 = 16.0;
 /// The width at the end of a long title that fades out instead of being cut.
 pub const TEXT_FADE: f32 = 16.0;
 
