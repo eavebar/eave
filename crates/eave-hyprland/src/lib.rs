@@ -1,4 +1,4 @@
-//! Hyprland IPC for eave plugins ([D-6](https://github.com/eavebar/eave/blob/main/docs/decisions.md)).
+//! Hyprland IPC for eave plugins ([D-6](https://github.com/eaveshell/eave/blob/main/docs/decisions.md)).
 //!
 //! Hyprland has two Unix sockets: `.socket2.sock` streams events, `.socket.sock` answers one
 //! request per connection. Every widget that calls [`watch`] shares one socket2 connection, which

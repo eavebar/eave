@@ -2,7 +2,7 @@
 
 [Unit]
 Description=Rebuild eave with the plugins config.toml uses
-Documentation=https://github.com/eavebar/eave/blob/main/docs/running.md
+Documentation=https://github.com/eaveshell/eave/blob/main/docs/running.md
 
 [Service]
 Type=oneshot

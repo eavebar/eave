@@ -1,5 +1,5 @@
 //! Batteries straight from the kernel: `/sys/class/power_supply`, re-read on the kernel's
-//! `power_supply` uevents. No UPower ([D-23](https://github.com/eavebar/eave/blob/main/docs/decisions.md)).
+//! `power_supply` uevents. No UPower ([D-23](https://github.com/eaveshell/eave/blob/main/docs/decisions.md)).
 //!
 //! One thread serves every widget. It blocks on the uevent socket, so plugging in the charger
 //! shows at once. Drivers don't send an event for every percent, so while there's a battery it

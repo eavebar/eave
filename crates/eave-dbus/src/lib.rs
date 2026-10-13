@@ -1,4 +1,4 @@
-//! D-Bus for eave plugins ([D-7](https://github.com/eavebar/eave/blob/main/docs/decisions.md)).
+//! D-Bus for eave plugins ([D-7](https://github.com/eaveshell/eave/blob/main/docs/decisions.md)).
 //!
 //! One system bus connection, shared by every widget. [`watch`] gives a widget a snapshot of a
 //! service's state and a fresh one whenever the service reports a property change on an object

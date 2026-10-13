@@ -1,5 +1,5 @@
 //! Wi-Fi controls for eave plugins, through iwd's D-Bus API
-//! ([D-42](https://github.com/eavebar/eave/blob/main/docs/decisions.md)): the networks
+//! ([D-42](https://github.com/eaveshell/eave/blob/main/docs/decisions.md)): the networks
 //! in range, scanning, joining (with a password, through an agent eave serves), leaving,
 //! forgetting, and turning Wi-Fi on and off.
 //!
