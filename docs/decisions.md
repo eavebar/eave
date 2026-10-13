@@ -1019,7 +1019,7 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 - **A path to a file installed beside the binary:** the bar is one binary (D-12), and a missing file would be a new way to fail.
 - **Asking users to install the icon in their theme** (what eave-claude's README said): most never do, and the bar showed a C.
 - **iced's `svg` feature:** rejected in D-38 for its size and for drawing on the UI thread.
-- **Bytes taken at runtime (`Vec<u8>`), e.g. notification images:** the host would have to hash or compare them on every view to know them again. That's for later, with its own decision, if notification images come. *Later:* runtime pictures came as `ui::cover`, keyed by URL instead of by bytes ([D-56](#d-56-runtime-pictures-uicover-loaded-by-the-host-from-files-or-https)).
+- **Bytes taken at runtime (`Vec<u8>`), e.g. notification images:** the host would have to hash or compare them on every view to know them again. That's for later, with its own decision, if notification images come. *Later:* runtime pictures came as `ui::cover`, keyed by URL instead of by bytes ([D-57](#d-57-runtime-pictures-uicover-loaded-by-the-host-from-files-or-https)).
 
 **Measured** (Asahi, release, two clocks, 8 s after start then 10 s windows, three alternating runs each): binary 9,465,184 → 9,530,720 bytes (+64 KiB). RSS 14.6–14.7 MB with it, 14.8 MB without, and 1–2 ticks per 10 s on both. No new dependencies: resvg, tiny-skia's PNG decoding and iced's `image-without-codecs` were already in for D-38.
 
@@ -1097,6 +1097,7 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
   - `show = "hover"` shows the text only while hovered, and `show = "icon"` never shows it.
   - Right click plays or pauses, and the status changes at once, before the player confirms it. Scrolling skips tracks, and a skip nudges `Right` or `Left` when the player reports the new track, not when the request is sent.
   - The popover has a large cover, the title, artist and album, a seek bar, previous, play/pause and next, and a list of players when there are several.
+  - *Later* ([D-59](#d-59-uicenter-and-a-centered-media-popover)): the popover is centered. The cover, title and "artist · album" sit in the middle, cut rather than wrapped, and play/pause is a filled circle between previous and next.
 - **New `Icon`s:** `Media { playing }` (three level bars), `Play`, `Pause`, `Previous`, `Next`.
 
 **The bars don't dance.** At first `Icon::Media` danced while playing, frame by frame like the charging battery (D-37). Measured on the full bar (workspaces, media, volume, network, battery, clock) with a player playing, in ticks per 10 s (100 is one core):
@@ -1185,3 +1186,21 @@ RSS and CPU are in D-56: a cover costs about 1 MB of RSS whether it came from a 
 - **Expanding the whole island:** shows items that didn't change, and pulls the chevron's state into a timer.
 
 **Cost:** one sleeping task per nudge from a collapsed item. Nothing polls.
+
+---
+
+## D-59: `ui::center` and a centered media popover
+
+**Status:** accepted (2026-10-13). Extends [D-40](#d-40-a-popover-vocabulary-lists-sections-controls-one-panel-width) and [D-56](#d-56-media-over-mpris-in-eave-mpris-on-the-session-bus).
+
+**What:** the media popover was a plain column, with everything on its left. Long titles wrapped onto several lines, the player's name showed twice for a track with no title, and `.prominent()` did nothing on the icon-only play button. Now:
+- **`ui::center(node)`** centers `node` across the panel's width (`container(..).center_x(Fill)`). In the bar it's just `node`. Labels inside it keep to one line and are cut and faded at the edge (`Clip`, which is only as wide as its text, so short text centers).
+- **A `heading` in a popover keeps to one line**, cut like the header's title. Every heading so far is a title, and a two-line title pushed the panel taller as tracks changed.
+- **A prominent icon button** is a filled accent circle, `PROMINENT_ICON_BUTTON` (36 px), with the icon in `ON_ACCENT`.
+- **The media popover** is the header with the player's name, then the cover, the title and "artist · album" centered, the seek bar, and previous, play/pause and next centered, play/pause prominent. The player list follows as before.
+
+**Alternatives:**
+- **An alignment option on `column`:** it would center everything in it, the seek bar's times and the player list included, so a popover would need columns inside columns. `center` wraps just what should be centered.
+- **Cover beside the text:** more compact, but the cover is the popover's picture. The centered layout was picked.
+
+**Cost:** none measurable. One `container` per centered node while the popover is open.

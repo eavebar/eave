@@ -199,19 +199,23 @@ impl Widget for Media {
     fn popover(&self) -> Option<Panel<Message>> {
         let player = self.current().filter(|p| shown(p))?;
         let mut lines = vec![ui::header(player.identity.clone())];
+        // The track, centered under its cover. The header already names the player, so a track
+        // with no title has no heading.
         if !player.art_url.is_empty() {
-            lines.push(ui::cover(player.art_url.clone(), ui::empty()).large());
+            lines.push(ui::center(
+                ui::cover(player.art_url.clone(), ui::empty()).large(),
+            ));
         }
-        let title = if player.title.is_empty() {
-            player.identity.clone()
-        } else {
-            player.title.clone()
-        };
-        lines.push(ui::heading(title));
-        for line in [&player.artist, &player.album] {
-            if !line.is_empty() {
-                lines.push(ui::label(line.clone()).tone(Tone::Dim));
-            }
+        if !player.title.is_empty() {
+            lines.push(ui::center(ui::heading(player.title.clone())));
+        }
+        let from: Vec<_> = [&player.artist, &player.album]
+            .into_iter()
+            .filter(|line| !line.is_empty())
+            .map(String::as_str)
+            .collect();
+        if !from.is_empty() {
+            lines.push(ui::center(ui::label(from.join(" · ")).tone(Tone::Dim)));
         }
         if let Some(seek) = self.seek_bar(player) {
             lines.push(seek);
@@ -221,11 +225,11 @@ impl Widget for Media {
         } else {
             Icon::Play
         };
-        lines.push(ui::row([
+        lines.push(ui::center(ui::row([
             ui::button(ui::icon(Icon::Previous), Message::Previous),
             ui::button(ui::icon(play_pause), Message::PlayPause).prominent(),
             ui::button(ui::icon(Icon::Next), Message::Next),
-        ]));
+        ])));
         if self.players.len() > 1 {
             lines.push(ui::section("Players"));
             let rows = self.players.iter().map(|other| {

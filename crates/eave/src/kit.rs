@@ -217,6 +217,7 @@ pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
         Kind::Grid { cells, .. } => all(cells),
         Kind::Button { content, .. }
         | Kind::Gulp(content)
+        | Kind::Center(content)
         | Kind::Display(content)
         | Kind::Mark(content)
         | Kind::Detail { value: content, .. } => all(vec![*content]),
@@ -268,6 +269,8 @@ struct Ctx {
     color: Option<Color>,
     text: Text,
     place: Place,
+    /// Inside a `center`: text keeps to one line and is cut if it's too long.
+    centered: bool,
 }
 
 impl Ctx {
@@ -277,6 +280,7 @@ impl Ctx {
             color: None,
             text: Text::Body,
             place,
+            centered: false,
         }
     }
 
@@ -316,7 +320,32 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
         Kind::Label {
             text: content,
             tone,
+        } if ctx.panel() && ctx.centered => Clip::new(
+            text(content)
+                .size(ctx.size())
+                .font(ctx.font())
+                .color(ctx.color(tone))
+                .wrapping(text::Wrapping::None),
+            theme::ISLAND_BG,
+        )
+        .into(),
+        Kind::Label {
+            text: content,
+            tone,
         } => Label::new(content, ctx.size(), ctx.font(), ctx.color(tone)).into(),
+        // One line in a popover, like the header's title: a long one is cut, not wrapped.
+        Kind::Heading {
+            text: content,
+            tone,
+        } if ctx.panel() => Clip::new(
+            text(content)
+                .size(theme::HEADING_SIZE)
+                .font(theme::HEADING_FONT)
+                .color(ctx.color(tone))
+                .wrapping(text::Wrapping::None),
+            theme::ISLAND_BG,
+        )
+        .into(),
         Kind::Heading {
             text: content,
             tone,
@@ -370,6 +399,16 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
         Kind::Column(children) => column(all(children)).spacing(theme::SPACING).into(),
         Kind::Grid { columns, cells } => grid(columns, all(cells), ctx),
         Kind::Gulp(content) => Gulp::new(render(*content, ctx, icons)).into(),
+        Kind::Center(content) if ctx.panel() => {
+            let inner = Ctx {
+                centered: true,
+                ..ctx
+            };
+            container(render(*content, inner, icons))
+                .center_x(Length::Fill)
+                .into()
+        }
+        Kind::Center(content) => render(*content, ctx, icons),
         Kind::Button {
             content,
             on_press,
@@ -382,6 +421,19 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                     .on_press(on_press)
                     .padding([2, 8])
                     .style(bar_button_style)
+            } else if only_icon && prominent {
+                // The one main action: a filled circle, a size up from the plain ones.
+                let inner = Ctx {
+                    color: Some(theme::ON_ACCENT),
+                    ..ctx
+                };
+                button(
+                    container(render(*content, inner, icons))
+                        .center(Length::Fixed(theme::PROMINENT_ICON_BUTTON)),
+                )
+                .on_press(on_press)
+                .padding(0)
+                .style(prominent_icon_button_style)
             } else if only_icon {
                 button(
                     container(render(*content, ctx, icons))
@@ -840,6 +892,14 @@ fn bar_button_style(_: &Theme, status: button::Status) -> button::Style {
 /// Icon buttons in a popover: plain until hovered, like the bar's.
 fn icon_button_style(theme: &Theme, status: button::Status) -> button::Style {
     bar_button_style(theme, status)
+}
+
+/// The prominent icon button in a popover: an accent circle.
+fn prominent_icon_button_style(theme: &Theme, status: button::Status) -> button::Style {
+    button::Style {
+        border: Border::default().rounded(theme::PROMINENT_ICON_BUTTON / 2.0),
+        ..text_button_style(theme, status, true)
+    }
 }
 
 /// Text buttons in a popover: filled even at rest, so they read as buttons. A prominent one is

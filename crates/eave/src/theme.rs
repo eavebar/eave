@@ -177,6 +177,8 @@ pub const SELECTED_BG: Color = SWITCHER_MARK;
 pub const SELECTED_SUBTITLE: Color = Color::from_rgb(0.66, 0.73, 0.84);
 /// Square buttons holding just an icon, and the height of text buttons.
 pub const ICON_BUTTON: f32 = 28.0;
+/// A prominent icon button in a popover, the one main action (play/pause): a filled circle.
+pub const PROMINENT_ICON_BUTTON: f32 = 36.0;
 pub const BUTTON_HEIGHT: f32 = 30.0;
 /// A text button at rest in a popover, so it reads as a button and not a label.
 pub const BUTTON_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);

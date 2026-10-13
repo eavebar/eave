@@ -142,6 +142,8 @@ pub enum Kind<M> {
         current: Option<usize>,
     },
     Gulp(Box<Node<M>>),
+    /// Centered across the panel's width.
+    Center(Box<Node<M>>),
     Separator,
     Empty,
     ListItem {
@@ -321,6 +323,13 @@ pub fn row<M>(children: impl IntoIterator<Item = Node<M>>) -> Node<M> {
 /// Children stacked top to bottom.
 pub fn column<M>(children: impl IntoIterator<Item = Node<M>>) -> Node<M> {
     Node(Kind::Column(children.into_iter().collect()))
+}
+
+/// `content` centered across the panel's width: a cover, a title, a row of controls. Text in it
+/// stays on one line, cut and faded at the edges of its room if it's too long. In the bar, it's
+/// just `content`.
+pub fn center<M>(content: Node<M>) -> Node<M> {
+    Node(Kind::Center(Box::new(content)))
 }
 
 /// Cells laid out left to right in rows of `columns`, all the same width. A calendar, a keypad.
@@ -671,6 +680,7 @@ impl<M> Node<M> {
             }
             Kind::Button { content, .. }
             | Kind::Gulp(content)
+            | Kind::Center(content)
             | Kind::Display(content)
             | Kind::Mark(content)
             | Kind::Detail { value: content, .. } => content.set_tone(new),
@@ -776,6 +786,7 @@ impl<M> Node<M> {
                 current,
             },
             Kind::Gulp(content) => Kind::Gulp(Box::new(content.map(f))),
+            Kind::Center(content) => Kind::Center(Box::new(content.map(f))),
             Kind::Separator => Kind::Separator,
             Kind::Empty => Kind::Empty,
             Kind::ListItem {
