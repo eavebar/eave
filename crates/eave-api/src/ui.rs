@@ -5,6 +5,8 @@
 //! and the same animations, without being able to break them.
 
 use std::ops::RangeInclusive;
+use std::sync::Arc;
+use std::time::SystemTime;
 
 /// The role of a piece of text. The theme decides the color.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1360,14 +1362,175 @@ pub struct Notice<M> {
     app: Option<String>,
     app_icon: Option<String>,
     image: Option<String>,
+    pixels: Option<Pixels>,
     body: Option<String>,
     markdown: bool,
     urgency: Urgency,
+    time: Option<SystemTime>,
+    thread: Option<String>,
+    thread_name: Option<String>,
+    progress: Option<f32>,
     actions: Vec<(String, M)>,
+    choices: Option<ChoicesParts<M>>,
+    step: Option<StepParts<M>>,
     on_press: Option<M>,
     on_dismiss: Option<M>,
     expires: Option<(std::time::Duration, M)>,
     reply: Option<Reply<M>>,
+}
+
+/// A picture as its pixels, for a [`Notice`] whose picture came as bytes rather than a file: RGBA,
+/// 8 bits a channel, row after row with nothing between them.
+///
+/// Cheap to clone. Keep the same `Pixels` for as long as the notice shows: the host draws it once
+/// and knows it again by its bytes' address.
+#[derive(Clone)]
+pub struct Pixels {
+    width: u32,
+    height: u32,
+    rgba: Arc<[u8]>,
+}
+
+impl Pixels {
+    /// `None` if `rgba` isn't `width × height` pixels of 4 bytes, or the picture is empty.
+    pub fn new(width: u32, height: u32, rgba: impl Into<Arc<[u8]>>) -> Option<Self> {
+        let rgba = rgba.into();
+        let expected = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)?;
+        (width > 0 && height > 0 && rgba.len() == expected).then_some(Self {
+            width,
+            height,
+            rgba,
+        })
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn rgba(&self) -> &Arc<[u8]> {
+        &self.rgba
+    }
+}
+
+impl std::fmt::Debug for Pixels {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Pixels({}×{})", self.width, self.height)
+    }
+}
+
+/// Options to pick from on a [`Notice`], like the answers to a question: one, which a click sends,
+/// or several, checked and then sent together.
+pub struct Choices<M> {
+    parts: ChoicesParts<M>,
+}
+
+impl<M> Choices<M> {
+    /// A click on an option sends its message: that's the answer.
+    pub fn one() -> Self {
+        Self::new(false)
+    }
+
+    /// A click on an option sends its message, to check or uncheck it, and
+    /// [`on_send`](Self::on_send) sends what's checked.
+    pub fn many() -> Self {
+        Self::new(true)
+    }
+
+    fn new(multiple: bool) -> Self {
+        Self {
+            parts: ChoicesParts {
+                multiple,
+                options: Vec::new(),
+                on_send: None,
+            },
+        }
+    }
+
+    /// An option, with a line saying what it means, and whether it's checked.
+    pub fn option(
+        mut self,
+        label: impl Into<String>,
+        description: Option<String>,
+        picked: bool,
+        on_pick: M,
+    ) -> Self {
+        self.parts.options.push(ChoiceParts {
+            label: label.into(),
+            description: description.filter(|d| !d.is_empty()),
+            recommended: false,
+            picked,
+            on_pick,
+        });
+        self
+    }
+
+    /// The option just added is the one to suggest.
+    pub fn recommended(mut self) -> Self {
+        if let Some(option) = self.parts.options.last_mut() {
+            option.recommended = true;
+        }
+        self
+    }
+
+    /// Sent by the button that sends what's checked, for [`many`](Self::many).
+    pub fn on_send(mut self, message: M) -> Self {
+        self.parts.on_send = Some(message);
+        self
+    }
+
+    fn map<N>(self, f: &impl Fn(M) -> N) -> Choices<N> {
+        let parts = self.parts;
+        Choices {
+            parts: ChoicesParts {
+                multiple: parts.multiple,
+                options: parts
+                    .options
+                    .into_iter()
+                    .map(|option| ChoiceParts {
+                        label: option.label,
+                        description: option.description,
+                        recommended: option.recommended,
+                        picked: option.picked,
+                        on_pick: f(option.on_pick),
+                    })
+                    .collect(),
+                on_send: parts.on_send.map(f),
+            },
+        }
+    }
+}
+
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct ChoicesParts<M> {
+    pub multiple: bool,
+    pub options: Vec<ChoiceParts<M>>,
+    pub on_send: Option<M>,
+}
+
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct ChoiceParts<M> {
+    pub label: String,
+    pub description: Option<String>,
+    pub recommended: bool,
+    pub picked: bool,
+    pub on_pick: M,
+}
+
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct StepParts<M> {
+    /// From 0.
+    pub index: usize,
+    pub count: usize,
+    pub on_back: Option<M>,
 }
 
 /// A field on a [`Notice`] to type an answer into, like a reply to a message: several lines,
@@ -1382,6 +1545,7 @@ pub struct Reply<M> {
     on_input: std::rc::Rc<dyn Fn(String) -> M>,
     on_submit: Option<M>,
     on_cancel: Option<M>,
+    sent: bool,
 }
 
 impl<M> Reply<M> {
@@ -1397,6 +1561,7 @@ impl<M> Reply<M> {
             on_input: std::rc::Rc::new(on_input),
             on_submit: None,
             on_cancel: None,
+            sent: false,
         }
     }
 
@@ -1412,6 +1577,13 @@ impl<M> Reply<M> {
         self
     }
 
+    /// The answer went: the host says so in the field's place. Keep the notice a moment after
+    /// sending, so it can be read.
+    pub fn sent(mut self, sent: bool) -> Self {
+        self.sent = sent;
+        self
+    }
+
     pub fn map<N: 'static>(self, f: &(impl Fn(M) -> N + Clone + 'static)) -> Reply<N>
     where
         M: 'static,
@@ -1424,6 +1596,7 @@ impl<M> Reply<M> {
             on_input: std::rc::Rc::new(move |text| g(on_input(text))),
             on_submit: self.on_submit.map(f),
             on_cancel: self.on_cancel.map(f),
+            sent: self.sent,
         }
     }
 
@@ -1435,6 +1608,7 @@ impl<M> Reply<M> {
             on_input: self.on_input,
             on_submit: self.on_submit,
             on_cancel: self.on_cancel,
+            sent: self.sent,
         }
     }
 }
@@ -1447,6 +1621,7 @@ pub struct ReplyParts<M> {
     pub on_input: std::rc::Rc<dyn Fn(String) -> M>,
     pub on_submit: Option<M>,
     pub on_cancel: Option<M>,
+    pub sent: bool,
 }
 
 impl<M> Notice<M> {
@@ -1457,10 +1632,17 @@ impl<M> Notice<M> {
             app: None,
             app_icon: None,
             image: None,
+            pixels: None,
             body: None,
             markdown: false,
             urgency: Urgency::Normal,
+            time: None,
+            thread: None,
+            thread_name: None,
+            progress: None,
             actions: Vec::new(),
+            choices: None,
+            step: None,
             on_press: None,
             on_dismiss: None,
             expires: None,
@@ -1480,10 +1662,60 @@ impl<M> Notice<M> {
         self
     }
 
-    /// A picture to show instead of the app's icon, by URL, like a [`cover`]: an icon file the
-    /// app gave as a path.
+    /// A picture of its own, by URL, like a [`cover`]: an avatar, a screenshot. The host shows it
+    /// beside the text, or under it, full width, if it's wide.
     pub fn image(mut self, url: impl Into<String>) -> Self {
         self.image = Some(url.into());
+        self
+    }
+
+    /// A picture of its own, as its pixels: what an app sent as bytes rather than a file. It wins
+    /// over [`image`](Self::image).
+    pub fn pixels(mut self, pixels: Pixels) -> Self {
+        self.pixels = Some(pixels);
+        self
+    }
+
+    /// When it arrived. The host says how long ago, beside where it's from.
+    pub fn time(mut self, time: SystemTime) -> Self {
+        self.time = Some(time);
+        self
+    }
+
+    /// The conversation it's part of: a chat, a session. The host stacks notices of the same app
+    /// and thread that come one after another into one, the newest in full.
+    pub fn thread(mut self, key: impl Into<String>) -> Self {
+        self.thread = Some(key.into());
+        self
+    }
+
+    /// What to call its [`thread`](Self::thread), beside the app's name: the chat, the session.
+    pub fn thread_name(mut self, name: impl Into<String>) -> Self {
+        self.thread_name = Some(name.into());
+        self
+    }
+
+    /// How far along what it's about is, from 0.0 to 1.0: a download, a copy.
+    pub fn progress(mut self, fraction: f32) -> Self {
+        self.progress = Some(fraction.clamp(0.0, 1.0));
+        self
+    }
+
+    /// Options to pick from ([`Choices`]), above the reply field and the actions.
+    pub fn choices(mut self, choices: Choices<M>) -> Self {
+        self.choices = Some(choices.parts);
+        self
+    }
+
+    /// It's question `index` (from 0) of `count`, asked one at a time on the same notice. The host
+    /// shows where it is, and slides the content along when `index` changes. `on_back` goes to
+    /// the one before.
+    pub fn step(mut self, index: usize, count: usize, on_back: Option<M>) -> Self {
+        self.step = Some(StepParts {
+            index,
+            count,
+            on_back,
+        });
         self
     }
 
@@ -1546,14 +1778,27 @@ impl<M> Notice<M> {
             app: self.app,
             app_icon: self.app_icon,
             image: self.image,
+            pixels: self.pixels,
             body: self.body,
             markdown: self.markdown,
             urgency: self.urgency,
+            time: self.time,
+            thread: self.thread,
+            thread_name: self.thread_name,
+            progress: self.progress,
             actions: self
                 .actions
                 .into_iter()
                 .map(|(label, message)| (label, f(message)))
                 .collect(),
+            choices: self
+                .choices
+                .map(|parts| Choices { parts }.map(f).parts),
+            step: self.step.map(|step| StepParts {
+                index: step.index,
+                count: step.count,
+                on_back: step.on_back.map(f),
+            }),
             on_press: self.on_press.map(f),
             on_dismiss: self.on_dismiss.map(f),
             expires: self.expires.map(|(after, message)| (after, f(message))),
@@ -1573,10 +1818,17 @@ impl<M> Notice<M> {
             app: self.app,
             app_icon: self.app_icon,
             image: self.image,
+            pixels: self.pixels,
             body: self.body,
             markdown: self.markdown,
             urgency: self.urgency,
+            time: self.time,
+            thread: self.thread,
+            thread_name: self.thread_name,
+            progress: self.progress,
             actions: self.actions,
+            choices: self.choices,
+            step: self.step,
             on_press: self.on_press,
             on_dismiss: self.on_dismiss,
             expires: self.expires,
@@ -1593,10 +1845,17 @@ pub struct NoticeParts<M> {
     pub app: Option<String>,
     pub app_icon: Option<String>,
     pub image: Option<String>,
+    pub pixels: Option<Pixels>,
     pub body: Option<String>,
     pub markdown: bool,
     pub urgency: Urgency,
+    pub time: Option<SystemTime>,
+    pub thread: Option<String>,
+    pub thread_name: Option<String>,
+    pub progress: Option<f32>,
     pub actions: Vec<(String, M)>,
+    pub choices: Option<ChoicesParts<M>>,
+    pub step: Option<StepParts<M>>,
     pub on_press: Option<M>,
     pub on_dismiss: Option<M>,
     pub expires: Option<(std::time::Duration, M)>,
@@ -1801,6 +2060,14 @@ mod tests {
                     .on_submit(6)
                     .on_cancel(7),
             )
+            .choices(
+                Choices::many()
+                    .option("x", None, false, 8)
+                    .option("y", Some("why".into()), true, 9)
+                    .recommended()
+                    .on_send(10),
+            )
+            .step(1, 3, Some(11))
             .map(&|n: i32| n * 10);
         assert_eq!(notice.key(), 7);
         let parts = notice.into_parts();
@@ -1812,6 +2079,27 @@ mod tests {
         let reply = parts.reply.unwrap();
         assert_eq!((reply.on_input)("abc".into()), 30);
         assert_eq!((reply.on_submit, reply.on_cancel), (Some(60), Some(70)));
+        let choices = parts.choices.unwrap();
+        let picks: Vec<_> = choices.options.iter().map(|o| o.on_pick).collect();
+        assert_eq!(picks, [80, 90]);
+        assert!(choices.multiple && choices.options[1].recommended && choices.options[1].picked);
+        assert_eq!(choices.on_send, Some(100));
+        let step = parts.step.unwrap();
+        assert_eq!((step.index, step.count, step.on_back), (1, 3, Some(110)));
+    }
+
+    #[test]
+    fn pixels_must_be_whole() {
+        assert!(Pixels::new(2, 2, vec![0; 16]).is_some());
+        assert!(Pixels::new(2, 2, vec![0; 15]).is_none());
+        assert!(Pixels::new(0, 0, Vec::new()).is_none());
+        assert!(Pixels::new(u32::MAX, u32::MAX, Vec::new()).is_none());
+    }
+
+    #[test]
+    fn progress_stays_between_none_and_all() {
+        let parts = Notice::<()>::new(1, "s").progress(1.5).into_parts();
+        assert_eq!(parts.progress, Some(1.0));
     }
 
     #[test]
