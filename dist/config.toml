@@ -11,6 +11,9 @@
 # `live = true` beside `island = true` makes that island a live one: snugger and rounder. Before a
 # zone's first item, it applies to the first island.
 #
+# [[dormer]] entries are widgets that show nothing in the bar and are there for the dormer: the
+# search dialog a Hyprland bind opens (`bind = SUPER, SPACE, event, eave-dormer`). See running.md.
+#
 # `renderer = "cpu"` draws the bar on the CPU instead of the GPU: lighter on memory, less smooth in
 # big popovers. It takes effect when the bar restarts.
 
@@ -35,3 +38,7 @@ widget = "network"
 
 [[right]]
 widget = "battery"
+
+# Launch apps from the dormer:
+# [[dormer]]
+# widget = "apps"
