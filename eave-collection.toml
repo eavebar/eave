@@ -1,0 +1,14 @@
+# The built-in plugins. `widget = "clock"` in config.toml picks the one named `clock` here.
+# A repository with several plugins lists them the same way; each directory holds its own
+# eave-plugin.toml beside its Cargo.toml.
+[collection]
+description = "eave's built-in widgets"
+plugins = [
+    "plugins/battery",
+    "plugins/clock",
+    "plugins/keyboard",
+    "plugins/network",
+    "plugins/volume",
+    "plugins/window",
+    "plugins/workspaces",
+]

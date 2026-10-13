@@ -1,7 +1,5 @@
-# Plugin manifest. In a plugin's own repository this file sits at the repo root.
+# Plugin manifest, beside the crate's Cargo.toml.
 [plugin]
 name = "keyboard"
 description = "Active keyboard layout; click to switch"
-crate = "eave-keyboard"
-path = "."
 api = "0.1"

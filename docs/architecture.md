@@ -116,7 +116,8 @@ crates/eave-iwd/           service: Wi-Fi networks and controls through iwd's D-
 crates/eave-net/           service: network state from the kernel over netlink (one event thread)
 crates/eave-pulse/         service: audio over the PulseAudio protocol (one event thread)
 crates/eave-hyprland/      service: shared socket2 events, socket1 queries and dispatches
-plugins/clock/             the clock plugin (crate eave-clock) + eave-plugin.toml
+eave-collection.toml       lists plugins/*: the built-ins, as one collection (D-46)
+plugins/clock/             the clock plugin (crate eave-clock) + its eave-plugin.toml
 plugins/workspaces/        Hyprland workspaces (eave-workspaces)
 plugins/window/            focused window title (eave-window)
 plugins/keyboard/          keyboard layout (eave-keyboard)
