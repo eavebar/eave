@@ -11,3 +11,6 @@ repository.workspace = true
 eave-dbus.workspace = true
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tokio = { version = "1", default-features = false, features = ["time"] }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt", "time"] }

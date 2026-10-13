@@ -517,3 +517,21 @@ mod tests {
         assert_eq!(read(now), read(now + Duration::from_secs(1)));
     }
 }
+
+#[cfg(test)]
+mod live {
+    /// `cargo test -p eave-mpris -- --ignored --nocapture` prints the players on this session.
+    #[test]
+    #[ignore = "reads the real session bus"]
+    fn reads_this_session() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let players = runtime.block_on(async {
+            use futures_util::StreamExt;
+            std::pin::pin!(super::watch()).next().await
+        });
+        println!("{players:#?}");
+    }
+}
