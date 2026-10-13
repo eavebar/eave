@@ -77,8 +77,9 @@ pub struct Bar {
     /// What the bar goes around: the notch, if there is one (D-69), and what the bezel hides
     /// (D-71).
     screen: notch::Screen,
-    /// The `notch` and `screen` settings being, or last, looked into. `None` before the first.
-    screen_setting: Option<(config::Notch, config::Screen)>,
+    /// The `notch`, `screen` and `islands` settings being, or last, looked into. `None` before
+    /// the first.
+    screen_setting: Option<(config::Notch, config::Screen, config::Islands)>,
 }
 
 /// One island: its zone, and which of the zone's islands it is, counted in bar order.
@@ -221,8 +222,11 @@ pub enum Message {
     WindowClosed(window::Id),
     /// `config.toml` changed on disk: the new contents, or why they couldn't be loaded.
     ConfigChanged(Result<Config, String>),
-    /// The screen for the `notch` and `screen` settings has been looked into.
-    ScreenFound((config::Notch, config::Screen), notch::Screen),
+    /// The screen for the `notch`, `screen` and `islands` settings has been looked into.
+    ScreenFound(
+        (config::Notch, config::Screen, config::Islands),
+        notch::Screen,
+    ),
     /// An app's icon has loaded, or turned out not to exist.
     AppIcon(String, Option<AppIcon>),
     /// A plugin's icon file has been drawn, or turned out not to be one.
@@ -274,11 +278,11 @@ impl Bar {
         self.loading.clear();
         let mut old = std::mem::take(&mut self.instances);
         let mut tasks = Vec::new();
-        let setting = (config.notch, config.screen);
+        let setting = (config.notch, config.screen, config.islands);
         if self.screen_setting != Some(setting) {
             self.screen_setting = Some(setting);
             tasks.push(Task::perform(
-                notch::resolve(setting.0, setting.1),
+                notch::resolve(setting.0, setting.1, setting.2),
                 move |screen| Message::ScreenFound(setting, screen),
             ));
         }

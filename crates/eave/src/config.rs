@@ -528,7 +528,11 @@ fn islands(value: toml::Value, warnings: &mut Vec<String>) -> Islands {
     for (key, value) in &table {
         let (field, read, what) = match key.as_str() {
             "radius" => (&mut islands.radius, pixels(value), "a size in pixels"),
-            "smoothing" => (&mut islands.smoothing, smoothing(value), "a number from 0 to 1"),
+            "smoothing" => (
+                &mut islands.smoothing,
+                smoothing(value),
+                "a number from 0 to 1",
+            ),
             _ => {
                 warnings.push(format!(
                     "`islands` takes radius and smoothing, ignoring `{key}`"
