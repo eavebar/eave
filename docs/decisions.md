@@ -773,7 +773,7 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 
 **Status:** accepted (2026-10-13).
 
-**What:** `tabs([(name, page), …])` puts a popover's pages behind a pill-shaped strip of names, one page showing at a time: the battery's Power and Health, the sound popover's Output, Input and Apps. A tinted mark slides behind the current name with the switcher's slide, and the panel's shape eases to the new page's height through the morph it already has. Which tab is current lives in the host's widget state. The panel's state goes away when the popover closes, so each popover opens on its first tab. Pages that aren't showing keep their state (a scrolled list stays scrolled), but get no events and no operations, so a field on a hidden tab can't take focus. In the bar, only the first page shows.
+**What:** `tabs([(name, page), …])` puts a popover's pages behind a pill-shaped strip of names, one page showing at a time: the battery's Power and Health, the sound popover's Output, Input and Apps. A tinted mark slides behind the current name with the switcher's slide, and the panel's shape eases to the new page's height through the morph it already has. *(It didn't: the surface shrank at once and cut the shape off, and a taller page made the shape start back toward the island for a frame. Fixed by [D-51](#d-51-a-popover-keeps-its-room-until-its-shape-lands-tabs-hand-their-pages-over), which also slides and fades the pages.)* Which tab is current lives in the host's widget state. The panel's state goes away when the popover closes, so each popover opens on its first tab. Pages that aren't showing keep their state (a scrolled list stays scrolled), but get no events and no operations, so a field on a hidden tab can't take focus. In the bar, only the first page shows.
 
 **Why the host owns it:** which tab is on screen is like hover, scrolling or focus: it's about looking, not about the plugin's state. Owning it in the host keeps plugins to describing pages, with no index to store and no message to handle, and it can't go stale against the tabs a plugin shows (a tab that goes away falls back to the first).
 
@@ -951,3 +951,29 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 
 **Cost:** a published version can only be yanked, not deleted, and `eave-api` now follows semver: a breaking change is 0.2. Changes that touch both the notice API and the plugin are two commits in two repositories.
 
+---
+
+## D-51: A popover keeps its room until its shape lands; tabs hand their pages over
+
+**Status:** accepted (2026-10-13).
+
+**What was wrong:** a popover or the notices panel that changed size while open snapped instead of morphing. You saw it when dismissing a notification or switching to a tab of another height.
+- **Shrinking:** the island reported the new, smaller rect at once (`on_placed`). The host shrank the surface and the input region to it on the next commit. The shape's edges were still springing down, but the surface cut off everything below the new bottom.
+- **Growing:** the new rect didn't fit the surface yet, so for the frame or two before the surface grew, the island treated the popover as having nowhere to go. It aimed back at the island and started fading the panel out, then turned around.
+
+**What:**
+- **The island reports the room it needs, not just where the panel goes** (`Motion::reach`). While the shape's edges are moving, that's the new place joined with what it last reported. Once they're at rest, it's the new place alone. So a grow is reported at once, and a shrink keeps its room until the shape has landed, then gives it back at once. The surface resizes twice per change, never every frame, which would reallocate its buffers on every frame. The report also runs after the island steps, so the frame the shape lands on sends it: the overlay sees each event before the island moves, and no event follows the last frame.
+- **A growing panel holds its shape while the surface grows.** The island keeps the last place that fit, and an open popover that doesn't fit yet stays there instead of heading back to the island. A first open still waits at the island (D-28). This covers popovers and the notices panel (D-47), which both go through `island::Popover`.
+- **Tabs hand their pages over** (`handover.rs`): the old page slides `TAB_SLIDE` (16 px) away from the new tab as it fades out, then the new one slides in from that side, over `TAB_FADE` (240 ms) in all. Switching back mid-way turns around from what's on screen.
+  - This is the alternate's fade (D-33), taken out of `alternate.rs` into a `Handover` that both use. It fades out and then in, rather than crossing, for the same reason: fades cover with the island's color.
+  - The tabs take the new page's height at once, so the shape eases to it while the old page goes. The old page is laid out too, until it's gone, and is clipped by the shape if it's taller.
+  - The slide is clipped to what the shape shows (the viewport), because a nested layer isn't clipped by the one around it. Only the current page gets events and operations, as before (D-43).
+
+**Alternatives:**
+- **Resize the surface every frame to the shape:** a new buffer on every frame of every morph.
+- **Keep the surface at its tallest size while a popover is open:** the input region would have to follow the shape, and a long list scrolled away would keep a tall surface for no reason.
+- **Change the tabs' height at the handover's midpoint, as a growing alternate does:** the old page would never be clipped, but the shape would wait 120 ms before moving.
+
+**Cost:** for the ~300 ms a shrink takes, the input region still covers the part the shape is leaving, so a click there goes to the popover. No new dependencies.
+
+**Measured** (release, the user's config, 15 s after start, 10 s windows, alternating runs): binary 9,465,184 bytes either way. RSS ~16.8 MB on both, and 26–33 ticks per 10 s on both. The bar was measured beside the user's running one, so its ticks run higher than the baseline table. As in D-48, an occasional run of either build jumped to 30–45 MB and 150+ ticks while the desktop was in use.

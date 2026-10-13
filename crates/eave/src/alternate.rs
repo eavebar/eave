@@ -21,13 +21,14 @@
 //! row of them doesn't open each one. Leaving changes it back at once.
 
 use std::any::Any;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use iced::advanced::Renderer as _;
 use iced::advanced::widget::{Id, Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, renderer};
 use iced::{Element, Event, Length, Point, Rectangle, Size, Vector, window};
 
+use crate::handover::Handover;
 use crate::island;
 use crate::theme;
 
@@ -138,9 +139,8 @@ fn toward(bounds: Rectangle, before: Option<Point>, now: Option<Point>, entered:
     if entered { -out } else { out }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct State {
-    current: Option<usize>,
     /// Copied from the widget, for [`SetHovered`] to see.
     grows: bool,
     /// Whether the pointer is over it, as the slot last said.
@@ -154,19 +154,32 @@ struct State {
     laid_out: Option<usize>,
     /// The way the pointer went, until the change it caused takes it.
     toward: Option<Vector>,
-    /// The one fading out, while it does.
-    previous: Option<usize>,
-    /// The way the fade slides: a unit step, or zero for a fade in place.
-    slide: Vector,
-    /// Where the fade starts, from 0 to 1: past 0 when it turned around.
-    from: f32,
-    /// Changed, and waiting for a frame to start fading on.
-    pending: bool,
-    start: Option<Instant>,
-    elapsed: Duration,
+    /// The option on screen, and the fade from one to the next.
+    handover: Handover,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            grows: false,
+            over: false,
+            resting: None,
+            hovered: false,
+            laid_out: None,
+            toward: None,
+            handover: Handover::new(None, theme::ALTERNATE_FADE),
+        }
+    }
 }
 
 impl State {
+    fn at(current: usize) -> Self {
+        Self {
+            handover: Handover::new(Some(current), theme::ALTERNATE_FADE),
+            ..Self::default()
+        }
+    }
+
     /// Takes in where the pointer is: over its item, or over its own width for a growing one.
     /// Returns whether that changed anything.
     fn point(&mut self, pointer: &SetHovered, bounds: Rectangle) -> bool {
@@ -216,96 +229,27 @@ impl State {
 
     fn set(&mut self, current: usize) {
         let toward = self.toward.take().unwrap_or(Vector::ZERO);
-        let Some(was) = self.current.filter(|&was| was != current) else {
-            self.current = Some(current);
-            return;
-        };
-        self.current = Some(current);
-        if !self.fading() {
-            self.previous = Some(was);
-            self.slide = toward;
-            self.from = 0.0;
-            self.pending = true;
-            self.start = None;
-            return;
-        }
-        let t = self.progress();
-        let on_screen = self.shown(was).0;
-        if t < 0.5 && on_screen != current {
-            // Still on its way out: only what comes in next changes.
-        } else if t <= 0.0 {
-            // Back before anything moved.
-            self.previous = None;
-            self.pending = false;
-            self.start = None;
-        } else {
-            // Turn around: what's on screen goes back the way it came, from where it is.
-            self.previous = Some(if on_screen == current { was } else { on_screen });
-            self.slide = -self.slide;
-            self.from = 1.0 - t;
-            self.pending = true;
-            self.start = None;
-        }
+        self.handover.set(current, toward);
     }
 
-    fn fading(&self) -> bool {
-        self.previous.is_some() && (self.pending || self.start.is_some())
-    }
-
-    /// How far the fade has come, from 0 to 1.
-    fn progress(&self) -> f32 {
-        let run = if self.pending {
-            0.0
-        } else {
-            self.elapsed.as_secs_f32() / theme::ALTERNATE_FADE.as_secs_f32()
-        };
-        (self.from + run).clamp(0.0, 1.0)
-    }
-
-    /// Which option is on screen, how much it shows, and how far it has slid: the old one in the
-    /// first half of a fade, speeding away, the new one in the second, slowing into place.
+    /// Which option is on screen, how much it shows, and how far it has slid.
     fn shown(&self, current: usize) -> (usize, f32, Vector) {
-        match self.previous.filter(|_| self.fading()) {
-            Some(previous) => {
-                let t = self.progress();
-                if t < 0.5 {
-                    let out = 2.0 * t;
-                    (previous, 1.0 - out, slid(self.slide, out * out))
-                } else {
-                    let rest = 2.0 - 2.0 * t;
-                    (current, 1.0 - rest, slid(-self.slide, rest * rest))
-                }
-            }
-            None => (current, 1.0, Vector::ZERO),
-        }
+        let (index, shown, slide) = self.handover.shown(current);
+        (index, shown, slid(slide))
     }
 
     /// Advances to `now`. Returns whether another frame is needed.
     fn step(&mut self, now: Instant) -> bool {
-        if self.pending {
-            self.pending = false;
-            self.start = Some(now);
-        }
-        let Some(start) = self.start else {
-            return false;
-        };
-        self.elapsed = now.saturating_duration_since(start);
-        if self.progress() >= 1.0 {
-            self.start = None;
-            self.previous = None;
-            self.from = 0.0;
-            return false;
-        }
-        true
+        self.handover.step(now)
     }
 }
 
-/// `amount` of the whole slide `toward`.
-fn slid(toward: Vector, amount: f32) -> Vector {
+/// A fraction of the whole slide, in pixels.
+fn slid(toward: Vector) -> Vector {
     Vector::new(
         toward.x * theme::ALTERNATE_SLIDE_X,
         toward.y * theme::ALTERNATE_SLIDE_Y,
-    ) * amount
+    )
 }
 
 impl<M> Alternate<'_, M> {
@@ -330,9 +274,8 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Alternate<'_, M> {
 
     fn state(&self) -> tree::State {
         tree::State::new(State {
-            current: Some(self.current),
             grows: self.grows,
-            ..State::default()
+            ..State::at(self.current)
         })
     }
 
@@ -547,49 +490,11 @@ mod tests {
 
     const RIGHT: Vector = Vector::new(1.0, 0.0);
 
-    fn showing(state: &State, current: usize) -> (usize, f32) {
-        let (index, shown, _) = state.shown(current);
-        (index, shown)
-    }
-
-    fn close(a: f32, b: f32) -> bool {
-        (a - b).abs() < 0.01
-    }
-
-    #[test]
-    fn fades_out_then_in() {
-        let mut state = State {
-            current: Some(0),
-            ..State::default()
-        };
-        state.set(1);
-        assert_eq!(
-            showing(&state, 1),
-            (0, 1.0),
-            "the old one, until a frame comes"
-        );
-        let start = Instant::now();
-        assert!(state.step(start));
-        let quarter = theme::ALTERNATE_FADE / 4;
-        state.step(start + quarter);
-        let (index, shown, slide) = state.shown(1);
-        assert_eq!(index, 0);
-        assert!(close(shown, 0.5), "{shown}");
-        assert_eq!(slide, Vector::ZERO, "no pointer, no slide");
-        state.step(start + quarter * 3);
-        let (index, shown) = showing(&state, 1);
-        assert_eq!(index, 1);
-        assert!(close(shown, 0.5), "{shown}");
-        assert!(!state.step(start + theme::ALTERNATE_FADE));
-        assert_eq!(showing(&state, 1), (1, 1.0));
-    }
-
     #[test]
     fn slides_the_way_the_pointer_went() {
         let mut state = State {
-            current: Some(0),
             toward: Some(RIGHT),
-            ..State::default()
+            ..State::at(0)
         };
         state.set(1);
         let start = Instant::now();
@@ -606,50 +511,6 @@ mod tests {
             coming.x < 0.0,
             "the new one comes from the left: {coming:?}"
         );
-    }
-
-    #[test]
-    fn going_back_before_the_old_one_is_gone_keeps_it() {
-        let mut state = State {
-            current: Some(0),
-            ..State::default()
-        };
-        state.set(1);
-        state.step(Instant::now());
-        state.set(0);
-        assert!(!state.fading());
-        assert_eq!(showing(&state, 0), (0, 1.0));
-    }
-
-    /// Changing back mid-fade carries on from what's on screen, in either half.
-    #[test]
-    fn turning_around_never_jumps() {
-        for fraction in [4, 2] {
-            let mut state = State {
-                current: Some(0),
-                toward: Some(RIGHT),
-                ..State::default()
-            };
-            state.set(1);
-            let start = Instant::now();
-            state.step(start);
-            let now = start + theme::ALTERNATE_FADE * 3 / (fraction * 2);
-            state.step(now);
-            let before = state.shown(1);
-            state.toward = Some(RIGHT);
-            state.set(0);
-            let after = state.shown(0);
-            assert_eq!(before.0, after.0, "the same option on screen");
-            assert!(close(before.1, after.1), "{before:?} {after:?}");
-            assert!(close(before.2.x, after.2.x), "{before:?} {after:?}");
-            state.step(now);
-            assert!(
-                close(state.shown(0).1, after.1),
-                "the next frame starts there"
-            );
-            assert!(!state.step(now + theme::ALTERNATE_FADE));
-            assert_eq!(showing(&state, 0), (0, 1.0));
-        }
     }
 
     #[test]
@@ -670,7 +531,12 @@ mod tests {
             let mut pointer = pointer(x, x - 5.0);
             pointer.custom(None, own, state);
             state.set(alternate.target(state.hovered));
-            (pointer.changed, state.current, state.fading(), state.slide)
+            (
+                pointer.changed,
+                state.handover.current,
+                state.handover.running(),
+                state.handover.slide,
+            )
         };
         assert_eq!(
             hover(50.0),
@@ -699,9 +565,8 @@ mod tests {
 
     fn growing() -> State {
         State {
-            current: Some(0),
             grows: true,
-            ..State::default()
+            ..State::at(0)
         }
     }
 
@@ -732,7 +597,7 @@ mod tests {
         assert_eq!(state.rest(start + theme::HOVER_REST), None);
         assert!(state.hovered);
         state.set(1);
-        assert_eq!(state.slide, RIGHT, "slides the way it came in");
+        assert_eq!(state.handover.slide, RIGHT, "slides the way it came in");
 
         state.point(&pointer(80.0, 55.0), own);
         assert!(!state.hovered, "leaving needs no rest");
@@ -816,15 +681,5 @@ mod tests {
             "left through the right"
         );
         assert_eq!(toward(item, None, None, false), Vector::ZERO);
-    }
-
-    #[test]
-    fn the_same_one_again_changes_nothing() {
-        let mut state = State {
-            current: Some(1),
-            ..State::default()
-        };
-        state.set(1);
-        assert!(!state.fading());
     }
 }
