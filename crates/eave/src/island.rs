@@ -54,7 +54,9 @@ pub struct Popover<'a, M> {
     pub content: Element<'a, M>,
     /// False while closing: the island morphs back, then sends `on_closed`.
     pub open: bool,
-    /// Where the panel goes, in surface coordinates, whenever that changes.
+    /// The room the panel needs, in surface coordinates, whenever that changes: where it goes,
+    /// and while the shape is still on its way there, where it was before. So a panel that
+    /// shrinks keeps its room until the shape has landed, and the surface never cuts it off.
     pub on_placed: Box<dyn Fn(Rectangle) -> M + 'a>,
     pub on_closed: M,
     /// Sent when the pointer comes onto the popover (true) or leaves it (false), if given.
@@ -290,6 +292,9 @@ struct PopoverMotion {
     rect: Option<Rectangle>,
     /// Whether the surface is tall enough to show it. Until it is, the island waits.
     fits: bool,
+    /// The last place that fit. An open panel that grows past the surface holds its
+    /// shape here until the surface has grown, instead of heading back to the island.
+    fitted: Option<Rectangle>,
     /// The last place reported to the host.
     reported: Option<Rectangle>,
     /// Whether the host has been told the island is back to itself.
@@ -313,6 +318,7 @@ impl Default for PopoverMotion {
             open: false,
             rect: None,
             fits: false,
+            fitted: None,
             reported: None,
             closed: false,
             squished: false,
@@ -325,9 +331,13 @@ impl Default for PopoverMotion {
 }
 
 impl PopoverMotion {
-    /// Open, and with somewhere to open to.
+    /// Open, and with somewhere to open to: where it goes, or while the surface is still too
+    /// short for that, the last place that fit.
     fn opening(&self) -> Option<Rectangle> {
-        self.rect.filter(|_| self.open && self.fits)
+        if !self.open {
+            return None;
+        }
+        if self.fits { self.rect } else { self.fitted }
     }
 }
 
@@ -564,6 +574,31 @@ impl Motion {
                 popover.items.target = 1.0;
                 popover.panel.target = 0.0;
             }
+        }
+    }
+
+    /// Takes in where the popover's panel goes, and whether the surface is tall enough for it.
+    fn place_panel(&mut self, rect: Rectangle, fits: bool) {
+        let popover = &mut self.popover;
+        popover.rect = Some(rect);
+        popover.fits = fits;
+        if fits {
+            popover.fitted = Some(rect);
+        }
+    }
+
+    /// The room the panel needs on the surface: where it goes, and while the shape is still on
+    /// its way, what was asked for before too. A shrinking shape keeps its room until it lands,
+    /// then gives it back at once: the surface resizes twice, not every frame.
+    fn reach(&self) -> Option<Rectangle> {
+        let rect = self.popover.rect?;
+        let edges = &self.edges;
+        let landed = [edges.left, edges.top, edges.right, edges.bottom]
+            .iter()
+            .all(Spring::at_rest);
+        match self.popover.reported {
+            Some(reported) if !landed => Some(rect.union(&reported)),
+            _ => Some(rect),
         }
     }
 
@@ -843,6 +878,16 @@ fn place(island: Rectangle, panel: Size, align: Horizontal, surface_width: f32) 
     let gap = f32::from(theme::EDGE_GAP);
     let x = x.min(surface_width - gap - width).max(gap).round();
     Rectangle::new(Point::new(x, island.y), Size::new(width, height))
+}
+
+/// Tells the host the room the panel needs, when that changed.
+fn report<M>(motion: &mut Motion, popover: &Popover<'_, M>, shell: &mut Shell<'_, M>) {
+    if let Some(reach) = motion.reach()
+        && motion.popover.reported != Some(reach)
+    {
+        motion.popover.reported = Some(reach);
+        shell.publish((popover.on_placed)(reach));
+    }
 }
 
 /// What a key press does to an open popover.
@@ -1244,10 +1289,12 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             }
             _ => {}
         }
-        if let Some(popover) = &self.popover
-            && motion.closing_done()
-        {
-            shell.publish(popover.on_closed.clone());
+        if let Some(popover) = &self.popover {
+            // After stepping: the frame the shape lands on is the last, and gives back its room.
+            report(motion, popover, shell);
+            if motion.closing_done() {
+                shell.publish(popover.on_closed.clone());
+            }
         }
         if !motion.at_rest() {
             shell.request_redraw();
@@ -1342,9 +1389,9 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
 
         let island = self.layout.bounds() + self.translation;
         let rect = place(island, content.size(), self.island.align, bounds.width);
-        let popover = &mut state.motion.popover;
-        popover.rect = Some(rect);
-        popover.fits = rect.y + rect.height <= bounds.height;
+        state
+            .motion
+            .place_panel(rect, rect.y + rect.height <= bounds.height);
 
         let offset = panel_offset(rect.size(), content.size());
         let content = content.move_to(Point::ORIGIN + offset);
@@ -1392,10 +1439,7 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
         let popover = self.island.popover.as_mut().expect("a morph has a popover");
         let state = self.tree.state.downcast_mut::<State>();
         let rect = layout.bounds();
-        if state.motion.popover.reported != Some(rect) {
-            state.motion.popover.reported = Some(rect);
-            shell.publish((popover.on_placed)(rect));
-        }
+        report(&mut state.motion, popover, shell);
         let Some(panel) = &mut state.panel else {
             return;
         };
@@ -1616,10 +1660,10 @@ mod tests {
     }
 
     fn popover(motion: &mut Motion, open: bool, panel: Rectangle, fits: bool) {
-        motion.popover.rect = Some(panel);
-        motion.popover.fits = fits;
         let island = motion.island.unwrap();
         motion.arrange(island, [(1, 10.0)].into_iter(), Some(open));
+        motion.place_panel(panel, fits);
+        motion.aim();
     }
 
     #[test]
@@ -1664,6 +1708,63 @@ mod tests {
         assert_eq!(motion.popover.panel.value, 0.0);
         assert!(motion.closing_done());
         assert!(!motion.closing_done(), "said only once");
+    }
+
+    #[test]
+    fn a_growing_panel_holds_its_shape_until_there_is_room() {
+        let island = rect(100.0, 120.0);
+        let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 200.0));
+        let taller = Rectangle {
+            height: 320.0,
+            ..panel
+        };
+        let mut motion = settled(island, &[1]);
+        popover(&mut motion, true, panel, true);
+        run(&mut motion, Instant::now(), |_| {});
+
+        // Too tall for the surface so far: it stays where it is, content and all.
+        popover(&mut motion, true, taller, false);
+        assert!(!motion.step(Instant::now()), "nothing moves");
+        assert_eq!(motion.edges.rect(), panel);
+        assert_eq!(motion.popover.panel.value, 1.0);
+        assert_eq!(motion.reach(), Some(taller), "asks for the room at once");
+
+        popover(&mut motion, true, taller, true);
+        let mut faded = false;
+        run(&mut motion, Instant::now(), |motion| {
+            faded |= motion.popover.panel.value < 1.0;
+        });
+        assert!(!faded, "the content stays while it grows");
+        assert_eq!(motion.edges.rect(), taller);
+    }
+
+    #[test]
+    fn a_shrinking_panel_keeps_its_room_until_it_lands() {
+        let island = rect(100.0, 120.0);
+        let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 200.0));
+        let shorter = Rectangle {
+            height: 90.0,
+            ..panel
+        };
+        let mut motion = settled(island, &[1]);
+        popover(&mut motion, true, panel, true);
+        run(&mut motion, Instant::now(), |_| {});
+        motion.popover.reported = motion.reach();
+        assert_eq!(motion.popover.reported, Some(panel));
+
+        popover(&mut motion, true, shorter, true);
+        let mut kept = true;
+        let mut between = false;
+        run(&mut motion, Instant::now(), |motion| {
+            let height = motion.edges.rect().height;
+            between |= height < panel.height - 1.0 && height > shorter.height + 1.0;
+            if !motion.edges.bottom.at_rest() {
+                kept &= motion.reach() == Some(panel);
+            }
+        });
+        assert!(between, "the shape eases down");
+        assert!(kept, "the room stays while it moves");
+        assert_eq!(motion.reach(), Some(shorter), "and goes once it lands");
     }
 
     /// Whether the island's items and the panel's content are both drawn.
