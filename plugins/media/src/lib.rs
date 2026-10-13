@@ -290,7 +290,7 @@ impl Media {
         self.players.iter_mut().find(|p| &p.bus_name == current)
     }
 
-    /// Takes in the players' reading, picks the one to follow, and nudges if a skip we asked for
+    /// Takes in the players' reading, picks the one to follow, and nudges if its track changed.
     /// has landed.
     fn read(&mut self, players: Vec<Player>) -> Effect<Message> {
         // A player that starts playing takes over from one picked by hand.
@@ -305,7 +305,9 @@ impl Media {
         if started {
             self.chosen = None;
         }
-        let before = self.current().map(|p| (p.bus_name.clone(), identify(p)));
+        // What was on screen, held through a gap between tracks included, so the next track
+        // counts as a change from the last one rather than from the gap.
+        let before = self.showing().map(|p| (p.bus_name.clone(), identify(p)));
         let was = self.current().filter(|p| shown(p)).cloned();
         self.current = pick(&players, self.chosen.as_deref(), self.current.as_deref());
         if self.chosen.as_ref() != self.current.as_ref() {
@@ -326,13 +328,19 @@ impl Media {
             effect = Effect::task(Task::future(sleep(GAP)).map(move |()| Message::Release(hold)));
         }
 
-        let after = self.current().map(|p| (p.bus_name.clone(), identify(p)));
-        match (&self.skipping, before, after) {
-            (Some((skipped, nudge)), Some((from, old)), Some((to, new)))
-                if *skipped == from && from == to && old != new =>
-            {
-                let nudge = *nudge;
-                self.skipping = None;
+        // Another track on the same player nudges: the way we skipped, or onward if the player
+        // moved on by itself (the track ended, a media key, its own buttons). MPRIS doesn't say
+        // which way a change went.
+        let after = self
+            .current()
+            .filter(|p| shown(p))
+            .map(|p| (p.bus_name.clone(), identify(p)));
+        match (before, after) {
+            (Some((from, old)), Some((to, new))) if from == to && old != new => {
+                let nudge = match self.skipping.take() {
+                    Some((skipped, nudge)) if skipped == from => nudge,
+                    _ => Nudge::Right,
+                };
                 effect.nudge(nudge)
             }
             _ => effect,
@@ -681,33 +689,41 @@ mod tests {
     }
 
     #[test]
-    fn a_skip_nudges_when_the_track_changes() {
+    fn a_new_track_nudges_the_way_it_went() {
         let nudge = |effect: Effect<Message>| effect.into_parts().2.map(|request| request.nudge);
         let mut media = media(Config::default());
         media.update(Message::Players(vec![player("a", Status::Playing, "One")]));
-        assert_eq!(nudge(media.update(Message::Next)), None, "not yet");
+        assert_eq!(nudge(media.update(Message::Previous)), None, "not yet");
         assert_eq!(
             nudge(media.update(Message::Players(vec![player("a", Status::Playing, "One")]))),
             None,
             "same track"
         );
         assert_eq!(
+            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "Zero")]))),
+            Some(Nudge::Left)
+        );
+        // The player moving on by itself goes onward.
+        assert_eq!(
+            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "One")]))),
+            Some(Nudge::Right)
+        );
+        // Through a gap between tracks: one nudge, when the next one comes.
+        assert_eq!(
+            nudge(media.update(Message::Players(vec![player("a", Status::Stopped, "")]))),
+            None
+        );
+        assert_eq!(
             nudge(media.update(Message::Players(vec![player("a", Status::Playing, "Two")]))),
             Some(Nudge::Right)
         );
-        // A change nobody asked for here doesn't.
+        // Another player taking over isn't a track change.
         assert_eq!(
-            nudge(media.update(Message::Players(vec![player(
-                "a",
-                Status::Playing,
-                "Three"
-            )]))),
+            nudge(media.update(Message::Players(vec![
+                player("a", Status::Paused, "Two"),
+                player("b", Status::Playing, "Other"),
+            ]))),
             None
-        );
-        media.update(Message::Previous);
-        assert_eq!(
-            nudge(media.update(Message::Players(vec![player("a", Status::Playing, "Two")]))),
-            Some(Nudge::Left)
         );
     }
 
