@@ -27,7 +27,7 @@ use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::alignment::Horizontal;
 use iced::keyboard::{self, key};
-use iced::widget::canvas::{Cache, Path, Stroke};
+use iced::widget::canvas::{Cache, Path};
 use iced::{
     Color, Element, Event, Length, Padding, Point, Rectangle, Size, Transformation, Vector, window,
 };
@@ -35,7 +35,7 @@ use iced::{
 use crate::field::AnyFocused;
 use crate::jelly::{Jelly, Side};
 use crate::spring::{DRAG, FADE, MAX_FRAME, MORPH, NUDGE, PLAYFUL, REST_DISTANCE, SQUISH, Spring};
-use crate::squircle::{self, CornerShape, squircle, warp};
+use crate::squircle::{self, CornerShape, squircle_corners, warp};
 use crate::squish::{self, Squish};
 use crate::theme;
 
@@ -64,6 +64,13 @@ pub struct Island<'a, M> {
     notch: Option<f32>,
     /// How it's rounded outwards where it meets the top edge, if it's attached there (D-72).
     shoulders: Option<CornerShape>,
+    /// Its corners: top left, top right, bottom right, bottom left (D-73).
+    corners: [CornerShape; 4],
+    /// How far past its layout it can be seen each way, less where it can't: its items are
+    /// centered in that.
+    shows: Padding,
+    /// How tall it is at rest: the theme's, or down to where the notch ends (D-76).
+    height: f32,
 }
 
 /// The control at one end of an island that shows and hides its collapsible items: there while
@@ -116,7 +123,16 @@ impl<'a, M> Island<'a, M> {
             bleed: Padding::ZERO,
             notch: None,
             shoulders: None,
+            corners: [CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING); 4],
+            shows: Padding::ZERO,
+            height: theme::ISLAND_HEIGHT as f32,
         }
+    }
+
+    /// This tall at rest, instead of the theme's.
+    pub fn height(mut self, height: f32) -> Self {
+        self.height = height;
+        self
     }
 
     /// Reaches past its layout by this much each way: to the screen edges it's attached to, and
@@ -136,6 +152,20 @@ impl<'a, M> Island<'a, M> {
     /// reach on past it, if it's attached to the top: it hangs from the edge as the notch does.
     pub fn shoulders(mut self, shoulders: Option<CornerShape>) -> Self {
         self.shoulders = shoulders;
+        self
+    }
+
+    /// Seen this far past its layout each way: up to the screen's edges it's attached to, and short
+    /// of what the notch hides (a negative side). Its items sit in the middle of what's seen.
+    pub fn shows(mut self, shows: Padding) -> Self {
+        self.shows = shows;
+        self
+    }
+
+    /// Rounded like this: top left, top right, bottom right, bottom left. A live island is rounder
+    /// until it grows into a popover.
+    pub fn corners(mut self, corners: [CornerShape; 4]) -> Self {
+        self.corners = corners;
         self
     }
 
@@ -222,8 +252,9 @@ struct State {
     toggle_shown: bool,
     /// Whether it's a live island, so `shape` is rebuilt when that changes.
     live: bool,
-    /// Its shoulders, so `shape` is rebuilt when they change.
+    /// Its shoulders and corners, so `shape` is rebuilt when they change.
     shoulders: Option<CornerShape>,
+    corners: [CornerShape; 4],
 }
 
 /// Where everything is going and how it's moving there. Positions are in logical pixels, in
@@ -1074,16 +1105,19 @@ fn panel_offset(place: Size, content: Size) -> Vector {
     )
 }
 
-/// The island's corner radius at `height`. A live one's corners are rounder, until it grows into
-/// a popover: they ease to the usual radius over the first island height it grows, so the panel
-/// looks like any other.
-fn radius(live: bool, height: f32) -> f32 {
+/// The corners at `height` of an island `island` tall at rest. A live one's are half its height,
+/// until it grows into a popover: they ease to its own over the first island height it grows, so
+/// the panel looks like any other.
+fn corners(live: bool, island: f32, height: f32, corners: [CornerShape; 4]) -> [CornerShape; 4] {
     if !live {
-        return theme::ISLAND_RADIUS;
+        return corners;
     }
-    let island = theme::ISLAND_HEIGHT as f32;
+    let round = island / 2.0;
     let grown = ((height - island) / island).clamp(0.0, 1.0);
-    theme::LIVE_ISLAND_RADIUS + (theme::ISLAND_RADIUS - theme::LIVE_ISLAND_RADIUS) * grown
+    corners.map(|corner| {
+        let radius = round + (corner.radius - round) * grown;
+        CornerShape::new(radius, corner.smoothing)
+    })
 }
 
 /// Draws the island as it is right now: the shape, the items that show, and the popover panel if
@@ -1098,6 +1132,7 @@ fn draw_island<M>(
     panel: Option<(&Element<'_, M>, &Tree, Layout<'_>)>,
     bleed: Padding,
     shoulders: Option<CornerShape>,
+    own_corners: [CornerShape; 4],
     renderer: &mut iced::Renderer,
     theme: &iced::Theme,
     style: &renderer::Style,
@@ -1147,8 +1182,8 @@ fn draw_island<M>(
             let geometry = state.shape.draw(renderer, frame_size, |frame| {
                 let size = body.size();
                 // As round as the shape itself would be: what reaches past it doesn't count.
-                let radius = radius(state.live, shape.height);
-                let smoothing = theme::ISLAND_SMOOTHING;
+                let resting = layout.bounds().height;
+                let corners = corners(state.live, resting, shape.height, own_corners);
                 let outline = Rectangle::new(Point::ORIGIN + room, size);
                 // The jelly bends the shape itself: its sides are where they'd be without the
                 // reach, and what reaches past one moves with it.
@@ -1180,27 +1215,15 @@ fn draw_island<M>(
                     let sides = [bleed.left <= 0.0, bleed.right <= 0.0];
                     (room.y - body.y, shoulder, sides)
                 });
-                let outline_of = |bounds: Rectangle, radius: f32, out: f32| match hanging {
+                // Black on black, with no border: what touches the notch or the bezel reads as
+                // one shape with it (D-74).
+                let outline = match hanging {
                     Some((edge, shoulder, sides)) => Path::new(|builder| {
-                        let corners = CornerShape::new(radius, smoothing);
-                        let shoulder = CornerShape::new(shoulder.radius + out, shoulder.smoothing);
-                        squircle::hanging(builder, bounds, corners, edge, shoulder, sides);
+                        squircle::hanging(builder, outline, corners, edge, shoulder, sides);
                     }),
-                    None => squircle(bounds, radius, smoothing),
+                    None => squircle_corners(outline, corners),
                 };
-                frame.fill(&bend(outline_of(outline, radius, 0.0)), theme::ISLAND_BG);
-                // Half a pixel in, so the whole hairline lands inside the fill; and half a pixel
-                // rounder round the shoulders, which curve the other way.
-                let inset = Rectangle::new(
-                    Point::new(room.x + 0.5, room.y + 0.5),
-                    Size::new(size.width - 1.0, size.height - 1.0),
-                );
-                frame.stroke(
-                    &bend(outline_of(inset, radius - 0.5, 0.5)),
-                    Stroke::default()
-                        .with_color(theme::ISLAND_BORDER)
-                        .with_width(1.0),
-                );
+                frame.fill(&bend(outline), theme::ISLAND_BG);
             });
             renderer.with_translation(Vector::new(body.x, body.y) - room, |renderer| {
                 renderer.draw_geometry(geometry);
@@ -1320,11 +1343,12 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             own: (0.0, 0.0),
             live: false,
             shoulders: None,
+            corners: [CornerShape::SQUARE; 4],
         })
     }
 
     fn size(&self) -> Size<Length> {
-        Size::new(Length::Shrink, Length::Fixed(theme::ISLAND_HEIGHT as f32))
+        Size::new(Length::Shrink, Length::Fixed(self.height))
     }
 
     /// A row of items, centered vertically, with padding at the ends. Items in a width group get
@@ -1335,7 +1359,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         renderer: &iced::Renderer,
         _limits: &layout::Limits,
     ) -> layout::Node {
-        let height = theme::ISLAND_HEIGHT as f32;
+        let height = self.height;
         let padding = f32::from(if self.live {
             theme::LIVE_ISLAND_PADDING
         } else {
@@ -1344,9 +1368,13 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         let spacing = theme::ITEM_SPACING as f32;
         let limits = layout::Limits::new(Size::new(0.0, height), Size::new(f32::INFINITY, height));
         let state = tree.state.downcast_mut::<State>();
-        if state.live != self.live || state.shoulders != self.shoulders {
+        if state.live != self.live
+            || state.shoulders != self.shoulders
+            || state.corners != self.corners
+        {
             state.live = self.live;
             state.shoulders = self.shoulders;
+            state.corners = self.corners;
             state.shape.clear();
         }
         state.toggle_shown = (state.hovered || self.expanded) && self.popover.is_none();
@@ -1404,9 +1432,14 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             Horizontal::Right => room - width,
         };
         tree.state.downcast_mut::<State>().own = (offset, width);
+        // In the middle of what's seen of it, which an edge or the notch moves off its layout's.
+        let centered = Vector::new(
+            ((self.shows.right - self.shows.left) / 2.0).round(),
+            ((self.shows.bottom - self.shows.top) / 2.0).round(),
+        );
         let children = children
             .into_iter()
-            .map(|child| child.translate(Vector::new(offset, 0.0)))
+            .map(|child| child.translate(Vector::new(offset, 0.0) + centered))
             .collect();
         layout::Node::with_children(Size::new(room, height), children)
     }
@@ -1434,6 +1467,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             None,
             self.bleed,
             self.shoulders,
+            self.corners,
             renderer,
             theme,
             style,
@@ -1735,6 +1769,7 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             Some((&popover.content, panel, content)),
             island.bleed,
             island.shoulders,
+            island.corners,
             renderer,
             theme,
             style,

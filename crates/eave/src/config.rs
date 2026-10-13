@@ -20,21 +20,27 @@
 //! attach = ["top", "right"]   # optional: flush with these screen edges (D-70)
 //! ```
 //!
-//! Three keys sit above the zones. `renderer = "gpu"` (the default) or `"cpu"` (D-67), read when
+//! Four keys sit above the zones. `renderer = "gpu"` (the default) or `"cpu"` (D-67), read when
 //! the bar starts. `notch`: `"auto"` (the default) finds a MacBook's, `false` ignores it, and a
-//! table says what it is (D-69). And `screen`, how the screen's edges are rounded or hidden. Both
-//! are in physical pixels, and `eave calibrate` measures and writes them (D-71):
+//! table says what it is (D-69). `screen`, how the screen's edges are rounded or hidden. Both are
+//! in physical pixels, and `eave calibrate` measures and writes them (D-71). And `islands`, how
+//! round the islands are (D-73):
 //!
 //! ```toml
-//! notch = { width = 370, height = 66, radius = 20, smoothing = 0.6, shoulder = 8, top = 0 }
+//! notch = { width = 370, height = 66, radius = 20, smoothing = 0.6, shoulder = 8, top = 0, grow = [4, 4] }
 //! screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
+//! islands = { radius = "auto", smoothing = "auto" }
 //! ```
 //!
 //! A notch's `radius` rounds its lower corners, `shoulder` rounds it outwards where it meets the
-//! top edge, and `top` above 0 makes it a cut-out that far down instead. `smoothing` 0 is a
+//! top edge, and `top` above 0 makes it a cut-out that far down instead. The bar draws it black
+//! (D-75), `grow` pixels bigger on each side and below than it is. `smoothing` 0 is a
 //! circle's corner, up to 1 a squircle's. A screen's `corners` go top left, top right, bottom
 //! right, bottom left, and its `inset` top, right, bottom, left: the rows and columns hidden under
 //! the bezel. Either takes one number for all four.
+//!
+//! `islands` rounds the islands' corners that face neither a screen corner nor the notch (D-73),
+//! also in physical pixels. `"auto"`, the default, takes the notch's, then the screen's.
 
 use std::path::{Path, PathBuf};
 
@@ -112,6 +118,8 @@ pub struct NotchShape {
     pub shoulder: f32,
     /// 0 hangs from the top edge; more is a cut-out this far below it, rounded all round.
     pub top: f32,
+    /// How much bigger the bar draws it than it is: on each side, and below (D-75).
+    pub grow: [f32; 2],
 }
 
 /// How the screen's own edges are shaped, in physical pixels (D-71). All zero is a plain
@@ -124,6 +132,16 @@ pub struct Screen {
     pub smoothing: f32,
     /// The rows and columns hidden under the bezel: top, right, bottom, left.
     pub inset: [f32; 4],
+}
+
+/// How the islands' corners are rounded where nothing else says (D-73): where they don't face a
+/// screen corner or the notch. `None` is `"auto"`: the notch's, then the screen's.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Islands {
+    /// In physical pixels.
+    pub radius: Option<f32>,
+    /// 0 rounds the corners like a circle, up to 1 like a squircle.
+    pub smoothing: Option<f32>,
 }
 
 /// What draws the bar (D-67).
@@ -153,6 +171,7 @@ pub struct Config {
     pub renderer: Renderer,
     pub notch: Notch,
     pub screen: Screen,
+    pub islands: Islands,
     pub warnings: Vec<String>,
 }
 
@@ -226,6 +245,9 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
     }
     if let Some(value) = table.remove("screen") {
         config.screen = screen(value, &mut config.warnings);
+    }
+    if let Some(value) = table.remove("islands") {
+        config.islands = islands(value, &mut config.warnings);
     }
 
     for zone in Zone::ALL {
@@ -428,6 +450,16 @@ fn four(value: &toml::Value) -> Option<[f32; 4]> {
     }
 }
 
+/// `[4, 4]`: two sizes in pixels, or one for both.
+fn two(value: &toml::Value) -> Option<[f32; 2]> {
+    match value {
+        toml::Value::Array(sizes) if sizes.len() == 2 => {
+            Some([pixels(&sizes[0])?, pixels(&sizes[1])?])
+        }
+        size => pixels(size).map(|size| [size; 2]),
+    }
+}
+
 /// `notch = "auto"`, `false`, or `{ width = 370, height = 66, … }`.
 fn notch(value: toml::Value, warnings: &mut Vec<String>) -> Notch {
     match value {
@@ -442,6 +474,9 @@ fn notch(value: toml::Value, warnings: &mut Vec<String>) -> Notch {
                     "radius" => &mut shape.radius,
                     "shoulder" => &mut shape.shoulder,
                     "top" => &mut shape.top,
+                    "grow" => {
+                        return two(value).map(|grow| shape.grow = grow).is_some();
+                    }
                     "smoothing" => {
                         return smoothing(value)
                             .map(|value| shape.smoothing = value)
@@ -460,7 +495,7 @@ fn notch(value: toml::Value, warnings: &mut Vec<String>) -> Notch {
     }
     warnings.push(
         "`notch` must be \"auto\", false or { width = 370, height = 66 } in physical pixels, \
-         with radius, smoothing, shoulder and top if you like, using \"auto\""
+         with radius, smoothing, shoulder, top and grow if you like, using \"auto\""
             .into(),
     );
     Notch::Auto
@@ -499,6 +534,39 @@ fn screen(value: toml::Value, warnings: &mut Vec<String>) -> Screen {
     screen
 }
 
+/// `islands = { radius = "auto", smoothing = "auto" }`, or numbers.
+fn islands(value: toml::Value, warnings: &mut Vec<String>) -> Islands {
+    let mut islands = Islands::default();
+    let toml::Value::Table(table) = value else {
+        warnings.push("`islands` must be a table, like { radius = \"auto\" }, ignoring it".into());
+        return islands;
+    };
+    for (key, value) in &table {
+        let (field, read, what) = match key.as_str() {
+            "radius" => (&mut islands.radius, pixels(value), "a size in pixels"),
+            "smoothing" => (
+                &mut islands.smoothing,
+                smoothing(value),
+                "a number from 0 to 1",
+            ),
+            _ => {
+                warnings.push(format!(
+                    "`islands` takes radius and smoothing, ignoring `{key}`"
+                ));
+                continue;
+            }
+        };
+        match (value, read) {
+            (toml::Value::String(auto), _) if auto == "auto" => *field = None,
+            (_, Some(read)) => *field = Some(read),
+            _ => warnings.push(format!(
+                "`islands.{key}` must be \"auto\" or {what}, using \"auto\""
+            )),
+        }
+    }
+    islands
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,7 +596,7 @@ mod tests {
         assert_eq!(
             parse(
                 "notch = { width = 370.5, height = 66, radius = 20, smoothing = 0.6, \
-                 shoulder = 8, top = 0 }"
+                 shoulder = 8, top = 0, grow = [4, 2] }"
             )
             .unwrap()
             .notch,
@@ -539,6 +607,15 @@ mod tests {
                 smoothing: 0.6,
                 shoulder: 8.0,
                 top: 0.0,
+                grow: [4.0, 2.0],
+            })
+        );
+        assert_eq!(
+            parse("notch = { width = 190, grow = 3 }").unwrap().notch,
+            Notch::Fixed(NotchShape {
+                width: 190.0,
+                grow: [3.0, 3.0],
+                ..NotchShape::default()
             })
         );
         for odd in [
@@ -548,6 +625,7 @@ mod tests {
             "notch = { width = -1 }",
             "notch = { width = 190, depth = 2 }",
             "notch = { width = 190, smoothing = 2 }",
+            "notch = { width = 190, grow = [1, 2, 3] }",
         ] {
             let config = parse(odd).unwrap();
             assert_eq!(config.notch, Notch::Auto, "{odd}");
@@ -571,6 +649,25 @@ mod tests {
         assert!(config.warnings.is_empty());
         let odd = parse("screen = { corners = [1, 2], smoothing = 3, edge = 1 }").unwrap();
         assert_eq!(odd.screen, Screen::default());
+        assert_eq!(odd.warnings.len(), 3, "{:?}", odd.warnings);
+    }
+
+    #[test]
+    fn island_corners_are_auto_unless_given() {
+        assert_eq!(parse("").unwrap().islands, Islands::default());
+        let config = parse("islands = { radius = \"auto\", smoothing = \"auto\" }").unwrap();
+        assert_eq!(config.islands, Islands::default());
+        assert!(config.warnings.is_empty());
+        let config = parse("islands = { radius = 24, smoothing = 0.5 }").unwrap();
+        assert_eq!(
+            config.islands,
+            Islands {
+                radius: Some(24.0),
+                smoothing: Some(0.5),
+            }
+        );
+        let odd = parse("islands = { radius = -1, smoothing = 2, shape = 1 }").unwrap();
+        assert_eq!(odd.islands, Islands::default());
         assert_eq!(odd.warnings.len(), 3, "{:?}", odd.warnings);
     }
 

@@ -85,11 +85,13 @@ pub fn rectangle(sink: &mut impl Sink, bounds: Rectangle, corners: [CornerShape;
 /// A rounded rectangle hanging from an edge at `edge`, a y between its top and bottom, the way the
 /// notch hangs from the top of the screen: where its sides meet the edge it's rounded outwards by
 /// `shoulder`, on the left if `sides[0]` and on the right if `sides[1]`. Above the edge, which is
-/// out of sight, it's square and as wide as its shoulders reach. Clockwise, closed.
+/// out of sight, it's square and as wide as its shoulders reach. Its corners go top left, top
+/// right, bottom right, bottom left; a top one shows only on a side without a shoulder.
+/// Clockwise, closed.
 pub fn hanging(
     sink: &mut impl Sink,
     bounds: Rectangle,
-    corners: CornerShape,
+    corners: [CornerShape; 4],
     edge: f32,
     shoulder: CornerShape,
     sides: [bool; 2],
@@ -97,27 +99,53 @@ pub fn hanging(
     let (left, top) = (bounds.x, bounds.y);
     let (right, bottom) = (left + bounds.width, top + bounds.height);
     let budget = bounds.width.min(bounds.height) / 2.0;
-    let corner = Corner::new(corners.radius, corners.smoothing, budget);
-    // The shoulders share the sides below the edge with the lower corners.
-    let room = (bottom - edge - corner.extent).min(bounds.width / 2.0);
-    let flare = Corner::new(shoulder.radius, shoulder.smoothing, room);
-    let reach = flare.extent;
-    let [on_left, on_right] = sides.map(|side| side && reach > 0.0 && edge > top);
+    let [top_left, top_right, bottom_right, bottom_left] =
+        corners.map(|shape| Corner::new(shape.radius, shape.smoothing, budget));
+    // Each shoulder shares its side below the edge with the lower corner there.
+    let flare = |lower: &Corner| {
+        let room = (bottom - edge - lower.extent).min(bounds.width / 2.0);
+        Corner::new(shoulder.radius, shoulder.smoothing, room)
+    };
+    let (flare_left, flare_right) = (flare(&bottom_left), flare(&bottom_right));
+    let on = |side: bool, flare: &Corner| side && flare.extent > 0.0 && edge > top;
+    let (on_left, on_right) = (on(sides[0], &flare_left), on(sides[1], &flare_right));
 
-    corner_into(sink, &corner, Point::new(right, bottom), DOWN, LEFT, true);
-    corner_into(sink, &corner, Point::new(left, bottom), LEFT, UP, false);
+    corner_into(
+        sink,
+        &bottom_right,
+        Point::new(right, bottom),
+        DOWN,
+        LEFT,
+        true,
+    );
+    corner_into(
+        sink,
+        &bottom_left,
+        Point::new(left, bottom),
+        LEFT,
+        UP,
+        false,
+    );
     if on_left {
-        corner_into(sink, &flare, Point::new(left, edge), UP, LEFT, false);
-        sink.line_to(Point::new(left - reach, top));
+        corner_into(sink, &flare_left, Point::new(left, edge), UP, LEFT, false);
+        sink.line_to(Point::new(left - flare_left.extent, top));
     } else {
-        corner_into(sink, &corner, Point::new(left, top), UP, RIGHT, false);
+        corner_into(sink, &top_left, Point::new(left, top), UP, RIGHT, false);
     }
     if on_right {
+        let reach = flare_right.extent;
         sink.line_to(Point::new(right + reach, top));
         sink.line_to(Point::new(right + reach, edge));
-        corner_into(sink, &flare, Point::new(right, edge), LEFT, DOWN, false);
+        corner_into(
+            sink,
+            &flare_right,
+            Point::new(right, edge),
+            LEFT,
+            DOWN,
+            false,
+        );
     } else {
-        corner_into(sink, &corner, Point::new(right, top), RIGHT, DOWN, false);
+        corner_into(sink, &top_right, Point::new(right, top), RIGHT, DOWN, false);
     }
     sink.close();
 }
@@ -425,7 +453,7 @@ mod tests {
         hanging(
             &mut points,
             bounds,
-            corners,
+            [corners; 4],
             0.0,
             CornerShape::new(6.0, 0.0),
             [true, false],
@@ -441,12 +469,25 @@ mod tests {
         hanging(
             &mut plain,
             bounds,
-            corners,
+            [corners; 4],
             0.0,
             CornerShape::SQUARE,
             [true, true],
         );
         rectangle(&mut rounded, bounds, [corners; 4]);
+        // Each corner its own: a square top right shows where there's no shoulder.
+        let mut own = Points::default();
+        let mut each = [corners; 4];
+        each[1] = CornerShape::SQUARE;
+        hanging(
+            &mut own,
+            bounds,
+            each,
+            0.0,
+            CornerShape::new(6.0, 0.0),
+            [true, false],
+        );
+        assert!(own.0.contains(&Point::new(110.0, -40.0)));
         let mut plain = plain.0;
         let mut rounded = rounded.0;
         let key = |p: &Point| ((p.x * 1000.0).round() as i64, (p.y * 1000.0).round() as i64);

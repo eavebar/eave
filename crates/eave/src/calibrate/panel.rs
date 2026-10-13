@@ -5,7 +5,7 @@
 use std::time::Instant;
 
 use iced::alignment::Vertical;
-use iced::widget::canvas::{self, Frame, Geometry, Program, Stroke};
+use iced::widget::canvas::{self, Frame, Geometry, Program};
 use iced::{Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme, Vector, mouse, window};
 
 use crate::spring::{FADE, MAX_FRAME, MORPH, Spring};
@@ -200,16 +200,6 @@ impl<Message> Program<Message> for Panel {
         frame.fill(
             &squircle(shape, radius, theme::ISLAND_SMOOTHING),
             theme::ISLAND_BG,
-        );
-        let hairline = Rectangle::new(
-            at + Vector::new(0.5, 0.5),
-            Size::new(size.width - 1.0, size.height - 1.0),
-        );
-        frame.stroke(
-            &squircle(hairline, radius - 0.5, theme::ISLAND_SMOOTHING),
-            Stroke::default()
-                .with_color(theme::ISLAND_BORDER)
-                .with_width(1.0),
         );
 
         let open_by = if motion.open.value.is_nan() {

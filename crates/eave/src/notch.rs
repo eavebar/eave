@@ -9,6 +9,8 @@
 use std::path::Path;
 
 use crate::config;
+use crate::squircle::CornerShape;
+use crate::theme;
 
 /// The notch, in logical pixels, centered at the top of the output.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -23,6 +25,9 @@ pub struct Notch {
     pub shoulder: f32,
     /// How far below the top edge it starts: 0 hangs from it.
     pub top: f32,
+    /// How much bigger than the hardware's `width` and `height` are: on each side, and below
+    /// (D-75). The room a squish has to shrink it back by.
+    pub grow: [f32; 2],
 }
 
 /// The notch as the hardware has it, in physical pixels.
@@ -54,21 +59,136 @@ const MODELS: &[(&str, u32, u32)] = &[
 /// pixels. `notch = { width = … }` in config.toml says better.
 pub const UNKNOWN_WIDTH: f32 = 260.0;
 
-/// What the bar goes around on its output, in logical pixels: the notch, and the rows and columns
-/// hidden under the bezel (D-71).
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+/// What the bar goes around on its output, in logical pixels: the notch, the rows and columns
+/// hidden under the bezel (D-71), and how round the screen and the islands are (D-73).
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Screen {
     pub notch: Option<Notch>,
     /// Top, right, bottom, left.
     pub inset: [f32; 4],
+    /// The screen's own corners: top left, top right, bottom right, bottom left.
+    pub corners: [CornerShape; 4],
+    /// An island's corners where they face neither a screen corner nor the notch.
+    pub islands: CornerShape,
 }
 
-/// The screen as config.toml has it, in the output's logical pixels; and its notch found, given,
-/// or none.
-pub async fn resolve(notch: config::Notch, screen: config::Screen) -> Screen {
-    let bar_height = f32::from(crate::theme::EDGE_GAP) + crate::theme::ISLAND_HEIGHT as f32;
+impl Default for Screen {
+    fn default() -> Self {
+        Self {
+            notch: None,
+            inset: [0.0; 4],
+            corners: [CornerShape::SQUARE; 4],
+            islands: CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING),
+        }
+    }
+}
+
+/// A side of an island, or of the screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+}
+
+/// What an island is next to, for its corners (D-73).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Place {
+    /// The screen's top corner on this side is the nearest thing to the island's.
+    pub screen_corner: Option<Side>,
+    /// The notch is on this side of it, one gap away.
+    pub notch: Option<Side>,
+}
+
+impl Screen {
+    /// An island's corners where it is: top left, top right, bottom right, bottom left. One that
+    /// faces a screen corner follows it at an even distance; on the notch's side, the top one is
+    /// rounded like the notch's shoulder and the bottom one like its lower corner; the rest are
+    /// `islands`.
+    pub fn island_corners(&self, place: Place) -> [CornerShape; 4] {
+        let mut corners = [self.islands; 4];
+        match place.screen_corner {
+            Some(Side::Left) => corners[0] = self.concentric(0).unwrap_or(corners[0]),
+            Some(Side::Right) => corners[1] = self.concentric(1).unwrap_or(corners[1]),
+            None => {}
+        }
+        let (top, bottom) = match place.notch {
+            Some(Side::Left) => (0, 3),
+            Some(Side::Right) => (1, 2),
+            None => return corners,
+        };
+        if let Some(shoulder) = self.notch_shoulder() {
+            corners[top] = shoulder;
+        }
+        if let Some(lower) = self.notch_corner() {
+            corners[bottom] = lower;
+        }
+        corners
+    }
+
+    /// How tall the islands are: down to where the notch ends, from one gap below the top that
+    /// shows (D-76). Without a notch, the theme's.
+    pub fn island_height(&self) -> f32 {
+        match self.notch {
+            Some(notch) => (notch.top + notch.height - self.inset[0] - f32::from(theme::EDGE_GAP))
+                .max(theme::MIN_ISLAND_HEIGHT),
+            None => theme::ISLAND_HEIGHT as f32,
+        }
+    }
+
+    /// The notch's lower corners, if it has measured ones.
+    fn notch_corner(&self) -> Option<CornerShape> {
+        self.notch
+            .filter(|notch| notch.radius > 0.0)
+            .map(|notch| CornerShape::new(notch.radius, notch.smoothing))
+    }
+
+    /// How the notch is rounded where it meets the top edge, if it's measured.
+    fn notch_shoulder(&self) -> Option<CornerShape> {
+        self.notch
+            .filter(|notch| notch.shoulder > 0.0)
+            .map(|notch| CornerShape::new(notch.shoulder, notch.smoothing))
+    }
+
+    /// A corner one edge gap in from the screen's corner `index`, so the gap between them is the
+    /// same all the way round: none if the screen's is no rounder than the gap.
+    fn concentric(&self, index: usize) -> Option<CornerShape> {
+        let corner = self.corners[index];
+        let radius = corner.radius - f32::from(theme::EDGE_GAP);
+        (radius > 0.0).then(|| CornerShape::new(radius, corner.smoothing))
+    }
+
+    /// `islands` from config.toml: what it says, or the notch's corners, else the screen's top
+    /// ones followed at an even distance, else the theme's.
+    fn resolve_islands(&mut self, islands: config::Islands, scale: f32) {
+        let auto = self
+            .notch_corner()
+            .or_else(|| {
+                let rounder = if self.corners[1].radius > self.corners[0].radius {
+                    1
+                } else {
+                    0
+                };
+                self.concentric(rounder)
+            })
+            .unwrap_or(self.islands);
+        self.islands = CornerShape::new(
+            islands.radius.map_or(auto.radius, |radius| radius / scale),
+            islands.smoothing.unwrap_or(auto.smoothing),
+        );
+    }
+}
+
+/// The screen as config.toml has it, in the output's logical pixels; its notch found, given, or
+/// none; and the islands' corners.
+pub async fn resolve(
+    notch: config::Notch,
+    screen: config::Screen,
+    islands: config::Islands,
+) -> Screen {
     // Only what's measured needs the scale: physical pixels to logical.
-    let measured = matches!(notch, config::Notch::Fixed(_)) || screen != config::Screen::default();
+    let measured = matches!(notch, config::Notch::Fixed(_))
+        || screen != config::Screen::default()
+        || islands.radius.is_some();
     let scale = if measured {
         focused().await.map_or(1.0, |monitor| monitor.scale)
     } else {
@@ -76,19 +196,34 @@ pub async fn resolve(notch: config::Notch, screen: config::Screen) -> Screen {
     };
     let notch = match notch {
         config::Notch::Off => None,
-        config::Notch::Fixed(shape) => Some(Notch {
-            width: shape.width / scale,
-            height: shape.height.map_or(bar_height, |height| height / scale),
-            radius: shape.radius / scale,
-            smoothing: shape.smoothing,
-            shoulder: shape.shoulder / scale,
-            top: shape.top / scale,
-        }),
+        config::Notch::Fixed(shape) => Some(fixed(shape, scale)),
         config::Notch::Auto => detect().await,
     };
-    Screen {
+    let mut resolved = Screen {
         notch,
         inset: screen.inset.map(|inset| inset / scale),
+        corners: screen
+            .corners
+            .map(|radius| CornerShape::new(radius / scale, screen.smoothing)),
+        ..Screen::default()
+    };
+    resolved.resolve_islands(islands, scale);
+    resolved
+}
+
+/// The notch config.toml gives, in logical pixels at `scale`, as big as the bar draws it: grown.
+/// Without a height, it's as tall as islands reach without one.
+fn fixed(shape: config::NotchShape, scale: f32) -> Notch {
+    let bar_height = f32::from(theme::EDGE_GAP) + theme::ISLAND_HEIGHT as f32;
+    let grow = shape.grow.map(|grow| grow / scale);
+    Notch {
+        width: shape.width / scale + 2.0 * grow[0],
+        height: shape.height.map_or(bar_height, |height| height / scale) + grow[1],
+        radius: shape.radius / scale,
+        smoothing: shape.smoothing,
+        shoulder: shape.shoulder / scale,
+        top: shape.top / scale,
+        grow,
     }
 }
 
@@ -211,6 +346,130 @@ mod tests {
             std::fs::write(parameters.join("show_notch"), format!("{shown}\n")).unwrap();
         }
         root
+    }
+
+    /// A MacBook's, at scale 2: corners of 19.5 and a notch rounded 10.
+    fn macbook(islands: config::Islands) -> Screen {
+        let mut screen = Screen {
+            notch: Some(Notch {
+                width: 184.0,
+                height: 32.0,
+                radius: 10.0,
+                smoothing: 0.4,
+                shoulder: 5.5,
+                top: 0.0,
+                grow: [0.0; 2],
+            }),
+            corners: [
+                CornerShape::new(19.5, 0.65),
+                CornerShape::new(19.5, 0.65),
+                CornerShape::new(0.5, 0.65),
+                CornerShape::new(0.5, 0.65),
+            ],
+            ..Screen::default()
+        };
+        screen.resolve_islands(islands, 2.0);
+        screen
+    }
+
+    #[test]
+    fn a_grown_notch_is_bigger_by_its_growth() {
+        let shape = config::NotchShape {
+            width: 368.0,
+            height: Some(64.0),
+            radius: 20.0,
+            shoulder: 11.0,
+            grow: [4.0, 2.0],
+            ..config::NotchShape::default()
+        };
+        let notch = fixed(shape, 2.0);
+        assert_eq!((notch.width, notch.height), (188.0, 33.0));
+        assert_eq!((notch.radius, notch.shoulder), (10.0, 5.5));
+        assert_eq!(notch.grow, [2.0, 1.0]);
+    }
+
+    #[test]
+    fn islands_end_where_the_notch_does() {
+        assert_eq!(Screen::default().island_height(), theme::ISLAND_HEIGHT as f32);
+        let mut screen = macbook(config::Islands::default());
+        assert_eq!(screen.island_height(), 26.0);
+        // A row hidden under the bezel moves the islands' top, not the notch's bottom.
+        screen.inset[0] = 2.0;
+        assert_eq!(screen.island_height(), 24.0);
+        // A tiny notch doesn't crush them.
+        screen.notch.as_mut().unwrap().height = 10.0;
+        assert_eq!(screen.island_height(), theme::MIN_ISLAND_HEIGHT);
+    }
+
+    #[test]
+    fn with_nothing_measured_islands_are_the_themes() {
+        let mut screen = Screen::default();
+        screen.resolve_islands(config::Islands::default(), 1.0);
+        let theme = CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING);
+        let place = Place {
+            screen_corner: Some(Side::Left),
+            notch: Some(Side::Right),
+        };
+        assert_eq!(screen.island_corners(place), [theme; 4]);
+    }
+
+    #[test]
+    fn auto_islands_are_the_notchs_then_the_screens() {
+        let screen = macbook(config::Islands::default());
+        assert_eq!(screen.islands, CornerShape::new(10.0, 0.4));
+        // An unmeasured notch has no corners to go by.
+        let mut screen = Screen {
+            notch: Some(Notch::default()),
+            ..macbook(config::Islands::default())
+        };
+        screen.resolve_islands(config::Islands::default(), 2.0);
+        assert_eq!(screen.islands, CornerShape::new(13.5, 0.65));
+        // Given, in physical pixels; what isn't given is still auto.
+        let screen = macbook(config::Islands {
+            radius: Some(24.0),
+            smoothing: None,
+        });
+        assert_eq!(screen.islands, CornerShape::new(12.0, 0.4));
+    }
+
+    #[test]
+    fn island_corners_follow_what_they_face() {
+        let screen = macbook(config::Islands::default());
+        let (notch, free) = (CornerShape::new(10.0, 0.4), screen.islands);
+        let shoulder = CornerShape::new(5.5, 0.4);
+        let concentric = CornerShape::new(13.5, 0.65);
+        let left = Place {
+            screen_corner: Some(Side::Left),
+            ..Place::default()
+        };
+        assert_eq!(screen.island_corners(left), [concentric, free, free, free]);
+        let right = Place {
+            screen_corner: Some(Side::Right),
+            ..Place::default()
+        };
+        assert_eq!(screen.island_corners(right)[1], concentric);
+        let before_notch = Place {
+            notch: Some(Side::Right),
+            ..Place::default()
+        };
+        assert_eq!(
+            screen.island_corners(before_notch),
+            [free, shoulder, notch, free]
+        );
+        let after_notch = Place {
+            notch: Some(Side::Left),
+            ..Place::default()
+        };
+        assert_eq!(
+            screen.island_corners(after_notch),
+            [shoulder, free, free, notch]
+        );
+        // A screen corner no rounder than the gap leaves the island's as it was.
+        let square = Screen {
+            corners: [CornerShape::new(4.0, 0.0); 4],
+            ..screen
+        };
+        assert_eq!(square.island_corners(left), [free; 4]);
     }
 
     #[test]

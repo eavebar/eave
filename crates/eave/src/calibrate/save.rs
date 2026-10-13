@@ -21,6 +21,10 @@ pub fn edit(source: &str, shape: &Shape) -> Result<String, toml_edit::TomlError>
             table.insert("smoothing", smoothing(notch.smoothing));
             table.insert("shoulder", number(notch.shoulder));
             table.insert("top", number(notch.top));
+            // Not measured, but the user's: kept as they had it (D-75).
+            if notch.grow != [0.0; 2] {
+                table.insert("grow", two(notch.grow));
+            }
             Value::InlineTable(table)
         }
         None => Value::from(false),
@@ -66,6 +70,10 @@ fn smoothing(smoothing: f32) -> Value {
     Value::from((f64::from(smoothing) * 100.0).round() / 100.0)
 }
 
+fn two(sizes: [f32; 2]) -> Value {
+    Value::Array(sizes.into_iter().map(number).collect::<Array>())
+}
+
 fn four(sizes: [f32; 4]) -> Value {
     Value::Array(sizes.into_iter().map(number).collect::<Array>())
 }
@@ -109,6 +117,7 @@ mod tests {
                 smoothing: 0.25,
                 shoulder: 6.0,
                 top: 0.0,
+                grow: [0.0; 2],
             }),
         }
     }
@@ -119,6 +128,7 @@ mod tests {
 # My bar.
 renderer = \"cpu\"   # the GPU drains the battery
 notch = \"auto\"   # found by eave
+islands = { radius = 24 }   # rounder
 
 [[center]]
 widget = \"clock\"   # every minute
@@ -129,6 +139,7 @@ widget = \"clock\"   # every minute
         );
         assert!(edited.contains("notch = { width = 370, height = 66, radius = 18, smoothing = 0.25, shoulder = 6, top = 0 }   # found by eave\n"), "{edited}");
         assert!(edited.contains("widget = \"clock\"   # every minute\n"));
+        assert!(edited.contains("islands = { radius = 24 }   # rounder\n"));
         // New keys go with the others above the zones, so they aren't read as a zone's.
         let screen = edited.find("screen = ").unwrap();
         assert!(screen < edited.find("[[center]]").unwrap(), "{edited}");
@@ -148,6 +159,16 @@ widget = \"clock\"   # every minute
         };
         let config = config::parse(&edit("", &none).unwrap()).unwrap();
         assert_eq!(config.notch, config::Notch::Off);
+    }
+
+    #[test]
+    fn a_grown_notch_stays_grown() {
+        let mut shape = measured();
+        shape.notch.as_mut().unwrap().grow = [4.0, 2.0];
+        let edited = edit("", &shape).unwrap();
+        assert!(edited.contains("top = 0, grow = [4, 2] }"), "{edited}");
+        let config = config::parse(&edited).unwrap();
+        assert_eq!(config.notch, config::Notch::Fixed(shape.notch.unwrap()));
     }
 
     #[test]
