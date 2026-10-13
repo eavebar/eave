@@ -4,6 +4,22 @@ How to install the bar, start it with your session, update it, and what each kin
 
 ## Install
 
+### From the AUR (Arch, CachyOS)
+
+```sh
+paru -S eave
+```
+
+The package holds only `eave-build`, in `/usr/bin`, and pulls in `rust`, `git` and `pkgconf` to build the bar with ([D-53](decisions.md)). Then, as your user, the same steps as below from step 2:
+
+```sh
+eave-build init
+eave-build
+systemctl --user enable --now eave-rebuild.path eave.service
+```
+
+### With install.sh
+
 You need Rust (`cargo`) and `git`:
 
 ```sh
@@ -36,13 +52,15 @@ eave-build update
 
 Nothing changes version until you run this ([D-31](decisions.md)). It fetches eave and every plugin, moves each to the newest commit of its `@rev` (or its default branch), prints what moved, and rebuilds as above. When eave itself moved, it also reinstalls `eave-build` from the new checkout and runs its `init`, which rewrites the systemd units (config.toml is kept) and reloads systemd. To stay on a version, pin it: `eave = "eaveshell/eave@<tag>"`, `widget = "someone/weather@v0.2"`.
 
+With the AUR package, eave itself is pinned to the package's release: a config.toml without `eave = …` builds `eaveshell/eave@v<version>`. `paru -Syu` moves eave and `eave-build` together, and the next `eave-build` moves the bar to the new release. Run `eave-build init` after an upgrade to refresh the units. `eave-build update` still updates your plugins, and never reinstalls `eave-build` over the package ([D-53](decisions.md)).
+
 ## Uninstall
 
 ```sh
 systemctl --user disable --now eave.service eave-rebuild.path
 rm ~/.config/systemd/user/eave{,-rebuild}.* ~/.local/bin/eave
 rm -r ~/.local/share/eave ~/.cache/eave     # sources and build cache
-cargo uninstall eave-build
+cargo uninstall eave-build                  # or, from the AUR: pacman -R eave
 ```
 
 `~/.config/eave` is yours to keep or remove.
