@@ -31,6 +31,7 @@ mod spring;
 mod sprite;
 mod squircle;
 mod squish;
+mod steps;
 mod switcher;
 mod tabs;
 mod text_area;

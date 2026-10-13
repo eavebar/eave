@@ -6,11 +6,16 @@
 //! things to the end. The bar has no width to give, so those collapse to their content.
 
 use std::hash::{Hash, Hasher};
+use std::time::SystemTime;
 
 use eave_api::erased::AnyMessage;
-use eave_api::ui::{Kind, Mark, Node, NoticeParts, Tone, Urgency};
+use eave_api::ui::{
+    ChoiceParts, ChoicesParts, Kind, Mark, Node, NoticeParts, ReplyParts, Tone, Urgency,
+};
 use iced::widget::scrollable::{self, Scrollbar};
-use iced::widget::{Space, button, column, container, mouse_area, row, rule, text, text_input};
+use iced::widget::{
+    Space, button, column, container, keyed_column, mouse_area, row, rule, text, text_input,
+};
 use iced::{Background, Border, Color, Element, Font, Length, Padding, Size, Theme, alignment};
 
 use crate::alternate::Alternate;
@@ -19,6 +24,7 @@ use crate::clip::{Clip, Fold};
 use crate::code;
 use crate::countdown::Countdown;
 use crate::counter::Counter;
+use crate::cover;
 use crate::field::Field;
 use crate::glide::Glide;
 use crate::gulp::Gulp;
@@ -28,7 +34,9 @@ use crate::markdown;
 use crate::meter::Meter;
 use crate::pip::Pip;
 use crate::slider::Slider;
+use crate::slot::Slot;
 use crate::sprite::Sprite;
+use crate::steps::Steps;
 use crate::switcher::Switcher;
 use crate::tabs::Tabs;
 use crate::text_area::TextArea;
@@ -72,16 +80,47 @@ fn large_cover<M>(kind: &Kind<M>) -> Option<&str> {
 }
 
 /// Notifications' cards, newest first, as one popover's content, with a line between each and
-/// the next.
-pub fn notices<'a, M: 'a>(cards: impl IntoIterator<Item = Element<'a, M>>) -> Element<'a, M> {
-    let mut column = column![].spacing(theme::NOTICE_SPACING);
-    for (index, card) in cards.into_iter().enumerate() {
-        if index > 0 {
-            column = column.push(separator());
+/// the next, then `footer` if there's one. Cards are keyed, so what's typed into one stays with
+/// it as others come and go above it.
+pub fn notices<'a, M: 'a>(
+    cards: impl IntoIterator<Item = ((u64, u64), Element<'a, M>)>,
+    footer: Option<Element<'a, M>>,
+) -> Element<'a, M> {
+    // A card's key, a line's (after the card above it) and the footer's.
+    let mut column = keyed_column(std::iter::empty()).spacing(theme::NOTICE_SPACING);
+    let mut first = true;
+    for ((instance, key), card) in cards {
+        if !first {
+            column = column.push((instance, key, 1), separator());
         }
-        column = column.push(card);
+        first = false;
+        column = column.push((instance, key, 0), card);
+    }
+    if let Some(footer) = footer {
+        if !first {
+            column = column.push((u64::MAX, u64::MAX, 1), separator());
+        }
+        column = column.push((u64::MAX, u64::MAX, 2), footer);
     }
     column.into()
+}
+
+/// The line under the cards when more wait: how many, and a way to their list.
+pub fn more_notices<'a, M: Clone + 'a>(count: usize, on_press: M) -> Element<'a, M> {
+    let label = row![
+        text(format!("{count} more"))
+            .size(theme::SMALL_SIZE)
+            .font(theme::STRONG_FONT),
+        Space::new().width(Length::Fill),
+        icon::view(eave_api::ui::Icon::Forward, theme::tone(Tone::Dim)),
+    ]
+    .align_y(alignment::Vertical::Center);
+    button(label)
+        .on_press(on_press)
+        .width(Length::Fill)
+        .padding(0)
+        .style(quiet_button_style)
+        .into()
 }
 
 /// A thin horizontal line between groups.
@@ -112,51 +151,173 @@ pub fn divider<'a, M: 'a>() -> Element<'a, M> {
 /// The line height of a notification's body, relative to its size: iced's default.
 const LINE_HEIGHT: f32 = 1.3;
 
-/// One notification, laid out at the panel's width: the time it has left on screen, if it
-/// expires, where it's from and a close button, the summary, the body cut off after a few lines,
-/// its reply field, then its actions. A click anywhere else on it sends its `on_press`. Its
-/// widget's messages are wrapped by `wrap`; `engaged` hears the reply field get the focus from a
-/// click, or lose it.
+/// A card's width: the panel's, inside its padding.
+pub const CARD_WIDTH: f32 = theme::PANEL_WIDTH - 2.0 * theme::PANEL_PADDING as f32;
+
+/// One card in the panel of notifications, as the host has it ([D-83](../../../docs/decisions.md)).
+pub struct Card {
+    /// The newest notice of its thread: the one shown in full.
+    pub notice: NoticeParts<AnyMessage>,
+    /// Earlier ones of the same thread under it, newest first: a line each.
+    pub earlier: Vec<NoticeParts<AnyMessage>>,
+    /// The time it has left on screen, if it expires.
+    pub countdown: Option<Countdown>,
+    /// Its body shows in full: "Show all" was clicked.
+    pub unfolded: bool,
+    /// The question it asked before, while that may still be sliding away.
+    pub previous: Option<NoticeParts<AnyMessage>>,
+}
+
+/// One notification card, laid out at the panel's width ([D-83](../../../docs/decisions.md)):
+///
+/// - the time it has left, if it expires;
+/// - where it's from: the app's icon and name, its thread, which question of several it is, and
+///   when it came, which turns into a close button under the pointer;
+/// - what it says: its summary and body, cut after a few lines, with its own picture beside them,
+///   or under them, full width, if the picture is wide;
+/// - the earlier notices of its thread, a line each;
+/// - how far along it is;
+/// - what to answer: its options, then its reply field and actions.
+///
+/// A click anywhere else on it sends its `on_press`. Its widget's messages are wrapped by `wrap`;
+/// `engaged` hears the reply field get the focus from a click, or lose it. `dismiss` is what its
+/// close button sends, for the whole stack; `unfold`, what "Show all" sends.
 pub fn notice<'a, M: Clone + 'a>(
-    notice: NoticeParts<AnyMessage>,
-    countdown: Option<Countdown>,
+    card: Card,
     icons: &Icons,
+    now: SystemTime,
     wrap: impl Fn(AnyMessage) -> M + Clone + 'a,
-    engaged: impl Fn(bool) -> M + 'a,
+    engaged: impl Fn(bool) -> M + Clone + 'a,
+    dismiss: Option<M>,
+    unfold: M,
 ) -> Element<'a, M> {
-    let tone = match notice.urgency {
-        Urgency::Critical => Tone::Critical,
-        Urgency::Normal | Urgency::Low => Tone::Dim,
+    let Card {
+        notice,
+        earlier,
+        countdown,
+        unfolded,
+        previous,
+    } = card;
+    let on_press = notice.on_press.clone();
+    let source = source(&notice, icons, now, wrap.clone(), dismiss);
+    let step = notice.step.as_ref().map(|step| step.index);
+    let content = |notice: NoticeParts<AnyMessage>, earlier, unfolded| {
+        content(
+            notice,
+            earlier,
+            unfolded,
+            icons,
+            now,
+            wrap.clone(),
+            engaged.clone(),
+            unfold.clone(),
+        )
     };
-    let ctx = Ctx::new(Place::Panel);
-    // A picture of its own goes beside its text, once loaded. The app's icon goes by its name:
-    // a letter in its place only when there's no picture either.
-    let picture = notice
-        .image
+    let current = content(notice, earlier, unfolded);
+    // A question of several slides over to the next.
+    let content = match step {
+        Some(index) => {
+            let previous = previous
+                .and_then(|previous| Some((previous.step.as_ref()?.index, previous)))
+                .map(|(at, previous)| (at, content(previous, Vec::new(), false)));
+            Steps::new(index, current, previous).into()
+        }
+        None => current,
+    };
+    let head = column![].push(countdown).push(source).spacing(4);
+    let card = column![head, content]
+        .spacing(theme::NOTICE_GAP)
+        .width(Length::Fill);
+    // The slot tells the time in the corner that the pointer is on the card, to turn into the
+    // close button.
+    let slot = Slot::new(card);
+    match on_press {
+        Some(message) => slot.on_press(wrap(message)).into(),
+        None => slot.into(),
+    }
+}
+
+/// Where a notification is from, its place among several questions, and when it came: that last
+/// turns into its close button under the pointer, so the card is quiet at rest.
+fn source<'a, M: Clone + 'a>(
+    notice: &NoticeParts<AnyMessage>,
+    icons: &Icons,
+    now: SystemTime,
+    wrap: impl Fn(AnyMessage) -> M + 'a,
+    dismiss: Option<M>,
+) -> Element<'a, M> {
+    let critical = notice.urgency == Urgency::Critical;
+    let tone = if critical { Tone::Critical } else { Tone::Dim };
+    let small = |content: String, tone: Tone, strong: bool| {
+        text(content)
+            .size(theme::SMALL_SIZE)
+            .font(if strong {
+                theme::STRONG_FONT
+            } else {
+                Font::DEFAULT
+            })
+            .color(theme::tone(tone))
+            .wrapping(text::Wrapping::None)
+    };
+    let app = notice
+        .app_icon
+        .as_deref()
+        .or(notice.app.as_deref())
+        .map(|app_id| {
+            container(app_icon(app_id, Tone::Normal, icons).map(wrap)).center(theme::ICON_SIZE)
+        });
+    let dot = critical.then(|| {
+        text("●")
+            .size(theme::NOTICE_DOT)
+            .color(theme::tone(Tone::Critical))
+    });
+    // The last words take the free room, so the time is at the far end. A `Clip` is only as wide
+    // as its text, even when given more.
+    let name = notice.app.clone().map(|name| small(name, tone, true));
+    let thread = notice
+        .thread_name
+        .clone()
+        .map(|thread| small(thread, Tone::Dim, false));
+    let (name, last): (Option<Element<'a, M>>, Element<'a, M>) = match (name, thread) {
+        (name, Some(thread)) => (
+            name.map(Element::from),
+            container(Clip::new(thread, theme::ISLAND_BG))
+                .width(Length::Fill)
+                .into(),
+        ),
+        (Some(name), None) => (
+            None,
+            container(Clip::new(name, theme::ISLAND_BG))
+                .width(Length::Fill)
+                .into(),
+        ),
+        (None, None) => (None, Space::new().width(Length::Fill).into()),
+    };
+    let dots = notice
+        .step
         .as_ref()
-        .and_then(|url| icons.covers.get(url))
-        .and_then(Option::as_ref)
-        .map(|cover| cover.view_at(theme::NOTICE_PICTURE, 1.0));
-    let from = notice.app_icon.as_deref().or(notice.app.as_deref());
-    let app = from
-        .filter(|app_id| picture.is_none() || matches!(icons.apps.get(*app_id), Some(Some(_))))
-        .map(|app_id| container(app_icon(app_id, Tone::Normal, icons)).center(theme::ICON_SIZE));
-    // Takes the free room, so the close button is at the far end. A `Clip` is only as wide as
-    // its text, even when given more.
-    let name: Element<'a, AnyMessage> = match notice.app {
-        Some(name) => container(Clip::new(
-            text(name)
-                .size(theme::SMALL_SIZE)
-                .font(theme::STRONG_FONT)
-                .color(theme::tone(tone))
-                .wrapping(text::Wrapping::None),
-            theme::ISLAND_BG,
-        ))
-        .width(Length::Fill)
-        .into(),
-        None => fill(ctx),
-    };
-    let close = notice.on_dismiss.map(|message| {
+        .filter(|step| step.count > 1)
+        .map(|step| {
+            row((0..step.count).map(|index| {
+                let color = match index.cmp(&step.index) {
+                    std::cmp::Ordering::Less => theme::tone(Tone::Dim),
+                    std::cmp::Ordering::Equal => theme::tone(Tone::Accent),
+                    std::cmp::Ordering::Greater => theme::TRACK,
+                };
+                container(Space::new())
+                    .width(theme::STEP_DOT)
+                    .height(theme::STEP_DOT)
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(color)),
+                        border: Border::default().rounded(theme::STEP_DOT / 2.0),
+                        ..container::Style::default()
+                    })
+                    .into()
+            }))
+            .spacing(4)
+            .align_y(alignment::Vertical::Center)
+        });
+    let close = dismiss.map(|message| -> Element<'a, M> {
         button(
             container(icon::view(
                 eave_api::ui::Icon::Close,
@@ -167,13 +328,72 @@ pub fn notice<'a, M: Clone + 'a>(
         .on_press(message)
         .padding(0)
         .style(icon_button_style)
+        .into()
     });
-    let top = row![]
+    let time = notice.time.map(|time| -> Element<'a, M> {
+        container(small(ago(time, now), Tone::Dim, false))
+            .center_y(Length::Fixed(theme::NOTICE_CLOSE))
+            .into()
+    });
+    // At rest the time, or nothing; under the pointer the close button.
+    let corner: Option<Element<'a, M>> = match (time, close) {
+        (time, Some(close)) => {
+            let rest = time.unwrap_or_else(|| {
+                Space::new()
+                    .width(theme::NOTICE_CLOSE)
+                    .height(theme::NOTICE_CLOSE)
+                    .into()
+            });
+            Some(Alternate::new(vec![rest, close], 0, Some(1), false).into())
+        }
+        (time, None) => time,
+    };
+    row![]
         .push(app)
+        .push(dot)
         .push(name)
-        .push(close)
+        .push(last)
+        .push(dots)
+        .push(corner)
         .spacing(theme::SPACING)
-        .align_y(alignment::Vertical::Center);
+        .height(Length::Fixed(theme::NOTICE_CLOSE))
+        .align_y(alignment::Vertical::Center)
+        .into()
+}
+
+/// How long ago `then` was, short: now, 5 min, 2 h, 3 d.
+pub fn ago(then: SystemTime, now: SystemTime) -> String {
+    let seconds = now.duration_since(then).unwrap_or_default().as_secs();
+    match seconds {
+        0..60 => "now".into(),
+        60..3600 => format!("{} min", seconds / 60),
+        3600..86_400 => format!("{} h", seconds / 3600),
+        _ => format!("{} d", seconds / 86_400),
+    }
+}
+
+/// What a notification says and offers: everything under where it's from.
+#[allow(clippy::too_many_arguments)]
+fn content<'a, M: Clone + 'a>(
+    notice: NoticeParts<AnyMessage>,
+    earlier: Vec<NoticeParts<AnyMessage>>,
+    unfolded: bool,
+    icons: &Icons,
+    now: SystemTime,
+    wrap: impl Fn(AnyMessage) -> M + Clone + 'a,
+    engaged: impl Fn(bool) -> M + 'a,
+    unfold: M,
+) -> Element<'a, M> {
+    let ctx = Ctx::new(Place::Panel);
+    // Its own picture: wide ones whole, under the text; the rest beside it.
+    let cover = cover::key(&notice)
+        .and_then(|key| icons.covers.get(&key))
+        .and_then(Option::as_ref);
+    let wide = cover.and_then(|cover| cover.view_wide::<M>(CARD_WIDTH));
+    let picture = cover
+        .filter(|_| wide.is_none())
+        .map(|cover| cover.view_at::<M>(theme::NOTICE_PICTURE, 1.0));
+    let beside = picture.is_some();
 
     let summary_tone = if notice.urgency == Urgency::Low {
         Tone::Dim
@@ -188,7 +408,7 @@ pub fn notice<'a, M: Clone + 'a>(
     let markdown = notice.markdown;
     let body = notice.body.filter(|body| !body.is_empty()).map(|body| {
         let line = (theme::TEXT_SIZE * LINE_HEIGHT).ceil();
-        let body: Element<'a, AnyMessage> = if markdown {
+        let body: Element<'a, M> = if markdown {
             markdown::view(&body, theme::tone(Tone::Dim))
         } else {
             text(body)
@@ -198,79 +418,348 @@ pub fn notice<'a, M: Clone + 'a>(
                 .wrapping(text::Wrapping::WordOrGlyph)
                 .into()
         };
-        Fold::new(body, theme::ISLAND_BG, line * theme::NOTICE_BODY_LINES)
+        if unfolded {
+            body
+        } else {
+            let more = button(text("Show all").size(theme::SMALL_SIZE))
+                .on_press(unfold)
+                .padding(0)
+                .style(quiet_button_style);
+            Fold::new(body, theme::ISLAND_BG, line * theme::NOTICE_BODY_LINES)
+                .more(more)
+                .into()
+        }
     });
-    let actions = (!notice.actions.is_empty()).then(|| {
-        let buttons = notice
-            .actions
-            .into_iter()
-            .enumerate()
-            .map(|(index, (label, message))| {
-                let button = eave_api::ui::button(eave_api::ui::label(label), message);
-                // The first is the main action.
-                let button = if index == 0 {
-                    button.prominent()
-                } else {
-                    button
-                };
-                render(button, ctx, icons)
+    let text_column = column![summary]
+        .push(body)
+        .spacing(theme::NOTICE_SUMMARY_GAP)
+        .width(Length::Fill);
+    let words = row![]
+        .push(picture)
+        .push(text_column)
+        .spacing(theme::NOTICE_PICTURE_GAP);
+
+    // The earlier ones of its thread, a line each, under its text.
+    let earlier = (!earlier.is_empty()).then(|| {
+        let lines = earlier.into_iter().map(|notice| -> Element<'a, M> {
+            let said = notice
+                .body
+                .as_deref()
+                .and_then(|body| body.lines().find(|line| !line.trim().is_empty()))
+                .map_or(notice.summary.clone(), str::to_string);
+            let when = notice.time.map(|time| {
+                text(ago(time, now))
+                    .size(theme::SMALL_SIZE)
+                    .color(theme::tone(Tone::Dim))
             });
-        row![fill(ctx)].extend(buttons).spacing(theme::SPACING)
+            row![Clip::new(
+                text(said)
+                    .size(theme::TEXT_SIZE - 1.0)
+                    .color(theme::tone(Tone::Dim))
+                    .wrapping(text::Wrapping::None),
+                theme::ISLAND_BG,
+            )]
+            .push(when)
+            .spacing(theme::SPACING)
+            .align_y(alignment::Vertical::Center)
+            .into()
+        });
+        let indent = if beside {
+            theme::NOTICE_PICTURE + theme::NOTICE_PICTURE_GAP
+        } else {
+            0.0
+        };
+        container(column(lines).spacing(6)).padding(Padding::ZERO.left(indent))
     });
-    // A reply field is a text area like a popover's, with a send button at its end. It waits
-    // for a click before it takes the focus, and the bar the keyboard (D-62).
-    let reply = notice.reply.map(|reply| {
+
+    let progress = notice.progress.map(|fraction| {
+        row![
+            Meter::new(fraction, None, theme::tone(Tone::Normal)),
+            text(format!("{:.0}%", fraction * 100.0))
+                .size(theme::SMALL_SIZE)
+                .color(theme::tone(Tone::Dim)),
+        ]
+        .spacing(theme::SPACING)
+        .align_y(alignment::Vertical::Center)
+    });
+
+    let answers = answers(
+        notice.choices,
+        notice.step.and_then(|step| step.on_back),
+        notice.reply,
+        notice.actions,
+        ctx,
+        icons,
+        wrap,
+        engaged,
+    );
+    let answers = answers.map(|answers| {
+        container(answers).padding(Padding::ZERO.top(theme::NOTICE_REPLY_GAP - theme::NOTICE_GAP))
+    });
+    let wide = wide.map(|wide| container(wide).width(Length::Fill));
+    column![words]
+        .push(wide)
+        .push(earlier)
+        .push(progress)
+        .push(answers)
+        .spacing(theme::NOTICE_GAP)
+        .width(Length::Fill)
+        .into()
+}
+
+/// What to answer a notification with: its options, then its reply field, then its buttons. A
+/// reply with at most two buttons beside it shares their row; with more, the buttons get a row of
+/// their own under it, sharing its width.
+#[allow(clippy::too_many_arguments)]
+fn answers<'a, M: Clone + 'a>(
+    choices: Option<ChoicesParts<AnyMessage>>,
+    on_back: Option<AnyMessage>,
+    reply: Option<ReplyParts<AnyMessage>>,
+    actions: Vec<(String, AnyMessage)>,
+    ctx: Ctx,
+    icons: &Icons,
+    wrap: impl Fn(AnyMessage) -> M + Clone + 'a,
+    engaged: impl Fn(bool) -> M + 'a,
+) -> Option<Element<'a, M>> {
+    let mut buttons: Vec<(String, Option<AnyMessage>, bool)> = Vec::new();
+    if let Some(back) = on_back {
+        buttons.push(("Back".into(), Some(back), false));
+    }
+    let mut options = None;
+    if let Some(choices) = choices {
+        let picked = choices
+            .options
+            .iter()
+            .filter(|option| option.picked)
+            .count();
+        if choices.multiple {
+            let label = if picked > 0 {
+                format!("Send {picked}")
+            } else {
+                "Send".into()
+            };
+            buttons.push((label, choices.on_send.filter(|_| picked > 0), picked > 0));
+        }
+        let multiple = choices.multiple;
+        let rows: Vec<Element<'a, M>> = choices
+            .options
+            .into_iter()
+            .map(|option| choice(option, multiple).map(wrap.clone()))
+            .collect();
+        options = Some(column(rows).spacing(2));
+    }
+    // At most three: the first action is the main one, unless Send already is.
+    let main_taken = buttons.iter().any(|(_, _, prominent)| *prominent);
+    let room = 3usize.saturating_sub(buttons.len());
+    buttons.extend(
+        actions
+            .into_iter()
+            .take(room)
+            .enumerate()
+            .map(|(index, (label, message))| (label, Some(message), index == 0 && !main_taken)),
+    );
+
+    let reply = reply.map(|reply| -> Element<'a, M> {
+        if reply.sent {
+            return row![
+                icon::view(eave_api::ui::Icon::Check, theme::tone(Tone::Normal)),
+                text("Sent")
+                    .size(theme::SMALL_SIZE)
+                    .color(theme::tone(Tone::Dim)),
+            ]
+            .spacing(6)
+            .height(theme::BUTTON_HEIGHT)
+            .align_y(alignment::Vertical::Center)
+            .into();
+        }
+        // The send button only once there's something to send.
+        let send = reply
+            .on_submit
+            .clone()
+            .filter(|_| !reply.value.trim().is_empty())
+            .map(|message| {
+                let send =
+                    eave_api::ui::button(eave_api::ui::icon(eave_api::ui::Icon::Forward), message)
+                        .prominent();
+                render(send, ctx, icons)
+            });
         let on_input = reply.on_input;
         let area = TextArea::new(
             reply.placeholder,
             reply.value,
             move |text| on_input(text),
-            reply.on_submit.clone(),
+            reply.on_submit,
         );
-        let send = reply.on_submit.map(|message| {
-            let send =
-                eave_api::ui::button(eave_api::ui::icon(eave_api::ui::Icon::Forward), message);
-            render(send, ctx, icons)
-        });
         let content: Element<'a, AnyMessage> = row![area]
             .push(send)
             .spacing(4)
             .padding(Padding::ZERO.right(3))
             .align_y(alignment::Vertical::Bottom)
             .into();
-        let content = content.map(wrap.clone());
-        Field::new(content, None).grows().on_focus(engaged)
+        // It waits for a click before it takes the focus, and the bar the keyboard (D-62).
+        Field::new(content.map(wrap.clone()), None)
+            .grows()
+            .on_focus(engaged)
+            .into()
     });
-    // The summary tight on its body, the picture beside them, top-aligned.
-    let text_column = column![summary]
-        .push(body)
-        .spacing(theme::NOTICE_SUMMARY_GAP)
-        .width(Length::Fill);
-    let content = row![]
-        .push(picture)
-        .push(text_column)
-        .spacing(theme::NOTICE_PICTURE_GAP);
-    let top: Element<'a, M> = Element::from(top).map(wrap.clone());
-    let content: Element<'a, M> = Element::from(content).map(wrap.clone());
-    let actions = actions.map(|actions| Element::from(actions).map(wrap.clone()));
-    // Where it's from, then what it says, then what you can do about it, each a little apart.
-    let head = column![].push(countdown).push(top).spacing(4);
-    let has_answer = reply.is_some() || actions.is_some();
-    let answer = column![].push(reply).push(actions).spacing(theme::SPACING);
-    let card = column![head, content]
-        .spacing(theme::NOTICE_GAP)
-        .push(has_answer.then(|| {
-            container(answer)
-                .padding(Padding::ZERO.top(theme::NOTICE_REPLY_GAP - theme::NOTICE_GAP))
-        }))
-        .width(Length::Fill);
-    match notice.on_press {
-        Some(message) => mouse_area(card)
-            .on_press(wrap(message))
-            .interaction(iced::mouse::Interaction::Pointer)
-            .into(),
-        None => card.into(),
+
+    let shares = reply.is_some() && buttons.len() <= 2;
+    let buttons: Vec<Element<'a, M>> = buttons
+        .into_iter()
+        .map(|(label, message, prominent)| {
+            let width = if shares { Length::Shrink } else { Length::Fill };
+            answer_button(label, message, prominent, width, ctx).map(wrap.clone())
+        })
+        .collect();
+    let bottom: Option<Element<'a, M>> = match (reply, buttons.is_empty()) {
+        (Some(reply), false) if shares => Some(
+            row![reply]
+                .extend(buttons)
+                .spacing(theme::SPACING)
+                .align_y(alignment::Vertical::Bottom)
+                .into(),
+        ),
+        (Some(reply), false) => Some(
+            column![row(buttons).spacing(theme::SPACING), reply]
+                .spacing(theme::SPACING)
+                .into(),
+        ),
+        (Some(reply), true) => Some(reply),
+        (None, false) => Some(row(buttons).spacing(theme::SPACING).into()),
+        (None, true) => None,
+    };
+    if options.is_none() && bottom.is_none() {
+        return None;
     }
+    Some(
+        column![]
+            .push(options)
+            .push(bottom)
+            .spacing(theme::SPACING)
+            .into(),
+    )
+}
+
+/// A button among a notification's answers: a label, filled white if it's the main one, and as
+/// wide as `width` gives it.
+fn answer_button<'a>(
+    label: String,
+    message: Option<AnyMessage>,
+    prominent: bool,
+    width: Length,
+    ctx: Ctx,
+) -> Element<'a, AnyMessage> {
+    let content = text(label)
+        .size(theme::TEXT_SIZE)
+        .font(theme::STRONG_FONT)
+        .color(if prominent {
+            theme::ON_ACCENT
+        } else {
+            theme::tone(Tone::Normal)
+        })
+        .wrapping(text::Wrapping::None);
+    let fill = prominent.then(|| ctx.fill());
+    let enabled = message.is_some();
+    button(container(content).center_x(width))
+        .on_press_maybe(message)
+        .width(width)
+        .height(theme::BUTTON_HEIGHT)
+        .padding([0, 12])
+        .style(move |theme: &Theme, status| {
+            let style = text_button_style(theme, status, fill);
+            if enabled {
+                style
+            } else {
+                // Nothing to send yet: there, but faint.
+                button::Style {
+                    background: style
+                        .background
+                        .map(|background| background.scale_alpha(0.5)),
+                    ..style
+                }
+            }
+        })
+        .into()
+}
+
+/// One option to pick: its label, with "Recommended" beside it if it is, and what it means
+/// under it. A picked one is lit like the list row in use; with several to pick, a check box says
+/// which.
+fn choice<'a>(option: ChoiceParts<AnyMessage>, multiple: bool) -> Element<'a, AnyMessage> {
+    let picked = option.picked;
+    let label = text(option.label)
+        .size(theme::TEXT_SIZE)
+        .font(if picked {
+            theme::STRONG_FONT
+        } else {
+            Font::DEFAULT
+        })
+        .color(theme::tone(if picked {
+            Tone::Accent
+        } else {
+            Tone::Normal
+        }))
+        .wrapping(text::Wrapping::WordOrGlyph);
+    let tag = option.recommended.then(|| {
+        container(
+            text("Recommended")
+                .size(theme::SMALL_SIZE - 1.0)
+                .color(theme::tone(Tone::Dim)),
+        )
+        .padding([0, 5])
+        .style(|_| container::Style {
+            border: Border {
+                color: theme::BADGE_BORDER,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..container::Style::default()
+        })
+    });
+    let title = row![label]
+        .push(tag)
+        .spacing(7)
+        .align_y(alignment::Vertical::Center);
+    let description = option.description.map(|description| {
+        text(description)
+            .size(theme::SMALL_SIZE)
+            .color(theme::tone(Tone::Dim))
+            .wrapping(text::Wrapping::WordOrGlyph)
+    });
+    let words = column![title]
+        .push(description)
+        .spacing(1)
+        .width(Length::Fill);
+    let check = multiple.then(|| -> Element<'a, AnyMessage> {
+        let mark = picked.then(|| icon::view(eave_api::ui::Icon::Check, theme::ON_ACCENT));
+        container(mark)
+            .center(Length::Fixed(theme::CHECK_SIZE))
+            .style(move |_| container::Style {
+                background: picked.then_some(Background::Color(theme::ACCENT_FILL)),
+                border: Border {
+                    color: if picked {
+                        theme::ACCENT_FILL
+                    } else {
+                        theme::CHECK_RING
+                    },
+                    width: if picked { 0.0 } else { 1.5 },
+                    radius: 5.0.into(),
+                },
+                ..container::Style::default()
+            })
+            .into()
+    });
+    let content = row![]
+        .push(check)
+        .push(words)
+        .spacing(10)
+        .align_y(alignment::Vertical::Top);
+    button(content)
+        .on_press(option.on_pick)
+        .width(Length::Fill)
+        .padding([7, 6])
+        .style(move |theme: &Theme, status| row_style(theme, status, picked))
+        .into()
 }
 
 /// A hash of what `node` says: its kinds and its text. Two nodes that read the same hash the
@@ -1242,6 +1731,19 @@ fn bar_button_style(_: &Theme, status: button::Status) -> button::Style {
 /// Icon buttons in a popover: plain until hovered, like the bar's.
 fn icon_button_style(theme: &Theme, status: button::Status) -> button::Style {
     bar_button_style(theme, status)
+}
+
+/// A button that's only its text, dim until hovered: a card's "Show all".
+fn quiet_button_style(_: &Theme, status: button::Status) -> button::Style {
+    let tone = match status {
+        button::Status::Hovered | button::Status::Pressed => Tone::Normal,
+        button::Status::Active | button::Status::Disabled => Tone::Dim,
+    };
+    button::Style {
+        background: None,
+        text_color: theme::tone(tone),
+        ..button::Style::default()
+    }
 }
 
 /// How a filled button answers the pointer: a little dimmer hovered, more pressed.

@@ -1791,9 +1791,7 @@ impl<M> Notice<M> {
                 .into_iter()
                 .map(|(label, message)| (label, f(message)))
                 .collect(),
-            choices: self
-                .choices
-                .map(|parts| Choices { parts }.map(f).parts),
+            choices: self.choices.map(|parts| Choices { parts }.map(f).parts),
             step: self.step.map(|step| StepParts {
                 index: step.index,
                 count: step.count,
