@@ -161,6 +161,9 @@ struct State {
     panel: Option<Tree>,
     /// Whether the pointer is over the island, which shows the toggle.
     hovered: bool,
+    /// Where the island itself is within its layout, from the layout's left, and how wide: the
+    /// layout is wider while a popover is open, to keep the panel's room clear of its neighbors.
+    own: (f32, f32),
     /// Whether the last layout made room for the toggle. A hidden one is still laid out, but
     /// takes no room and gets no events.
     toggle_shown: bool,
@@ -861,6 +864,16 @@ impl Motion {
 /// any variant it doesn't name, like this one, into the default arrow.
 const ARROW: mouse::Interaction = mouse::Interaction::ContextMenu;
 
+/// The island itself, without the room an open popover keeps beside it.
+fn own_bounds(state: &State, layout: Layout<'_>) -> Rectangle {
+    let bounds = layout.bounds();
+    let (offset, width) = state.own;
+    Rectangle::new(
+        Point::new(bounds.x + offset, bounds.y),
+        Size::new(width, bounds.height),
+    )
+}
+
 /// Whether the item at `index` is the toggle, laid out hidden.
 fn is_hidden(toggle: Option<usize>, index: usize, shown: bool) -> bool {
     toggle == Some(index) && !shown
@@ -1015,7 +1028,7 @@ fn draw_island<M>(
     let shape = if motion.island.is_some() {
         motion.shape()
     } else {
-        layout.bounds()
+        own_bounds(state, layout)
     };
     if shape.width < 1.0 || shape.height < 1.0 {
         return;
@@ -1187,6 +1200,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             panel: None,
             hovered: false,
             toggle_shown: false,
+            own: (0.0, 0.0),
         })
     }
 
@@ -1242,7 +1256,26 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         } else {
             x - spacing + padding
         };
-        layout::Node::with_children(Size::new(width, height), children)
+        // An open popover takes the panel's width in the row, so it pushes the islands beside it
+        // away instead of covering them. They glide there and back on their own springs. The
+        // island itself stays where its popover grows from: at the zone's side, or centered.
+        let open = self.popover.as_ref().is_some_and(|popover| popover.open);
+        let room = if open {
+            width.max(theme::PANEL_WIDTH)
+        } else {
+            width
+        };
+        let offset = match self.align {
+            Horizontal::Left => 0.0,
+            Horizontal::Center => ((room - width) / 2.0).round(),
+            Horizontal::Right => room - width,
+        };
+        tree.state.downcast_mut::<State>().own = (offset, width);
+        let children = children
+            .into_iter()
+            .map(|child| child.translate(Vector::new(offset, 0.0)))
+            .collect();
+        layout::Node::with_children(Size::new(room, height), children)
     }
 
     fn draw(
@@ -1347,13 +1380,14 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             ) = event
         {
             let hovered = !matches!(event, Event::Mouse(mouse::Event::CursorLeft))
-                && cursor.is_over(layout.bounds());
+                && cursor.is_over(own_bounds(state, layout));
             if hovered != state.hovered {
                 state.hovered = hovered;
                 shell.invalidate_layout();
                 shell.request_redraw();
             }
         }
+        let own = own_bounds(state, layout);
         let motion = &mut state.motion;
         motion.swap(self.popover.as_ref().map(|popover| popover.key));
         // A hidden toggle isn't arranged, so it isn't drawn, and fades in when it shows.
@@ -1365,7 +1399,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             .filter(|(index, _)| !is_hidden(self.toggle, *index, shown))
             .map(|(_, (key, child))| (*key, child.bounds().x));
         motion.arrange(
-            layout.bounds(),
+            own,
             positions,
             self.popover.as_ref().map(|popover| popover.open),
         );
@@ -1382,7 +1416,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
                 if self.popover.is_none() =>
             {
-                if let Some(at) = cursor.position_over(layout.bounds()) {
+                if let Some(at) = cursor.position_over(own) {
                     motion.press(at);
                 }
             }
@@ -1503,7 +1537,7 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             .as_widget_mut()
             .layout(panel, renderer, &limits);
 
-        let island = self.layout.bounds() + self.translation;
+        let island = own_bounds(state, self.layout) + self.translation;
         let rect = place(island, content.size(), self.island.align, bounds.width);
         state
             .motion
