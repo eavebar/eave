@@ -1686,3 +1686,22 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 **Alternative:** a bigger `inset`. It moves the bar down the same way, but draws nothing: the rows above the bar would show the wallpaper, and the bar would have no pixels there to move.
 
 **Cost:** one cached path, redrawn when the grow, the corners or the bar's width change. No new dependency.
+
+---
+
+## D-82: A count badge for unread notifications
+
+**Status:** accepted (2026-10-13).
+
+**What:** `ui::counted(content, count)` puts a number in a small red badge on its content's top right corner, overlapping it a little: a `Tone::Critical` circle for one digit and a pill for two, with the number in white, capped at 99. The host grows it in from nothing and back on the morph spring, counts through the numbers between like a `counter`, and springs its width from circle to pill. While there's a count, the item is wider by what of the badge sticks out past the content, and the island springs to it; the badge itself is drawn over the content and the item's own padding, so the bell doesn't move as the badge grows. eave-notifications uses it on the bell, and hides it in do not disturb.
+
+**Why:**
+- **A host primitive:** plugins don't pick colors or draw (D-11, D-13), so a red badge has to be something the host draws. `badge(text)` was already the outlined code box (a keyboard layout's `US`), hence the name.
+- **Red:** unread notifications are news, which is what a signal color is for (design rule 2). It's the one red thing on a black bar, so it gets seen.
+- **On the corner, not beside:** the count next to the bell read as another item and made the island jump in width with every digit. On the corner it reads as belonging to the bell, the way phones and desktops show it.
+
+**Alternatives:** keep the counter beside the bell (what it was); a dot without a number (says less); reserve the badge's room always (an island wider for nothing at rest).
+
+**On top:** the badge draws in a layer of its own. Within one layer the renderer draws by kind (shapes, then pictures, then text), not in the order things were drawn, so the bell could show through it. A nested layer isn't clipped by the island's, so the island hands down what it shows (`island::clip`, ambient like the squish) and the badge keeps to it.
+
+**Cost:** one small widget and one layer while a badge shows, no dependency.

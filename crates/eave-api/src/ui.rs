@@ -241,6 +241,10 @@ pub enum Kind<M> {
     },
     Display(Box<Node<M>>),
     Mark(Box<Node<M>>),
+    Counted {
+        content: Box<Node<M>>,
+        count: u32,
+    },
     Badge {
         text: String,
         tone: Option<Tone>,
@@ -674,6 +678,16 @@ pub fn mark<M>(content: Node<M>) -> Node<M> {
     Node(Kind::Mark(Box::new(content)))
 }
 
+/// Its content with `count` in a red badge at its top right, overlapping it a little: unread
+/// notifications on a bell. At 0 there's no badge. The host grows the badge in and out and counts
+/// through the numbers in between; past 99 it shows 99.
+pub fn counted<M>(content: Node<M>, count: u32) -> Node<M> {
+    Node(Kind::Counted {
+        content: Box::new(content),
+        count,
+    })
+}
+
 /// A short code in a small outlined box: a keyboard layout's `US`.
 pub fn badge<M>(text: impl Into<String>) -> Node<M> {
     Node(Kind::Badge {
@@ -899,6 +913,7 @@ impl<M> Node<M> {
             | Kind::Center(content)
             | Kind::Display(content)
             | Kind::Mark(content)
+            | Kind::Counted { content, .. }
             | Kind::Scroll { content, .. }
             | Kind::Detail { value: content, .. } => content.set_tone(new),
             Kind::ListItem {
@@ -1113,6 +1128,10 @@ impl<M> Node<M> {
             }
             Kind::Display(content) => Kind::Display(Box::new(content.map(f))),
             Kind::Mark(content) => Kind::Mark(Box::new(content.map(f))),
+            Kind::Counted { content, count } => Kind::Counted {
+                content: Box::new(content.map(f)),
+                count,
+            },
             Kind::Badge { text, tone } => Kind::Badge { text, tone },
             Kind::Tabs(pages) => Kind::Tabs(
                 pages

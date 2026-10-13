@@ -54,12 +54,12 @@ fn places(range: &RangeInclusive<i64>) -> usize {
 }
 
 #[derive(Default)]
-struct Count {
+pub(crate) struct Count {
     /// Where it's counting to, once it has a number at all.
     to: Option<i64>,
     from: i64,
     /// The number on screen.
-    shown: i64,
+    pub(crate) shown: i64,
     /// Changed, and waiting for a frame to start counting on. A counter that isn't on screen (in
     /// an alternate) waits until it is.
     pending: bool,
@@ -68,7 +68,7 @@ struct Count {
 
 impl Count {
     /// Takes in the number. A new one is counted to from the one on screen.
-    fn set(&mut self, value: i64) {
+    pub(crate) fn set(&mut self, value: i64) {
         match self.to {
             None => self.shown = value,
             Some(to) if to == value => return,
@@ -82,7 +82,7 @@ impl Count {
     }
 
     /// Advances to `now`. Returns whether another frame is needed.
-    fn step(&mut self, now: Instant) -> bool {
+    pub(crate) fn step(&mut self, now: Instant) -> bool {
         if self.pending {
             self.pending = false;
             self.start = Some(now);
@@ -112,7 +112,12 @@ struct State {
     digit: f32,
 }
 
-fn shape(content: &str, renderer: &iced::Renderer, size: f32, font: Option<Font>) -> Paragraph {
+pub(crate) fn shape(
+    content: &str,
+    renderer: &iced::Renderer,
+    size: f32,
+    font: Option<Font>,
+) -> Paragraph {
     use iced::advanced::text::Renderer as _;
 
     Paragraph::with_text(text::Text {

@@ -26,6 +26,7 @@ use crate::icon;
 use crate::label::Label;
 use crate::markdown;
 use crate::meter::Meter;
+use crate::pip::Pip;
 use crate::slider::Slider;
 use crate::sprite::Sprite;
 use crate::switcher::Switcher;
@@ -290,6 +291,10 @@ pub fn fingerprint<M>(node: &Node<M>, hasher: &mut impl Hasher) {
         Kind::AppIcon { app_id, .. } => app_id.hash(hasher),
         Kind::Cover { url, .. } => url.hash(hasher),
         Kind::Counter { value, unit, .. } => (value, unit).hash(hasher),
+        Kind::Counted { content, count } => {
+            count.hash(hasher);
+            fingerprint(content, hasher);
+        }
         Kind::Diff { title, lines } => {
             title.hash(hasher);
             for (change, line) in lines {
@@ -388,6 +393,7 @@ pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
         | Kind::Center(content)
         | Kind::Display(content)
         | Kind::Mark(content)
+        | Kind::Counted { content, .. }
         | Kind::Detail { value: content, .. } => all(vec![*content]),
         Kind::Switcher { options, .. } => all(options.into_iter().map(|(node, _)| node).collect()),
         Kind::Tabs(pages) => all(pages.into_iter().map(|(_, page)| page).collect()),
@@ -948,6 +954,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 })
                 .into()
         }
+        Kind::Counted { content, count } => Pip::new(render(*content, ctx, icons), count).into(),
         Kind::Tabs(pages) if pages.is_empty() => text("").into(),
         Kind::Tabs(pages) if ctx.panel() => {
             let (names, pages): (Vec<_>, Vec<_>) = pages

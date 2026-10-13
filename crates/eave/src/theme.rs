@@ -296,6 +296,16 @@ pub const MARK_RING: f32 = 1.5;
 pub const GRID_ROW: f32 = 32.0;
 /// A badge's outline.
 pub const BADGE_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
+/// A count badge ([`eave_api::ui::counted`]): as tall as it is wide for one digit, so one digit
+/// makes a circle and two a pill.
+pub const PIP_HEIGHT: f32 = 14.0;
+/// Its number, and the room on each side of it once there's more than one digit.
+pub const PIP_TEXT_SIZE: f32 = SMALL_SIZE - 1.0;
+pub const PIP_PADDING: f32 = 4.0;
+/// How far the badge reaches back over what it counts, and how far its middle sits below that
+/// thing's top: enough to sit on its corner without covering it.
+pub const PIP_OVERLAP: f32 = 7.0;
+pub const PIP_DROP: f32 = 3.0;
 /// A scrolling list's scrollbar.
 pub const SCROLLER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.20);
 /// Tabs: a pill-shaped track with a mark sliding behind the current tab, inset by `TAB_INSET`.
