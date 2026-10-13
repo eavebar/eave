@@ -18,6 +18,8 @@ const GAP: Duration = Duration::from_millis(1000);
 /// How long after a skip we asked for its track can still come. A skip back that only restarts
 /// the track brings none.
 const SKIP_LANDS: Duration = Duration::from_secs(3);
+/// How many of a player's last covers are tried, newest first, until one is there.
+const COVERS_TRIED: usize = 3;
 /// How many tracks back a player's history goes.
 const TRACKS_KEPT: usize = 32;
 
@@ -240,7 +242,7 @@ impl Widget for Media {
         let mut lines = vec![ui::header(player.identity.clone())];
         // The track, centered under its cover. The header already names the player, so a track
         // with no title has no heading.
-        if !self.art.url(player).is_empty() {
+        if !self.art.covers(player).is_empty() {
             lines.push(ui::center(self.picture(player, true)));
         }
         if !player.title.is_empty() {
@@ -355,7 +357,7 @@ impl Media {
         let Some((bus_name, key)) = self
             .current()
             .filter(|p| !p.title.is_empty())
-            .map(|p| (p.bus_name.clone(), (p.title.clone(), p.artist.clone())))
+            .map(|p| (p.bus_name.clone(), p.title.clone()))
         else {
             return effect;
         };
@@ -436,16 +438,16 @@ fn pick(players: &[Player], chosen: Option<&str>, current: Option<&str>) -> Opti
 }
 
 /// The covers the followed player showed last. A new track's cover takes a moment to come, and
-/// some players (Chrome) send the track first, with no cover or one still to fetch: meanwhile the
-/// last cover stays instead of the player's icon.
+/// some players send the track first, with no cover or one still to fetch: meanwhile the last
+/// cover stays instead of the player's icon. Chrome writes each cover to a file it deletes as soon
+/// as it writes the next, a few times a track, so some of them can't be had: the newest of the
+/// last few that could is shown.
 #[derive(Default)]
 struct Art {
     bus_name: String,
-    /// The last cover it had.
-    url: String,
-    /// The one before that, shown while `url` is fetched.
-    before: String,
-    /// When it went without a cover, if it has none now. `url` is kept for a `GAP` after.
+    /// Its covers, newest first: the one it has, or had last, then the ones before.
+    recent: Vec<String>,
+    /// When it went without a cover, if it has none now. The last one is kept for a `GAP` after.
     lost: Option<Instant>,
 }
 
@@ -461,13 +463,15 @@ impl Art {
             };
         }
         if !player.art_url.is_empty() {
-            if self.url != player.art_url {
-                self.before = std::mem::replace(&mut self.url, player.art_url.clone());
+            if self.recent.first() != Some(&player.art_url) {
+                self.recent.retain(|url| *url != player.art_url);
+                self.recent.insert(0, player.art_url.clone());
+                self.recent.truncate(COVERS_TRIED);
             }
             self.lost = None;
             return None;
         }
-        if self.url.is_empty() || self.lost.is_some() {
+        if self.recent.is_empty() || self.lost.is_some() {
             return None;
         }
         let now = Instant::now();
@@ -475,18 +479,23 @@ impl Art {
         Some(now)
     }
 
-    /// The cover to show for `player`: its own, or the last one while it's between covers.
-    fn url<'a>(&'a self, player: &'a Player) -> &'a str {
-        if !player.art_url.is_empty() || self.bus_name != player.bus_name {
-            &player.art_url
-        } else {
-            &self.url
+    /// The covers to try for `player`, best first: its own, or between covers the last one, then
+    /// the ones before.
+    fn covers<'a>(&'a self, player: &'a Player) -> Vec<&'a str> {
+        if self.bus_name != player.bus_name {
+            return [player.art_url.as_str()]
+                .into_iter()
+                .filter(|url| !url.is_empty())
+                .collect();
         }
-    }
-
-    /// What shows until the cover at `url` is there: the one before it, if that's another.
-    fn before(&self, url: &str) -> Option<&str> {
-        (url == self.url && !self.before.is_empty()).then_some(self.before.as_str())
+        let own = Some(player.art_url.as_str()).filter(|url| !url.is_empty());
+        let mut urls: Vec<_> = own.into_iter().collect();
+        for url in &self.recent {
+            if !urls.contains(&url.as_str()) {
+                urls.push(url);
+            }
+        }
+        urls
     }
 }
 
@@ -508,15 +517,12 @@ impl Media {
             let cover = ui::cover(url.to_owned(), fallback);
             if large { cover.large() } else { cover }
         };
-        let url = self.art.url(player);
-        if url.is_empty() {
-            return placeholder;
-        }
-        let fallback = match self.art.before(url) {
-            Some(before) => cover(before, placeholder),
-            None => placeholder,
-        };
-        cover(url, fallback)
+        // Each falls back to the next: the first one there shows.
+        self.art
+            .covers(player)
+            .into_iter()
+            .rev()
+            .fold(placeholder, |fallback, url| cover(url, fallback))
     }
 }
 
@@ -530,20 +536,16 @@ fn shown(player: &Player) -> bool {
 #[derive(Default)]
 struct Tracks {
     bus_name: String,
-    /// Each track's title and artist. A player may give a track a new id each time it plays it.
-    list: Vec<(String, String)>,
+    /// Each track's title. Not its id: Chrome gives every track the same one. Not its artist
+    /// either: Chrome sends a new track's title first, and its artist a moment after.
+    list: Vec<String>,
     at: usize,
 }
 
 impl Tracks {
     /// The player is on `track` now: which way that went from the one before, if it's another
     /// one on the same player. `asked` is the way we skipped, for a track it hasn't seen.
-    fn went(
-        &mut self,
-        bus_name: &str,
-        track: (String, String),
-        asked: Option<Nudge>,
-    ) -> Option<Nudge> {
+    fn went(&mut self, bus_name: &str, track: String, asked: Option<Nudge>) -> Option<Nudge> {
         if self.bus_name != bus_name {
             *self = Self {
                 bus_name: bus_name.to_owned(),
@@ -787,30 +789,37 @@ mod tests {
             playing.art_url = art.into();
             Message::Players(vec![playing])
         };
-        let cover = |media: &Media| match content(media) {
-            ui::Kind::Cover { url, fallback, .. } => (url, Some(fallback.into_kind())),
-            other => (
-                format!("{:?}", matches!(other, ui::Kind::AppIcon { .. })),
-                None,
-            ),
-        };
-        media.update(with("One", "file:///one.jpg"));
+        // The covers tried, best first, down to the player's icon.
+        fn chain(node: ui::Kind<Message>) -> Vec<String> {
+            match node {
+                ui::Kind::Cover { url, fallback, .. } => {
+                    let mut urls = vec![url];
+                    urls.extend(chain(fallback.into_kind()));
+                    urls
+                }
+                ui::Kind::AppIcon { .. } => vec!["icon".to_owned()],
+                _ => vec!["?".to_owned()],
+            }
+        }
+        let shown = |media: &Media| chain(content(media));
+        media.update(with("One", "file:///one"));
+        assert_eq!(shown(&media), ["file:///one", "icon"]);
         // The next track, its cover not sent yet: the last one stays.
         media.update(with("Two", ""));
-        assert_eq!(cover(&media).0, "file:///one.jpg");
-        // Its cover is sent: shown once fetched, the last one until then.
-        media.update(with("Two", "file:///two.jpg"));
-        let (url, fallback) = cover(&media);
-        assert_eq!(url, "file:///two.jpg");
-        assert!(matches!(fallback, Some(ui::Kind::Cover { url, .. }) if url == "file:///one.jpg"));
+        assert_eq!(shown(&media), ["file:///one", "icon"]);
+        // Chrome sends a cover, then another as it deletes the first: the last few are tried.
+        media.update(with("Two", "file:///two-a"));
+        media.update(with("Two", "file:///two-b"));
+        assert_eq!(
+            shown(&media),
+            ["file:///two-b", "file:///two-a", "file:///one", "icon"]
+        );
         // A track that really has none shows the player's icon, a moment later.
         media.update(with("Three", ""));
         let lost = media.art.lost.unwrap();
-        assert_eq!(cover(&media).0, "file:///two.jpg");
+        assert_eq!(shown(&media)[0], "file:///two-b");
         media.update(Message::ArtGone(lost));
-        let (icon, fallback) = cover(&media);
-        assert_eq!(icon, "true", "the player's icon");
-        assert!(fallback.is_none());
+        assert_eq!(shown(&media), ["icon"]);
     }
 
     #[test]
@@ -890,6 +899,21 @@ mod tests {
             None
         );
         assert_eq!(play(&mut media, "Three"), Some(Nudge::Right));
+        // Chrome sends the title first, then the artist: one track, one nudge.
+        let mut half = player("a", Status::Stopped, "Four");
+        half.artist = String::new();
+        assert_eq!(
+            nudge(media.update(Message::Players(vec![half]))),
+            Some(Nudge::Right)
+        );
+        assert_eq!(play(&mut media, "Four"), None);
+        let mut half = player("a", Status::Stopped, "Three");
+        half.artist = String::new();
+        assert_eq!(
+            nudge(media.update(Message::Players(vec![half]))),
+            Some(Nudge::Left)
+        );
+        assert_eq!(play(&mut media, "Three"), None);
         // Another player taking over isn't a track change.
         assert_eq!(
             nudge(media.update(Message::Players(vec![
