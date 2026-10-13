@@ -24,16 +24,17 @@ pub const DRAG_ROOM: u16 = 14;
 /// How much of `DRAG_ROOM` the bar keeps windows out of. The rest of the surface hangs over the
 /// top of the windows below it, outside its input region, so it never takes their clicks (D-45).
 pub const RESERVED_ROOM: u16 = 6;
-/// The bar's exclusive zone, and the strip that takes the pointer, with islands `island` tall: an
-/// island, the gap above it and the reserved room below it.
-pub fn bar_height(island: f32) -> u32 {
-    (f32::from(EDGE_GAP) + island + f32::from(RESERVED_ROOM)).ceil() as u32
+/// The bar's exclusive zone, and the strip that takes the pointer, with islands `island` tall
+/// below an edge grown by `grow` (D-81): the grown edge, the gap, an island and the reserved room
+/// below it.
+pub fn bar_height(grow: f32, island: f32) -> u32 {
+    (grow + f32::from(EDGE_GAP) + island + f32::from(RESERVED_ROOM)).ceil() as u32
 }
 
-/// The bar surface, with islands `island` tall: an island, the gap above it and all the room
-/// below it.
-pub fn surface_height(island: f32) -> u32 {
-    (f32::from(EDGE_GAP) + island + f32::from(DRAG_ROOM)).ceil() as u32
+/// The bar surface, with islands `island` tall below an edge grown by `grow`: the grown edge, the
+/// gap, an island and all the room below it.
+pub fn surface_height(grow: f32, island: f32) -> u32 {
+    (grow + f32::from(EDGE_GAP) + island + f32::from(DRAG_ROOM)).ceil() as u32
 }
 
 /// How far an island attached to a screen edge reaches past it (D-70): further than its corners

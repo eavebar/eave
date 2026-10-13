@@ -66,6 +66,9 @@ pub struct Screen {
     pub notch: Option<Notch>,
     /// Top, right, bottom, left.
     pub inset: [f32; 4],
+    /// How much thicker the bar draws the top edge than it is (D-81): everything that hangs from
+    /// it, a notch included, hangs this much lower.
+    pub grow: f32,
     /// The screen's own corners: top left, top right, bottom right, bottom left.
     pub corners: [CornerShape; 4],
     /// An island's corners where they face neither a screen corner nor the notch.
@@ -77,6 +80,7 @@ impl Default for Screen {
         Self {
             notch: None,
             inset: [0.0; 4],
+            grow: 0.0,
             corners: [CornerShape::SQUARE; 4],
             islands: CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING),
         }
@@ -129,10 +133,39 @@ impl Screen {
     /// shows (D-76). Without a notch, the theme's.
     pub fn island_height(&self) -> f32 {
         match self.notch {
-            Some(notch) => (notch.top + notch.height - self.inset[0] - f32::from(theme::EDGE_GAP))
-                .max(theme::MIN_ISLAND_HEIGHT),
+            Some(notch) => {
+                (self.notch_top(notch) + notch.height - self.edge() - f32::from(theme::EDGE_GAP))
+                    .max(theme::MIN_ISLAND_HEIGHT)
+            }
             None => theme::ISLAND_HEIGHT as f32,
         }
+    }
+
+    /// Where the top edge shows from, grown (D-81): below the rows the bezel hides and the ones
+    /// the bar adds to it. The islands are a gap below it.
+    pub fn edge(&self) -> f32 {
+        self.inset[0] + self.grow
+    }
+
+    /// Where `notch` starts: one hanging from the top hangs from it grown (D-81), a cut-out is
+    /// where the hardware has it.
+    pub fn notch_top(&self, notch: Notch) -> f32 {
+        if notch.top > 0.0 {
+            notch.top
+        } else {
+            self.grow
+        }
+    }
+
+    /// The bar's exclusive zone and input strip, from the top of the bar's surface: the grown
+    /// edge, the gap and the islands, and a little room below them.
+    pub fn bar_height(&self) -> u32 {
+        theme::bar_height(self.grow, self.island_height())
+    }
+
+    /// The bar's surface at rest: the grown edge, the gap, the islands and all the room below.
+    pub fn surface_height(&self) -> u32 {
+        theme::surface_height(self.grow, self.island_height())
     }
 
     /// The notch's lower corners, if it has measured ones.
@@ -202,6 +235,7 @@ pub async fn resolve(
     let mut resolved = Screen {
         notch,
         inset: screen.inset.map(|inset| inset / scale),
+        grow: screen.grow / scale,
         corners: screen
             .corners
             .map(|radius| CornerShape::new(radius / scale, screen.smoothing)),
@@ -390,7 +424,10 @@ mod tests {
 
     #[test]
     fn islands_end_where_the_notch_does() {
-        assert_eq!(Screen::default().island_height(), theme::ISLAND_HEIGHT as f32);
+        assert_eq!(
+            Screen::default().island_height(),
+            theme::ISLAND_HEIGHT as f32
+        );
         let mut screen = macbook(config::Islands::default());
         assert_eq!(screen.island_height(), 26.0);
         // A row hidden under the bezel moves the islands' top, not the notch's bottom.
@@ -399,6 +436,21 @@ mod tests {
         // A tiny notch doesn't crush them.
         screen.notch.as_mut().unwrap().height = 10.0;
         assert_eq!(screen.island_height(), theme::MIN_ISLAND_HEIGHT);
+    }
+
+    #[test]
+    fn a_grown_edge_takes_a_hanging_notch_with_it() {
+        let mut screen = macbook(config::Islands::default());
+        let bar = screen.bar_height();
+        screen.grow = 3.0;
+        // Everything hangs 3 lower, and the islands are as tall.
+        assert_eq!(screen.edge(), 3.0);
+        assert_eq!(screen.notch_top(screen.notch.unwrap()), 3.0);
+        assert_eq!(screen.island_height(), 26.0);
+        assert_eq!(screen.bar_height(), bar + 3);
+        // A cut-out stays where it is, so the islands beside it end there.
+        screen.notch.as_mut().unwrap().top = 2.0;
+        assert_eq!(screen.island_height(), 25.0);
     }
 
     #[test]

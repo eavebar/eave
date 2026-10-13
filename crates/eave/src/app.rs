@@ -557,11 +557,8 @@ impl Bar {
         let height = rects
             .iter()
             .map(|rect| (rect.y + rect.height).ceil() as u32 + u32::from(style::EDGE_GAP))
-            .fold(
-                style::surface_height(self.screen.island_height()),
-                u32::max,
-            );
-        let bar_height = style::bar_height(self.screen.island_height());
+            .fold(self.screen.surface_height(), u32::max);
+        let bar_height = self.screen.bar_height();
         let callback = ActionCallback::new(move |region| {
             // iced_layershell reuses one region and only clears the surface's current size, which
             // may be the old one: clear all of it, so no earlier popover's rect is left behind.
@@ -602,7 +599,7 @@ impl Bar {
             }),
             Task::done(Message::ExclusiveZoneChange {
                 id: window,
-                zone_size: style::bar_height(self.screen.island_height()) as i32,
+                zone_size: self.screen.bar_height() as i32,
             }),
         ])
     }
@@ -1097,7 +1094,8 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
                 return Task::none();
             }
             let moved = bar.screen.inset != screen.inset
-                || bar.screen.island_height() != screen.island_height();
+                || bar.screen.surface_height() != screen.surface_height()
+                || bar.screen.bar_height() != screen.bar_height();
             bar.screen = screen;
             if moved {
                 Task::batch(
@@ -1136,13 +1134,12 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         .filter(|_| bar.toast_window() == Some(window));
     let notice_island = bar.notice_island();
     // Islands attached to the top flare out where they meet it, like the notch does (D-72). The
-    // surface's top is the screen's that shows.
+    // surface's top is the screen's that shows, and the edge the bar grows from there (D-81).
     let shoulders = bar
         .screen
         .notch
         .filter(|notch| notch.shoulder > 0.0)
         .map(|notch| CornerShape::new(notch.shoulder, notch.smoothing));
-    let top = bar.screen.inset[0];
 
     // Each island is as wide as its items. One with nothing to show draws nothing, unless it has
     // collapsed items to bring back.
@@ -1268,26 +1265,32 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             let mut before = islands(Zone::Center, Horizontal::Center);
             let mut after = before.split_off(before.len().div_ceil(2));
             if let Some((last, attach)) = before.pop() {
-                let last = beside_notch(last, attach, Side::Right, &bar.screen, notch, top);
+                let last = beside_notch(last, attach, Side::Right, &bar.screen, notch);
                 before.push((last, attach));
             }
             if !after.is_empty() {
                 let (first, attach) = after.remove(0);
-                let first = beside_notch(first, attach, Side::Left, &bar.screen, notch, top);
+                let first = beside_notch(first, attach, Side::Left, &bar.screen, notch);
                 after.insert(0, (first, attach));
             }
             let fused = [before.last(), after.first()]
                 .map(|next| next.is_some_and(|(_, attach)| attach.top));
-            let below = top + f32::from(style::EDGE_GAP);
-            Zones::around_notch(left, [zone(before), zone(after)], right, notch, below, fused)
+            // From where the zones start, below the grown edge and the gap.
+            let below = bar.screen.edge() + f32::from(style::EDGE_GAP);
+            let at = bar.screen.notch_top(notch) - below;
+            Zones::around_notch(left, [zone(before), zone(after)], right, notch, at, fused)
         }
-    };
+    }
+    .edge(
+        bar.screen.grow,
+        [bar.screen.corners[0], bar.screen.corners[1]],
+    );
 
     // No background of its own: the surface is transparent around and between the islands, and
     // below them, where a dragged island has room to move and popovers grow.
     container(zones)
         .padding(Padding {
-            top: style::EDGE_GAP.into(),
+            top: f32::from(style::EDGE_GAP) + bar.screen.grow,
             right: style::EDGE_GAP.into(),
             bottom: style::DRAG_ROOM.into(),
             left: style::EDGE_GAP.into(),
@@ -1314,15 +1317,14 @@ fn placed<'a>(
 
 /// An island against the notch, which is on its `side`. Attached to the top, it's fused to the
 /// notch: it ends as low as the notch does, and reaches under it to its middle, past any rounding
-/// of its corners, so they read as one island. The surface starts `top` below the screen's top
-/// edge, where the notch starts. Otherwise it's rounded like the notch, a gap away (D-73).
+/// of its corners, so they read as one island. Otherwise it's rounded like the notch, a gap away
+/// (D-73).
 fn beside_notch<'a>(
     island: Island<'a, Message>,
     attach: config::Edges,
     side: Side,
     screen: &notch::Screen,
     notch: Notch,
-    top: f32,
 ) -> Island<'a, Message> {
     let place = Place {
         notch: Some(side),
@@ -1333,8 +1335,9 @@ fn beside_notch<'a>(
         return island;
     }
     let mut bleed = bleed(attach);
-    let island_bottom = f32::from(style::EDGE_GAP) + screen.island_height();
-    bleed.bottom = notch.top + notch.height - top - island_bottom;
+    // Both from the screen's top edge.
+    let island_bottom = screen.edge() + f32::from(style::EDGE_GAP) + screen.island_height();
+    bleed.bottom = screen.notch_top(notch) + notch.height - island_bottom;
     // What reaches under the notch is out of sight; so is what a shorter notch leaves below it.
     let shows = Padding {
         bottom: bleed.bottom,

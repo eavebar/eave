@@ -6,7 +6,8 @@
 //! With a notch (D-69), the center zone can't be centered: it comes in two halves, one each side
 //! of the notch. A half whose island there is fused to the notch is right against it, so they read
 //! as one; any other keeps `ISLAND_SPACING` from it (D-73). The notch itself is drawn black, as
-//! big as the bar has it, which may be bigger than it is (D-75).
+//! big as the bar has it, which may be bigger than it is (D-75). So is the top edge, when the bar
+//! grows it (D-81).
 
 use std::cell::Cell;
 
@@ -26,15 +27,19 @@ pub struct Zones<'a, M> {
     zones: Vec<Element<'a, M>>,
     /// The notch, centered, and the gap each half keeps from it.
     notch: Option<(Notch, [f32; 2])>,
-    /// How far below the screen's top edge the zones start: the gap above the islands, and the
-    /// rows the bezel hides.
-    top: f32,
+    /// How far below where the zones start the notch does: up, so negative.
+    at: f32,
+    /// The top edge the bar grows: how much, and the screen's top left and right corners, which
+    /// round what shows below it.
+    edge: Option<(f32, [CornerShape; 2])>,
 }
 
-/// The notch as last drawn, and what it was drawn from.
+/// The notch and the grown edge as last drawn, and what they were drawn from.
 struct State {
     cache: Cache,
     drawn: Cell<Option<(Notch, f32)>>,
+    edge_cache: Cache,
+    edge_drawn: Cell<Option<(f32, [CornerShape; 2], f32)>>,
 }
 
 impl<'a, M> Zones<'a, M> {
@@ -42,19 +47,19 @@ impl<'a, M> Zones<'a, M> {
         Self {
             zones: vec![left, center, right],
             notch: None,
-            top: 0.0,
+            at: 0.0,
+            edge: None,
         }
     }
 
     /// Around `notch`, centered: the center zone's halves go each side of it, right against it
-    /// where `fused`. The zones start `top` below the screen's top edge, so the notch is drawn
-    /// where it is.
+    /// where `fused`. It starts `at` below where the zones do: above them, so negative.
     pub fn around_notch(
         left: Element<'a, M>,
         [before, after]: [Element<'a, M>; 2],
         right: Element<'a, M>,
         notch: Notch,
-        top: f32,
+        at: f32,
         fused: [bool; 2],
     ) -> Self {
         let gaps = fused.map(|fused| {
@@ -67,19 +72,60 @@ impl<'a, M> Zones<'a, M> {
         Self {
             zones: vec![left, before, after, right],
             notch: Some((notch, gaps)),
-            top,
+            at,
+            edge: None,
         }
+    }
+
+    /// With the screen's top edge drawn `grow` thicker than it is, above the gap over the zones,
+    /// and rounded into the sides by the screen's top `corners` (D-81). Nothing if it isn't grown.
+    pub fn edge(mut self, grow: f32, corners: [CornerShape; 2]) -> Self {
+        self.edge = (grow > 0.0).then_some((grow, corners));
+        self
     }
 }
 
-/// The notch `top` below where the zones start, in a frame its own size: what's drawn, and the
-/// frame's top left in the zones' coordinates, centered in `width`. Hanging from the screen's top
-/// edge, it's rounded outwards there like the screen's is, and reaches past it out of sight; lower
-/// down, it's a cut-out, rounded all round.
-fn notch_outline(notch: Notch, top: f32, width: f32) -> (Path, Point) {
+/// The grown top edge across `width`, `grow` tall, in a frame its own size: a band whose lower
+/// ends curve down into the sides, the way the screen's top `corners` round what shows below it.
+/// The frame is as tall as the band and the deeper of its curves.
+fn edge_outline(grow: f32, corners: [CornerShape; 2], width: f32) -> (Path, f32) {
+    let budget = width / 2.0;
+    let [left, right] =
+        corners.map(|corner| squircle::Corner::new(corner.radius, corner.smoothing, budget));
+    let path = Path::new(|builder| {
+        builder.move_to(Point::ORIGIN);
+        builder.line_to(Point::new(width, 0.0));
+        // Down the right side to where the corner starts, round it back the way what shows below
+        // turns there, along the band's bottom, and round the left one down the left side.
+        builder.line_to(Point::new(width, grow + right.extent()));
+        squircle::corner_into(
+            builder,
+            &right,
+            Point::new(width, grow),
+            squircle::UP,
+            squircle::LEFT,
+            false,
+        );
+        squircle::corner_into(
+            builder,
+            &left,
+            Point::new(0.0, grow),
+            squircle::LEFT,
+            squircle::DOWN,
+            false,
+        );
+        builder.close();
+    });
+    (path, grow + left.extent().max(right.extent()))
+}
+
+/// The notch starting `y` below where the zones start, in a frame its own size: what's drawn, and
+/// the frame's top left in the zones' coordinates, centered in `width`. Hanging from the screen's
+/// top edge, it's rounded outwards there like the screen's is, and reaches past it out of sight;
+/// lower down, it's a cut-out, rounded all round.
+fn notch_outline(notch: Notch, y: f32, width: f32) -> (Path, Point) {
     let lower = CornerShape::new(notch.radius, notch.smoothing);
     let x = (width - notch.width) / 2.0;
-    let y = notch.top - top;
     if notch.top > 0.0 {
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(notch.width, notch.height));
         return (squircle_corners(bounds, [lower; 4]), Point::new(x, y));
@@ -182,15 +228,32 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        let state = tree.state.downcast_ref::<State>();
+        let bounds = layout.bounds();
+        // Across the whole surface, gaps included, from its top.
+        if let Some((grow, corners)) = self.edge {
+            let gap = f32::from(theme::EDGE_GAP);
+            let width = bounds.width + 2.0 * gap;
+            let drawn = (grow, corners, width);
+            if state.edge_drawn.replace(Some(drawn)) != Some(drawn) {
+                state.edge_cache.clear();
+            }
+            let (path, height) = edge_outline(grow, corners, width);
+            let geometry = state
+                .edge_cache
+                .draw(renderer, Size::new(width, height), |frame| {
+                    frame.fill(&path, theme::ISLAND_BG);
+                });
+            let at = Vector::new(bounds.x - gap, bounds.y - gap - grow);
+            renderer.with_translation(at, |renderer| renderer.draw_geometry(geometry));
+        }
         // Under the islands, so what's fused to it covers it.
         if let Some((notch, _)) = self.notch {
-            let state = tree.state.downcast_ref::<State>();
-            let bounds = layout.bounds();
-            let drawn = (notch, self.top);
+            let drawn = (notch, self.at);
             if state.drawn.replace(Some(drawn)) != Some(drawn) {
                 state.cache.clear();
             }
-            let (path, at) = notch_outline(notch, self.top, bounds.width);
+            let (path, at) = notch_outline(notch, self.at, bounds.width);
             let size = Size::new(
                 notch.width + notch.shoulder * 4.0,
                 notch.height + theme::ATTACH_OVERHANG,
@@ -216,6 +279,8 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
         tree::State::new(State {
             cache: Cache::new(),
             drawn: Cell::new(None),
+            edge_cache: Cache::new(),
+            edge_drawn: Cell::new(None),
         })
     }
 

@@ -62,6 +62,7 @@ How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs
 | Island corners | follow what they face: a screen corner at an even distance, the notch's corners beside it, `islands` everywhere else ([D-73](decisions.md)) | | |
 | Island height | 30 px; with a notch, ending where the notch does ([D-76](decisions.md)) | | |
 | Notch | drawn black by the bar, `grow` px bigger than it is if asked ([D-75](decisions.md)) | | |
+| Top edge | drawn black by the bar, `grow` px thicker than it is if asked; what hangs from the top hangs from there ([D-81](decisions.md)) | | |
 | Code block, diff | 7 % fill, monospace, colored for the language; four lines or more are numbered | a diff's added and removed lines on faint green and red, its header counting them | |
 
 ## Motion

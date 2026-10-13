@@ -152,8 +152,8 @@ pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
             anchor: Anchor::Top | Anchor::Left | Anchor::Right,
             layer: Layer::Top,
             // Until the screen is found: then they follow its islands' height (D-76).
-            size: Some((0, theme::surface_height(theme::ISLAND_HEIGHT as f32))),
-            exclusive_zone: theme::bar_height(theme::ISLAND_HEIGHT as f32) as i32,
+            size: Some((0, theme::surface_height(0.0, theme::ISLAND_HEIGHT as f32))),
+            exclusive_zone: theme::bar_height(0.0, theme::ISLAND_HEIGHT as f32) as i32,
             keyboard_interactivity: KeyboardInteractivity::None,
             ..Default::default()
         },

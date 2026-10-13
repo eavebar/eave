@@ -28,7 +28,7 @@
 //!
 //! ```toml
 //! notch = { width = 370, height = 66, radius = 20, smoothing = 0.6, shoulder = 8, top = 0, grow = [4, 4] }
-//! screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
+//! screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0], grow = 4 }
 //! islands = { radius = "auto", smoothing = "auto" }
 //! ```
 //!
@@ -37,7 +37,8 @@
 //! (D-75), `grow` pixels bigger on each side and below than it is. `smoothing` 0 is a
 //! circle's corner, up to 1 a squircle's. A screen's `corners` go top left, top right, bottom
 //! right, bottom left, and its `inset` top, right, bottom, left: the rows and columns hidden under
-//! the bezel. Either takes one number for all four.
+//! the bezel. Either takes one number for all four. The bar draws the top edge black too, `grow`
+//! pixels thicker than it is (D-81), and hangs everything from there.
 //!
 //! `islands` rounds the islands' corners that face neither a screen corner nor the notch (D-73),
 //! also in physical pixels. `"auto"`, the default, takes the notch's, then the screen's.
@@ -132,6 +133,8 @@ pub struct Screen {
     pub smoothing: f32,
     /// The rows and columns hidden under the bezel: top, right, bottom, left.
     pub inset: [f32; 4],
+    /// How much thicker the bar draws the top edge than it is (D-81).
+    pub grow: f32,
 }
 
 /// How the islands' corners are rounded where nothing else says (D-73): where they don't face a
@@ -501,7 +504,7 @@ fn notch(value: toml::Value, warnings: &mut Vec<String>) -> Notch {
     Notch::Auto
 }
 
-/// `screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = 0 }`.
+/// `screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = 0, grow = 0 }`.
 fn screen(value: toml::Value, warnings: &mut Vec<String>) -> Screen {
     let mut screen = Screen::default();
     let toml::Value::Table(table) = value else {
@@ -513,9 +516,10 @@ fn screen(value: toml::Value, warnings: &mut Vec<String>) -> Screen {
             "corners" => four(value).map(|corners| screen.corners = corners),
             "inset" => four(value).map(|inset| screen.inset = inset),
             "smoothing" => smoothing(value).map(|value| screen.smoothing = value),
+            "grow" => pixels(value).map(|grow| screen.grow = grow),
             _ => {
                 warnings.push(format!(
-                    "`screen` takes corners, smoothing and inset, ignoring `{key}`"
+                    "`screen` takes corners, smoothing, inset and grow, ignoring `{key}`"
                 ));
                 continue;
             }
@@ -525,6 +529,8 @@ fn screen(value: toml::Value, warnings: &mut Vec<String>) -> Screen {
                 "`screen.{key}` must be {}, ignoring it",
                 if key == "smoothing" {
                     "a number from 0 to 1"
+                } else if key == "grow" {
+                    "a size in pixels"
                 } else {
                     "a size in pixels, or four of them"
                 }
@@ -637,19 +643,22 @@ mod tests {
     fn the_screen_is_a_plain_rectangle_unless_it_says_otherwise() {
         assert_eq!(parse("").unwrap().screen, Screen::default());
         let config =
-            parse("screen = { corners = [20, 20.5, 0, 0], smoothing = 0.6, inset = 2 }").unwrap();
+            parse("screen = { corners = [20, 20.5, 0, 0], smoothing = 0.6, inset = 2, grow = 4 }")
+                .unwrap();
         assert_eq!(
             config.screen,
             Screen {
                 corners: [20.0, 20.5, 0.0, 0.0],
                 smoothing: 0.6,
                 inset: [2.0; 4],
+                grow: 4.0,
             }
         );
         assert!(config.warnings.is_empty());
-        let odd = parse("screen = { corners = [1, 2], smoothing = 3, edge = 1 }").unwrap();
+        let odd =
+            parse("screen = { corners = [1, 2], smoothing = 3, edge = 1, grow = [1, 2] }").unwrap();
         assert_eq!(odd.screen, Screen::default());
-        assert_eq!(odd.warnings.len(), 3, "{:?}", odd.warnings);
+        assert_eq!(odd.warnings.len(), 4, "{:?}", odd.warnings);
     }
 
     #[test]
