@@ -10,6 +10,7 @@ mod config;
 mod countdown;
 mod counter;
 mod cover;
+mod dormer;
 mod ease;
 mod field;
 mod glide;
