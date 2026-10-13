@@ -54,23 +54,41 @@ const MODELS: &[(&str, u32, u32)] = &[
 /// pixels. `notch = { width = … }` in config.toml says better.
 pub const UNKNOWN_WIDTH: f32 = 260.0;
 
-/// The notch the bar goes around, as config.toml asks: found, given, or none.
-pub async fn resolve(setting: config::Notch) -> Option<Notch> {
+/// What the bar goes around on its output, in logical pixels: the notch, and the rows and columns
+/// hidden under the bezel (D-71).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Screen {
+    pub notch: Option<Notch>,
+    /// Top, right, bottom, left.
+    pub inset: [f32; 4],
+}
+
+/// The screen as config.toml has it, in the output's logical pixels; and its notch found, given,
+/// or none.
+pub async fn resolve(notch: config::Notch, screen: config::Screen) -> Screen {
     let bar_height = f32::from(crate::theme::EDGE_GAP) + crate::theme::ISLAND_HEIGHT as f32;
-    match setting {
+    // Only what's measured needs the scale: physical pixels to logical.
+    let measured = matches!(notch, config::Notch::Fixed(_)) || screen != config::Screen::default();
+    let scale = if measured {
+        focused().await.map_or(1.0, |monitor| monitor.scale)
+    } else {
+        1.0
+    };
+    let notch = match notch {
         config::Notch::Off => None,
-        config::Notch::Fixed(shape) => {
-            let scale = focused().await.map_or(1.0, |monitor| monitor.scale);
-            Some(Notch {
-                width: shape.width / scale,
-                height: shape.height.map_or(bar_height, |height| height / scale),
-                radius: shape.radius / scale,
-                smoothing: shape.smoothing,
-                shoulder: shape.shoulder / scale,
-                top: shape.top / scale,
-            })
-        }
+        config::Notch::Fixed(shape) => Some(Notch {
+            width: shape.width / scale,
+            height: shape.height.map_or(bar_height, |height| height / scale),
+            radius: shape.radius / scale,
+            smoothing: shape.smoothing,
+            shoulder: shape.shoulder / scale,
+            top: shape.top / scale,
+        }),
         config::Notch::Auto => detect().await,
+    };
+    Screen {
+        notch,
+        inset: screen.inset.map(|inset| inset / scale),
     }
 }
 

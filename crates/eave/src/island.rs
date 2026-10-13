@@ -35,7 +35,7 @@ use iced::{
 use crate::field::AnyFocused;
 use crate::jelly::{Jelly, Side};
 use crate::spring::{DRAG, FADE, MAX_FRAME, MORPH, NUDGE, PLAYFUL, REST_DISTANCE, SQUISH, Spring};
-use crate::squircle::{squircle, warp};
+use crate::squircle::{self, CornerShape, squircle, warp};
 use crate::squish::{self, Squish};
 use crate::theme;
 
@@ -62,6 +62,8 @@ pub struct Island<'a, M> {
     bleed: Padding,
     /// The width of a notch centered at the top of the surface, which its popover stays clear of.
     notch: Option<f32>,
+    /// How it's rounded outwards where it meets the top edge, if it's attached there (D-72).
+    shoulders: Option<CornerShape>,
 }
 
 /// The control at one end of an island that shows and hides its collapsible items: there while
@@ -113,6 +115,7 @@ impl<'a, M> Island<'a, M> {
             live: false,
             bleed: Padding::ZERO,
             notch: None,
+            shoulders: None,
         }
     }
 
@@ -126,6 +129,13 @@ impl<'a, M> Island<'a, M> {
     /// A notch this wide, centered at the top of the surface: its popover stays on its side.
     pub fn notch(mut self, notch: Option<f32>) -> Self {
         self.notch = notch;
+        self
+    }
+
+    /// Rounded outwards like this where it meets the top of the surface, on each side that doesn't
+    /// reach on past it, if it's attached to the top: it hangs from the edge as the notch does.
+    pub fn shoulders(mut self, shoulders: Option<CornerShape>) -> Self {
+        self.shoulders = shoulders;
         self
     }
 
@@ -212,6 +222,8 @@ struct State {
     toggle_shown: bool,
     /// Whether it's a live island, so `shape` is rebuilt when that changes.
     live: bool,
+    /// Its shoulders, so `shape` is rebuilt when they change.
+    shoulders: Option<CornerShape>,
 }
 
 /// Where everything is going and how it's moving there. Positions are in logical pixels, in
@@ -1085,6 +1097,7 @@ fn draw_island<M>(
     layout: Layout<'_>,
     panel: Option<(&Element<'_, M>, &Tree, Layout<'_>)>,
     bleed: Padding,
+    shoulders: Option<CornerShape>,
     renderer: &mut iced::Renderer,
     theme: &iced::Theme,
     style: &renderer::Style,
@@ -1159,17 +1172,31 @@ fn draw_island<M>(
                         path
                     }
                 };
-                frame.fill(
-                    &bend(squircle(outline, radius, smoothing)),
-                    theme::ISLAND_BG,
-                );
-                // Half a pixel in, so the whole hairline lands inside the fill.
+                // Hanging from the top edge, where the surface starts, if it's attached there and
+                // has shoulders: on the sides that don't reach on, and no further than the frame.
+                let hanging = shoulders.filter(|_| bleed.top > 0.0).map(|shoulder| {
+                    let most = room.x / (1.0 + shoulder.smoothing);
+                    let shoulder = CornerShape::new(shoulder.radius.min(most), shoulder.smoothing);
+                    let sides = [bleed.left <= 0.0, bleed.right <= 0.0];
+                    (room.y - body.y, shoulder, sides)
+                });
+                let outline_of = |bounds: Rectangle, radius: f32, out: f32| match hanging {
+                    Some((edge, shoulder, sides)) => Path::new(|builder| {
+                        let corners = CornerShape::new(radius, smoothing);
+                        let shoulder = CornerShape::new(shoulder.radius + out, shoulder.smoothing);
+                        squircle::hanging(builder, bounds, corners, edge, shoulder, sides);
+                    }),
+                    None => squircle(bounds, radius, smoothing),
+                };
+                frame.fill(&bend(outline_of(outline, radius, 0.0)), theme::ISLAND_BG);
+                // Half a pixel in, so the whole hairline lands inside the fill; and half a pixel
+                // rounder round the shoulders, which curve the other way.
                 let inset = Rectangle::new(
                     Point::new(room.x + 0.5, room.y + 0.5),
                     Size::new(size.width - 1.0, size.height - 1.0),
                 );
                 frame.stroke(
-                    &bend(squircle(inset, radius - 0.5, smoothing)),
+                    &bend(outline_of(inset, radius - 0.5, 0.5)),
                     Stroke::default()
                         .with_color(theme::ISLAND_BORDER)
                         .with_width(1.0),
@@ -1292,6 +1319,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             expanded: None,
             own: (0.0, 0.0),
             live: false,
+            shoulders: None,
         })
     }
 
@@ -1316,8 +1344,9 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         let spacing = theme::ITEM_SPACING as f32;
         let limits = layout::Limits::new(Size::new(0.0, height), Size::new(f32::INFINITY, height));
         let state = tree.state.downcast_mut::<State>();
-        if state.live != self.live {
+        if state.live != self.live || state.shoulders != self.shoulders {
             state.live = self.live;
+            state.shoulders = self.shoulders;
             state.shape.clear();
         }
         state.toggle_shown = (state.hovered || self.expanded) && self.popover.is_none();
@@ -1404,6 +1433,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             layout,
             None,
             self.bleed,
+            self.shoulders,
             renderer,
             theme,
             style,
@@ -1704,6 +1734,7 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             self.layout,
             Some((&popover.content, panel, content)),
             island.bleed,
+            island.shoulders,
             renderer,
             theme,
             style,

@@ -82,6 +82,46 @@ pub fn rectangle(sink: &mut impl Sink, bounds: Rectangle, corners: [CornerShape;
     sink.close();
 }
 
+/// A rounded rectangle hanging from an edge at `edge`, a y between its top and bottom, the way the
+/// notch hangs from the top of the screen: where its sides meet the edge it's rounded outwards by
+/// `shoulder`, on the left if `sides[0]` and on the right if `sides[1]`. Above the edge, which is
+/// out of sight, it's square and as wide as its shoulders reach. Clockwise, closed.
+pub fn hanging(
+    sink: &mut impl Sink,
+    bounds: Rectangle,
+    corners: CornerShape,
+    edge: f32,
+    shoulder: CornerShape,
+    sides: [bool; 2],
+) {
+    let (left, top) = (bounds.x, bounds.y);
+    let (right, bottom) = (left + bounds.width, top + bounds.height);
+    let budget = bounds.width.min(bounds.height) / 2.0;
+    let corner = Corner::new(corners.radius, corners.smoothing, budget);
+    // The shoulders share the sides below the edge with the lower corners.
+    let room = (bottom - edge - corner.extent).min(bounds.width / 2.0);
+    let flare = Corner::new(shoulder.radius, shoulder.smoothing, room);
+    let reach = flare.extent;
+    let [on_left, on_right] = sides.map(|side| side && reach > 0.0 && edge > top);
+
+    corner_into(sink, &corner, Point::new(right, bottom), DOWN, LEFT, true);
+    corner_into(sink, &corner, Point::new(left, bottom), LEFT, UP, false);
+    if on_left {
+        corner_into(sink, &flare, Point::new(left, edge), UP, LEFT, false);
+        sink.line_to(Point::new(left - reach, top));
+    } else {
+        corner_into(sink, &corner, Point::new(left, top), UP, RIGHT, false);
+    }
+    if on_right {
+        sink.line_to(Point::new(right + reach, top));
+        sink.line_to(Point::new(right + reach, edge));
+        corner_into(sink, &flare, Point::new(right, edge), LEFT, DOWN, false);
+    } else {
+        corner_into(sink, &corner, Point::new(right, top), RIGHT, DOWN, false);
+    }
+    sink.close();
+}
+
 pub const RIGHT: Vector = Vector::new(1.0, 0.0);
 pub const DOWN: Vector = Vector::new(0.0, 1.0);
 pub const LEFT: Vector = Vector::new(-1.0, 0.0);
@@ -375,6 +415,46 @@ mod tests {
         assert!(points.0.contains(&Point::new(100.0, 35.0)));
         assert!(points.0.contains(&Point::new(0.0, 20.0)));
         assert!(!points.0.iter().any(|p| p.y > 40.0 + 1e-4 || p.x < -1e-4));
+    }
+
+    #[test]
+    fn a_hanging_shape_flares_out_where_it_meets_the_edge() {
+        let bounds = Rectangle::new(Point::new(10.0, -40.0), Size::new(100.0, 76.0));
+        let mut points = Points::default();
+        let corners = CornerShape::new(14.0, 0.6);
+        hanging(
+            &mut points,
+            bounds,
+            corners,
+            0.0,
+            CornerShape::new(6.0, 0.0),
+            [true, false],
+        );
+        // The left shoulder reaches 6 out along the edge, and down the side as far.
+        assert!(points.0.contains(&Point::new(4.0, 0.0)));
+        assert!(points.0.contains(&Point::new(10.0, 6.0)));
+        assert!(points.0.contains(&Point::new(4.0, -40.0)));
+        // The right side has none: nothing goes past it.
+        assert!(points.0.iter().all(|p| p.x <= 110.0 + 1e-4));
+        // A plain one is the rectangle with the same corners.
+        let (mut plain, mut rounded) = (Points::default(), Points::default());
+        hanging(
+            &mut plain,
+            bounds,
+            corners,
+            0.0,
+            CornerShape::SQUARE,
+            [true, true],
+        );
+        rectangle(&mut rounded, bounds, [corners; 4]);
+        let mut plain = plain.0;
+        let mut rounded = rounded.0;
+        let key = |p: &Point| ((p.x * 1000.0).round() as i64, (p.y * 1000.0).round() as i64);
+        plain.sort_by_key(key);
+        rounded.sort_by_key(key);
+        plain.dedup_by_key(|p| key(p));
+        rounded.dedup_by_key(|p| key(p));
+        assert_eq!(plain, rounded);
     }
 
     /// Where each segment of the path ends.
