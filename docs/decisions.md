@@ -1339,6 +1339,7 @@ The icons are theme names (`battery-caution`, `battery-full-charged`). `notify =
 - **`ui::timeline(steps)` and `ui::step(mark, content)`**: steps strung on a thin line (`TRACK`), each marked with where it stands, `Mark::{You, Note, Running, Done, Failed, Waiting}`. Brightness first: you are a white dot, a note a small grey one, done grey, under way a white ring. Only news is colored: failed is critical, waiting for you is a warning ring. `.leading(node)` puts a small picture on the line instead of the mark (the mascot). Nothing pulses: a running mark is a still ring with a faint halo (D-64).
 - **`ui::literal(text)`**: text as typed (a path, a command), monospace, one line, its end fading out when it doesn't fit.
 - **`ui::divider(text)`**: a separator with a caption in its middle, like the time a turn started.
+- **`header(..).leading(node).subtitle(text)`**: a popover page's title can have a small picture before it and a dim line under it, like a chat's mascot and the folder it works in. Both are new fields; `Kind::Header` is matched with `..` everywhere, so nothing breaks.
 
 **Alternatives:**
 - **Brightness only** for code: keywords white and bold, strings mid-grey, comments dim. It follows D-61 to the letter, and it was a prototype. But code has more than three kinds of things in it, and brightness ran out: strings, calls and types blurred together. Code isn't a state, but like a cover it's content with structure of its own, and the hues come from it, not from the bar.
