@@ -1149,7 +1149,7 @@ Binary: 9,530,720 bytes on `main`. The plugin and `eave-mpris` add 459 KB, makin
   - Files and downloads are capped at 8 MB, and pictures at 4096 px a side.
 - **Decoding:** PNG through tiny-skia, which was already in the build for icons. JPEG through `zune-jpeg` (pure Rust, no default features), the format most covers come in.
 - **Drawing:** the middle square is cropped (a video's 16:9 thumbnail shows its middle), shrunk by averaging, and given rounded corners. This is done twice, at 32 px for the icon and 256 px for the popover, and only those bitmaps are kept (~4 KB and ~256 KB). Smaller pictures aren't enlarged when drawn; the renderer scales them.
-- **Fallback:** it shows until the cover is there, and in its place if the cover can't be had. Media uses the player's app icon (Spotify, Firefox, mpv), so a missing or slow cover never leaves a hole. In the popover the fallback is `empty()`: the popover springs to the cover's size when it arrives.
+- **Fallback:** it shows until the cover is there, and in its place if the cover can't be had. Media uses the player's app icon (Spotify, Firefox, mpv), so a missing or slow cover never leaves a hole. In the popover the fallback is `empty()`: the popover springs to the cover's size when it arrives. *Later:* between tracks, media keeps the last cover instead of its app icon (`Art`). Chrome sends a new track before its cover, and the icon flashed in between. The fallback of a new cover is now the cover before it, nested (`cover(new, cover(old, icon))`), which the host still has, since a fallback's cover is wanted too. A track sent with no cover keeps the last one for `GAP` (1 s), then shows the icon.
 - **Cache:** past 4 covers, the ones not on screen are dropped.
 
 **Alternatives:**

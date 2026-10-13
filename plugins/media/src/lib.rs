@@ -72,6 +72,9 @@ pub struct Media {
     skipping: Option<(String, Nudge, Instant)>,
     /// The tracks the followed player went through, to tell going back from going on.
     tracks: Tracks,
+    /// The covers the followed player showed last, so a new track doesn't flash its icon while
+    /// its cover comes.
+    art: Art,
     /// The player as it last showed, kept on screen for a `GAP` after it stopped showing.
     held: Option<Player>,
     /// Counts the holds, so only the last one's timer lets go.
@@ -95,6 +98,8 @@ pub enum Message {
     Closed,
     /// The hold with this number is up.
     Release(u64),
+    /// The cover that went missing at this time is let go, if it's still missing.
+    ArtGone(Instant),
 }
 
 impl Widget for Media {
@@ -115,6 +120,7 @@ impl Widget for Media {
             dragging: None,
             skipping: None,
             tracks: Tracks::default(),
+            art: Art::default(),
             held: None,
             holds: 0,
         };
@@ -179,6 +185,12 @@ impl Widget for Media {
                 }
                 Effect::none()
             }
+            Message::ArtGone(lost) => {
+                if self.art.lost == Some(lost) {
+                    self.art = Art::default();
+                }
+                Effect::none()
+            }
             Message::Opened => {
                 self.open = true;
                 self.now = Instant::now();
@@ -206,7 +218,7 @@ impl Widget for Media {
         let Some(player) = self.showing() else {
             return Item::hidden();
         };
-        let icon = || picture(player);
+        let icon = || self.picture(player, false);
         let text = || ui::label(shorten(&track(player), self.config.max_chars));
         let content = match self.config.show {
             Show::Title => ui::row([icon(), text()]),
@@ -228,10 +240,8 @@ impl Widget for Media {
         let mut lines = vec![ui::header(player.identity.clone())];
         // The track, centered under its cover. The header already names the player, so a track
         // with no title has no heading.
-        if !player.art_url.is_empty() {
-            lines.push(ui::center(
-                ui::cover(player.art_url.clone(), ui::empty()).large(),
-            ));
+        if !self.art.url(player).is_empty() {
+            lines.push(ui::center(self.picture(player, true)));
         }
         if !player.title.is_empty() {
             lines.push(ui::center(ui::heading(player.title.clone())));
@@ -324,15 +334,20 @@ impl Media {
 
         // Gone with nothing to show: keep the last of it on screen for a moment, in case it's
         // only between tracks.
-        let mut effect = Effect::none();
+        let mut tasks = Vec::new();
+        let current = self.current().cloned();
+        if let Some(lost) = self.art.read(current.as_ref()) {
+            tasks.push(Task::future(sleep(GAP)).map(move |()| Message::ArtGone(lost)));
+        }
         if self.current().is_some_and(shown) {
             self.held = None;
         } else if let Some(was) = was {
             self.held = Some(was);
             self.holds += 1;
             let hold = self.holds;
-            effect = Effect::task(Task::future(sleep(GAP)).map(move |()| Message::Release(hold)));
+            tasks.push(Task::future(sleep(GAP)).map(move |()| Message::Release(hold)));
         }
+        let effect = Effect::task(Task::batch(tasks));
 
         // Another track on the same player nudges the way it went: back to the one before, or
         // on. MPRIS doesn't say which, so the tracks it played do, or failing that the skip we
@@ -420,20 +435,88 @@ fn pick(players: &[Player], chosen: Option<&str>, current: Option<&str>) -> Opti
         .map(|p| p.bus_name.clone())
 }
 
-/// The track's cover, or until it's there and when there's none, the player's icon; the media
-/// bars for a player that doesn't say which app it is.
-fn picture(player: &Player) -> ui::Node<Message> {
-    let placeholder = if player.desktop_entry.is_empty() {
-        ui::icon(Icon::Media {
-            playing: player.playing(),
-        })
-    } else {
-        ui::app_icon(player.desktop_entry.clone())
-    };
-    if player.art_url.is_empty() {
-        placeholder
-    } else {
-        ui::cover(player.art_url.clone(), placeholder)
+/// The covers the followed player showed last. A new track's cover takes a moment to come, and
+/// some players (Chrome) send the track first, with no cover or one still to fetch: meanwhile the
+/// last cover stays instead of the player's icon.
+#[derive(Default)]
+struct Art {
+    bus_name: String,
+    /// The last cover it had.
+    url: String,
+    /// The one before that, shown while `url` is fetched.
+    before: String,
+    /// When it went without a cover, if it has none now. `url` is kept for a `GAP` after.
+    lost: Option<Instant>,
+}
+
+impl Art {
+    /// Takes in the followed player's reading. Returns when its cover went missing, if it just
+    /// did, to let it go a `GAP` later.
+    fn read(&mut self, player: Option<&Player>) -> Option<Instant> {
+        let player = player?;
+        if self.bus_name != player.bus_name {
+            *self = Self {
+                bus_name: player.bus_name.clone(),
+                ..Self::default()
+            };
+        }
+        if !player.art_url.is_empty() {
+            if self.url != player.art_url {
+                self.before = std::mem::replace(&mut self.url, player.art_url.clone());
+            }
+            self.lost = None;
+            return None;
+        }
+        if self.url.is_empty() || self.lost.is_some() {
+            return None;
+        }
+        let now = Instant::now();
+        self.lost = Some(now);
+        Some(now)
+    }
+
+    /// The cover to show for `player`: its own, or the last one while it's between covers.
+    fn url<'a>(&'a self, player: &'a Player) -> &'a str {
+        if !player.art_url.is_empty() || self.bus_name != player.bus_name {
+            &player.art_url
+        } else {
+            &self.url
+        }
+    }
+
+    /// What shows until the cover at `url` is there: the one before it, if that's another.
+    fn before(&self, url: &str) -> Option<&str> {
+        (url == self.url && !self.before.is_empty()).then_some(self.before.as_str())
+    }
+}
+
+impl Media {
+    /// The track's cover, or until it's there and when there's none, the player's icon; the media
+    /// bars for a player that doesn't say which app it is. Between tracks, the last cover stays
+    /// until the next one is there. `large` for the popover, where nothing shows without one.
+    fn picture(&self, player: &Player, large: bool) -> ui::Node<Message> {
+        let placeholder = if large {
+            ui::empty()
+        } else if player.desktop_entry.is_empty() {
+            ui::icon(Icon::Media {
+                playing: player.playing(),
+            })
+        } else {
+            ui::app_icon(player.desktop_entry.clone())
+        };
+        let cover = |url: &str, fallback| {
+            let cover = ui::cover(url.to_owned(), fallback);
+            if large { cover.large() } else { cover }
+        };
+        let url = self.art.url(player);
+        if url.is_empty() {
+            return placeholder;
+        }
+        let fallback = match self.art.before(url) {
+            Some(before) => cover(before, placeholder),
+            None => placeholder,
+        };
+        cover(url, fallback)
     }
 }
 
@@ -691,6 +774,43 @@ mod tests {
             children.next(),
             Some(ui::Kind::Label { text, .. }) if text == "Song · Artist"
         ));
+    }
+
+    #[test]
+    fn the_last_cover_stays_until_the_next_one_is_there() {
+        let mut media = media(Config {
+            show: Show::Icon,
+            ..Config::default()
+        });
+        let with = |title: &str, art: &str| {
+            let mut playing = player("a", Status::Playing, title);
+            playing.art_url = art.into();
+            Message::Players(vec![playing])
+        };
+        let cover = |media: &Media| match content(media) {
+            ui::Kind::Cover { url, fallback, .. } => (url, Some(fallback.into_kind())),
+            other => (
+                format!("{:?}", matches!(other, ui::Kind::AppIcon { .. })),
+                None,
+            ),
+        };
+        media.update(with("One", "file:///one.jpg"));
+        // The next track, its cover not sent yet: the last one stays.
+        media.update(with("Two", ""));
+        assert_eq!(cover(&media).0, "file:///one.jpg");
+        // Its cover is sent: shown once fetched, the last one until then.
+        media.update(with("Two", "file:///two.jpg"));
+        let (url, fallback) = cover(&media);
+        assert_eq!(url, "file:///two.jpg");
+        assert!(matches!(fallback, Some(ui::Kind::Cover { url, .. }) if url == "file:///one.jpg"));
+        // A track that really has none shows the player's icon, a moment later.
+        media.update(with("Three", ""));
+        let lost = media.art.lost.unwrap();
+        assert_eq!(cover(&media).0, "file:///two.jpg");
+        media.update(Message::ArtGone(lost));
+        let (icon, fallback) = cover(&media);
+        assert_eq!(icon, "true", "the player's icon");
+        assert!(fallback.is_none());
     }
 
     #[test]
