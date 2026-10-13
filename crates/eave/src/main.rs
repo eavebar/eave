@@ -4,6 +4,7 @@
 fn main() -> Result<(), eave::Error> {
     eave::run(&[
         eave_battery::register,
+        eave_brightness::register,
         eave_clock::register,
         eave_keyboard::register,
         eave_media::register,

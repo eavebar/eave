@@ -761,6 +761,7 @@ version = "0.1.0"
 dependencies = [
  "eave-api",
  "eave-battery",
+ "eave-brightness",
  "eave-clock",
  "eave-hyprland",
  "eave-keyboard",
@@ -797,6 +798,19 @@ dependencies = [
 
 [[package]]
 name = "eave-battery"
+version = "0.1.0"
+dependencies = [
+ "eave-api",
+ "eave-dbus",
+ "futures-util",
+ "rustix 1.1.5",
+ "serde",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "eave-brightness"
 version = "0.1.0"
 dependencies = [
  "eave-api",

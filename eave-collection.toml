@@ -5,6 +5,7 @@
 description = "eave's built-in widgets"
 plugins = [
     "plugins/battery",
+    "plugins/brightness",
     "plugins/clock",
     "plugins/keyboard",
     "plugins/media",
