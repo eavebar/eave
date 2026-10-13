@@ -21,6 +21,8 @@ pub struct Sprite {
     pub order: &'static [u8],
     pub looping: bool,
     pub opacity: f32,
+    /// On screen: the frames' shape, at the height the host picked.
+    pub size: Size,
 }
 
 #[derive(Debug, Default)]
@@ -86,8 +88,8 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Sprite {
 
     fn size(&self) -> Size<Length> {
         Size::new(
-            Length::Fixed(theme::ICON_SIZE),
-            Length::Fixed(theme::ICON_SIZE),
+            Length::Fixed(self.size.width),
+            Length::Fixed(self.size.height),
         )
     }
 
@@ -97,7 +99,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Sprite {
         _renderer: &iced::Renderer,
         _limits: &layout::Limits,
     ) -> layout::Node {
-        layout::Node::new(Size::new(theme::ICON_SIZE, theme::ICON_SIZE))
+        layout::Node::new(self.size)
     }
 
     fn draw(
@@ -122,6 +124,8 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Sprite {
         renderer.draw_image(
             iced::advanced::image::Image {
                 opacity: self.opacity,
+                // Pixel art: each pixel scaled up whole, never blurred.
+                filter_method: image::FilterMethod::Nearest,
                 snap: squish.is_none(),
                 ..iced::advanced::image::Image::new(handle.clone())
             },

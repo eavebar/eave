@@ -18,7 +18,7 @@ use iced_layershell::actions::ActionCallback;
 use iced_layershell::reexport::KeyboardInteractivity;
 use iced_layershell::to_layer_message;
 
-use crate::apps::{self, AppIcon, FileIcon, FileKey, Icons, Wanted};
+use crate::apps::{self, AppIcon, FileIcon, FileKey, Frame, Icons, Wanted};
 use crate::config::{self, Config, Entry, Zone};
 use crate::countdown::Countdown;
 use crate::cover::{self, Cover};
@@ -215,6 +215,7 @@ pub enum Message {
     AppIcon(String, Option<AppIcon>),
     /// A plugin's icon file has been drawn, or turned out not to be one.
     FileIcon(FileKey, Option<FileIcon>),
+    Frame(FileKey, Option<Frame>),
     /// A cover has been fetched and drawn, or couldn't be.
     Cover(String, Option<Cover>),
 }
@@ -356,6 +357,16 @@ impl Bar {
             self.drawing.push(key);
             tasks.push(Task::perform(apps::load_file(file), move |icon| {
                 Message::FileIcon(key, icon)
+            }));
+        }
+        for file in wanted.frames {
+            let key = FileKey::of(file);
+            if self.icons.frames.contains_key(&key) || self.drawing.contains(&key) {
+                continue;
+            }
+            self.drawing.push(key);
+            tasks.push(Task::perform(apps::load_frame(file), move |frame| {
+                Message::Frame(key, frame)
             }));
         }
         // Covers come and go with tracks: past a few, keep only the ones on screen.
@@ -862,6 +873,11 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         Message::FileIcon(key, icon) => {
             bar.drawing.retain(|drawing| *drawing != key);
             bar.icons.files.insert(key, icon);
+            Task::none()
+        }
+        Message::Frame(key, frame) => {
+            bar.drawing.retain(|drawing| *drawing != key);
+            bar.icons.frames.insert(key, frame);
             Task::none()
         }
         Message::Cover(url, cover) => {

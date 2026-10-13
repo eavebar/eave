@@ -286,6 +286,10 @@ pub const BATTERY_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
 /// changes before it rests ([D-64](../../../docs/decisions.md)).
 pub const SPRITE_FRAME: Duration = Duration::from_millis(250);
 pub const SPRITE_PLAYS: usize = 2;
+/// A sprite's height in the bar and in a popover's rows; its width follows its frames. Pixel art
+/// scales by whole screen pixels at scale 2: 10 rows of art are 3 and 4 pixels a row.
+pub const SPRITE_HEIGHT: f32 = 15.0;
+pub const SPRITE_HEIGHT_PANEL: f32 = 20.0;
 /// A primary press held at least this long is a long press: it plays with the island, but the
 /// item's action and popover don't fire on release.
 pub const LONG_PRESS: Duration = Duration::from_millis(400);

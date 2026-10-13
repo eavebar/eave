@@ -98,6 +98,8 @@ pub struct Icons {
     pub apps: HashMap<String, Option<AppIcon>>,
     /// The files plugins ship: `None` for one that isn't an SVG or PNG it can draw.
     pub files: HashMap<FileKey, Option<FileIcon>>,
+    /// Sprites' frames, at their own size: `None` for one that can't be drawn.
+    pub frames: HashMap<FileKey, Option<Frame>>,
     /// Covers by URL: `None` for one that couldn't be had.
     pub covers: HashMap<String, Option<Cover>>,
 }
@@ -107,6 +109,7 @@ pub struct Icons {
 pub struct Wanted {
     pub apps: Vec<String>,
     pub files: Vec<&'static [u8]>,
+    pub frames: Vec<&'static [u8]>,
     pub covers: Vec<String>,
 }
 
@@ -141,11 +144,6 @@ impl FileIcon {
         AppIcon(self.image.clone()).view(opacity)
     }
 
-    /// The file in its own colors, to draw yourself.
-    pub fn handle(&self) -> image::Handle {
-        self.image.clone()
-    }
-
     /// The file's shape, filled with `color`.
     pub fn symbol<'a, M: 'a>(&self, color: Color) -> Element<'a, M> {
         let mut tinted = self.tinted.borrow_mut();
@@ -171,6 +169,44 @@ impl FileIcon {
         };
         AppIcon(handle).view(1.0)
     }
+}
+
+/// A sprite's frame: the file at its own size, to be scaled up pixel by pixel.
+#[derive(Debug, Clone)]
+pub struct Frame {
+    pub handle: image::Handle,
+    pub size: Size,
+}
+
+/// The largest frame side taken, so a mistaken file can't take all the memory.
+const MAX_FRAME: u32 = 1024;
+
+/// Decodes a sprite's frame, off the UI thread.
+pub async fn load_frame(file: &'static [u8]) -> Option<Frame> {
+    tokio::task::spawn_blocking(move || draw_frame(file))
+        .await
+        .ok()
+        .flatten()
+}
+
+/// A PNG as it is, an SVG at its own size.
+fn draw_frame(file: &[u8]) -> Option<Frame> {
+    let pixmap = if file.starts_with(b"\x89PNG") {
+        Pixmap::decode_png(file).ok()?
+    } else {
+        let tree = usvg::Tree::from_data(file, &usvg::Options::default()).ok()?;
+        let size = tree.size().to_int_size();
+        let mut pixmap = Pixmap::new(size.width(), size.height())?;
+        resvg::render(&tree, Transform::identity(), &mut pixmap.as_mut());
+        pixmap
+    };
+    if pixmap.width().max(pixmap.height()) > MAX_FRAME {
+        return None;
+    }
+    Some(Frame {
+        handle: handle(&pixmap),
+        size: Size::new(pixmap.width() as f32, pixmap.height() as f32),
+    })
 }
 
 /// Draws a shipped icon file, off the UI thread.

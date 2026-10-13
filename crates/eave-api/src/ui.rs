@@ -282,9 +282,11 @@ pub fn symbol<M>(file: &'static [u8]) -> Node<M> {
     })
 }
 
-/// A little animation the plugin ships, like a mascot: `frames` are PNG or SVG files compiled in
-/// with `include_bytes!`, each drawn like an [`image`], and `order` lists which frame shows when,
-/// by index into `frames`. The host shows a frame for a quarter of a second. It plays the loop a
+/// A little animation the plugin ships, like a pixel-art mascot: `frames` are PNG or SVG files
+/// compiled in with `include_bytes!`, all the same size, and `order` lists which frame shows when,
+/// by index into `frames`. The host keeps the frames' shape and picks the height (a little under
+/// a label's in the bar, taller in a popover), scaling pixels up whole, never blurred: ship pixel
+/// art at its own size. The host shows a frame for a quarter of a second. It plays the loop a
 /// couple of times when it shows up or changes, then rests on the first frame of `order`;
 /// [`Node::looping`] keeps it going. A tone only dims it.
 pub fn sprite<M>(frames: &'static [&'static [u8]], order: &'static [u8]) -> Node<M> {

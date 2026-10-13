@@ -9,7 +9,7 @@ use eave_api::erased::AnyMessage;
 use eave_api::ui::{Kind, Node, NoticeParts, Tone, Urgency};
 use iced::widget::scrollable::{self, Scrollbar};
 use iced::widget::{Space, button, column, container, mouse_area, row, rule, text, text_input};
-use iced::{Background, Border, Color, Element, Font, Length, Padding, Theme, alignment};
+use iced::{Background, Border, Color, Element, Font, Length, Padding, Size, Theme, alignment};
 
 use crate::alternate::Alternate;
 use crate::apps::{FileKey, Icons, Wanted};
@@ -267,7 +267,7 @@ pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
     match node.into_kind() {
         Kind::AppIcon { app_id, .. } => out.apps.push(app_id),
         Kind::Image { file, .. } => out.files.push(file),
-        Kind::Sprite { frames, .. } => out.files.extend(frames),
+        Kind::Sprite { frames, .. } => out.frames.extend(frames),
         Kind::Cover { url, fallback, .. } => {
             out.covers.push(url);
             wanted(*fallback, out);
@@ -443,27 +443,30 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             looping,
             tone,
         } => {
+            let height = if ctx.panel() {
+                theme::SPRITE_HEIGHT_PANEL
+            } else {
+                theme::SPRITE_HEIGHT
+            };
             let drawn: Option<Vec<_>> = frames
                 .iter()
-                .map(|file| match icons.files.get(&FileKey::of(file)) {
-                    Some(Some(icon)) => Some(icon.handle()),
-                    _ => None,
-                })
+                .map(|file| icons.frames.get(&FileKey::of(file)).cloned().flatten())
                 .collect();
             match drawn {
-                Some(drawn) => Sprite {
-                    key: frames.as_ptr() as usize ^ (order.as_ptr() as usize).rotate_left(32),
-                    frames: drawn,
-                    order,
-                    looping,
-                    opacity: dim_opacity(tone.unwrap_or(ctx.tone)),
+                Some(drawn) if !drawn.is_empty() => {
+                    let size = drawn[0].size;
+                    Sprite {
+                        key: frames.as_ptr() as usize ^ (order.as_ptr() as usize).rotate_left(32),
+                        frames: drawn.into_iter().map(|frame| frame.handle).collect(),
+                        order,
+                        looping,
+                        opacity: dim_opacity(tone.unwrap_or(ctx.tone)),
+                        size: Size::new(height * size.width / size.height.max(1.0), height),
+                    }
+                    .into()
                 }
-                .into(),
-                // Its room, until every frame is drawn.
-                None => Space::new()
-                    .width(theme::ICON_SIZE)
-                    .height(theme::ICON_SIZE)
-                    .into(),
+                // Its height, until every frame is drawn.
+                _ => Space::new().width(height).height(height).into(),
             }
         }
         Kind::Cover {
@@ -913,9 +916,16 @@ fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMess
         .push(subtitle)
         .spacing(1)
         .width(Length::Fill);
-    let leading = item
-        .leading
-        .map(|node| container(render(*node, leading_ctx, icons)).center(theme::ICON_SIZE));
+    // Icons in a column of their own width; a sprite takes its own.
+    let leading = item.leading.map(|node| {
+        let sprite = matches!(node.kind(), Kind::Sprite { .. });
+        let leading = render(*node, leading_ctx, icons);
+        if sprite {
+            leading
+        } else {
+            container(leading).center(theme::ICON_SIZE).into()
+        }
+    });
     let trailing_ctx = Ctx {
         tone: if item.selected {
             Tone::Accent
@@ -1138,6 +1148,7 @@ mod tests {
         ]);
         let mut out = Wanted::default();
         wanted(node, &mut out);
-        assert_eq!(out.files, [A, B, A]);
+        assert_eq!(out.frames, [A, B]);
+        assert_eq!(out.files, [A]);
     }
 }

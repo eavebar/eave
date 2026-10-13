@@ -1308,8 +1308,8 @@ The icons are theme names (`battery-caution`, `battery-full-charged`). `notify =
 
 **Status:** accepted (2026-10-13).
 
-**What:** `ui::sprite(frames, order)` is a flipbook a plugin ships: PNG or SVG frames compiled in, each drawn like an `image`, and the order they play in, by index. The host shows a frame for `SPRITE_FRAME` (250 ms). It plays the loop `SPRITE_PLAYS` (2) times when the sprite shows up or changes to another one, then rests on the first frame of `order`. `.looping()` keeps it going for as long as it shows. The first user is eave-claude's mascot, whose mood (planning, coding, asking, done, coffee, asleep) is a sprite in the bar, in front of each chat in its popover, and as its notifications' picture.
-- Frames load through the same cache as `image` (`FileKey`, drawn once off the UI thread into a 32 px bitmap), so they cost what that many images cost.
+**What:** `ui::sprite(frames, order)` is a flipbook a plugin ships: PNG or SVG frames compiled in, and the order they play in, by index. Frames keep their shape; the host picks the height, `SPRITE_HEIGHT` (15) in the bar and `SPRITE_HEIGHT_PANEL` (20) in a popover's rows, and scales pixels up with nearest-neighbour filtering, so pixel art shipped at its own size stays sharp (10 rows of art become 30 and 40 screen pixels at scale 2). The host shows a frame for `SPRITE_FRAME` (250 ms). It plays the loop `SPRITE_PLAYS` (2) times when the sprite shows up or changes to another one, then rests on the first frame of `order`. `.looping()` keeps it going for as long as it shows. The first user is eave-claude's mascot, whose mood (planning, coding, asking, done, coffee, asleep) is a sprite in the bar, in front of each chat in its popover, and as its notifications' picture.
+- Frames are decoded once, off the UI thread, at their own size (`Icons::frames`, keyed by `FileKey`), not into the 32 px square `image` uses: forced into an icon's square, a 16×10 mascot was 10 px tall and blurred.
 - The widget asks for a redraw only when the picture changes (`request_redraw_at` the next frame that differs), never at the compositor's rate. At rest it asks for nothing.
 
 **Alternatives:**
