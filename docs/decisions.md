@@ -1592,3 +1592,25 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 
 **Cost:** windows move a few pixels up once the screen is found, and again if the notch changes.
 
+---
+
+## D-77: Scrolling glides
+
+**Status:** accepted (2026-10-13).
+
+**Problem:** iced's scrollable moves only while scroll events come in. On a touchpad, a list stopped dead the moment the fingers lifted, and a wheel jumped 60 px a step. Hyprland doesn't fling for its clients: like GTK, each client does it itself.
+
+**What:** the host wraps every scrollable it builds (`ui::scroll`, a long `ui::list`, a code block) in `glide::Glide`. Plugins don't change.
+- **Touchpad:** its scroll goes straight to the scrollable, so the content still follows the fingers exactly. Glide keeps the last 100 ms of it. When the fingers lift, the content flies on at the speed they were going, which falls to about a third every `SCROLL_GLIDE_DECAY` (0.325 s), and stops below `SCROLL_GLIDE_MIN`. Fingers that stood still for 50 ms before lifting don't fling. Scrolling again or pressing a button stops it.
+- **Wheel:** each step adds 60 px to where the content is going, and frames ease it there, two thirds of the way every `SCROLL_WHEEL_EASE` (40 ms). Steps add up without overshooting. A scrollable that can't go further that way leaves the wheel to whatever is around it.
+- **Frames:** a fling or a wheel moves the scrollable on frame callbacks, through iced's `scroll_by` operation, and stops asking for them when it settles or reaches the end. At rest, nothing changes.
+
+**Telling the lift apart:** the compositor says the fingers lifted with `axis_stop`, which iced_layershell 0.19 turns into a scroll of zero pixels. `axis_source`, sent before each touchpad scroll, becomes one too. So a zero counts as the lift only if no scroll follows within 10 ms. Where no zero ever comes, 80 ms without a scroll counts as the lift.
+
+**Alternatives:**
+- **Patch iced_layershell to pass `ScrollStop` on.** It has the event, but only sends it when both axes stop together, which never happens, and iced has no event to put it in. Another vendored crate, for what the zero already says.
+- **A fixed-length fling, eased:** simpler, but a fast flick and a slow push would travel for the same time. A decay keeps the speed the hand gave it.
+- **A spring:** nothing pulls a flung list anywhere. It runs out.
+
+**Cost:** no new dependency. Frames only while a fling or a wheel step moves.
+

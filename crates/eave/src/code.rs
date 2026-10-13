@@ -7,6 +7,7 @@ use iced::widget::text::{Rich, Span};
 use iced::widget::{column, container, row, text};
 use iced::{Background, Border, Color, Element, Font, Length, Padding, font};
 
+use crate::glide::Glide;
 use crate::highlight::{self, Token};
 use crate::theme;
 
@@ -70,7 +71,10 @@ pub fn block<'a, M: 'a>(code: &str, language: &str) -> Element<'a, M> {
             Scrollbar::new().width(3).scroller_width(3).margin(1),
         ))
         .width(Length::Fill);
-    container(scroll).width(Length::Fill).style(boxed).into()
+    container(Glide::new(scroll))
+        .width(Length::Fill)
+        .style(boxed)
+        .into()
 }
 
 /// A change to a file: its name and how many lines came and went, then the lines, the added and

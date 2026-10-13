@@ -12,6 +12,7 @@ mod counter;
 mod cover;
 mod ease;
 mod field;
+mod glide;
 mod gulp;
 mod handover;
 mod highlight;
