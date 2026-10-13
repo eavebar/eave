@@ -49,6 +49,17 @@ pub struct Island<'a, M> {
     groups: Vec<Option<&'a str>>,
     /// Where the toggle is among the items, if there is one.
     toggle: Option<usize>,
+    /// The toggle shows even without the pointer over the island.
+    pinned: bool,
+}
+
+/// A control at one end of an island: there while the pointer is over the island, or always
+/// while pinned.
+pub struct Toggle<'a, M> {
+    pub element: Element<'a, M>,
+    /// Before the first item (`Left`), or after the last.
+    pub side: Horizontal,
+    pub pinned: bool,
 }
 
 /// The toggle's key among the items' keys: no item has it.
@@ -82,6 +93,7 @@ impl<'a, M> Island<'a, M> {
             nudges: Vec::new(),
             groups: Vec::new(),
             toggle: None,
+            pinned: false,
         }
     }
 
@@ -111,12 +123,18 @@ impl<'a, M> Island<'a, M> {
         self
     }
 
-    /// A control shown at one end, before the first item (`Left`) or after the last, only while
-    /// the pointer is over the island and it isn't a popover.
-    pub fn toggle(mut self, toggle: Option<(Element<'a, M>, Horizontal)>) -> Self {
-        let Some((element, side)) = toggle else {
+    /// A control shown at one end, while the pointer is over the island or it's pinned, and the
+    /// island isn't a popover.
+    pub fn toggle(mut self, toggle: Option<Toggle<'a, M>>) -> Self {
+        let Some(Toggle {
+            element,
+            side,
+            pinned,
+        }) = toggle
+        else {
             return self;
         };
+        self.pinned = pinned;
         let index = if side == Horizontal::Left {
             if !self.groups.is_empty() {
                 self.groups.insert(0, None);
@@ -1189,7 +1207,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         let spacing = theme::ITEM_SPACING as f32;
         let limits = layout::Limits::new(Size::new(0.0, height), Size::new(f32::INFINITY, height));
         let state = tree.state.downcast_mut::<State>();
-        state.toggle_shown = state.hovered && self.popover.is_none();
+        state.toggle_shown = (state.hovered || self.pinned) && self.popover.is_none();
         // A hidden toggle takes no room.
         let hidden = (!state.toggle_shown).then_some(self.toggle).flatten();
         let nodes: Vec<_> = self

@@ -21,8 +21,9 @@ use iced_layershell::to_layer_message;
 use crate::apps::{self, AppIcon, FileIcon, FileKey, Icons, Wanted};
 use crate::config::{self, Config, Entry, Zone};
 use crate::countdown::Countdown;
-use crate::island::{self, Island};
+use crate::island::{self, Island, Toggle};
 use crate::slot::Slot;
+use crate::zones::Zones;
 use crate::{icon, kit, theme as style, watch};
 
 pub struct Bar {
@@ -970,7 +971,12 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             Zone::Right => Horizontal::Left,
             Zone::Left | Zone::Center => Horizontal::Right,
         };
-        let toggle = collapsible.then(|| (toggle_view(island, side, expanded), side));
+        // Hovering shows it; while the items are out, it stays to put them back.
+        let toggle = collapsible.then(|| Toggle {
+            element: toggle_view(island, side, expanded),
+            side,
+            pinned: expanded,
+        });
         Some(
             Island::new(items)
                 .align(align)
@@ -982,9 +988,9 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         )
     };
 
-    // A zone's islands sit side by side. A zone with nothing to show still takes its share of the
-    // width, so the center islands stay centered on screen.
-    let zone = |zone: Zone, align: Horizontal| {
+    // A zone's islands sit side by side, and the zones across the bar: the center ones stay
+    // centered on screen unless a side's islands reach them, and then they're pushed aside.
+    let zone = |zone: Zone, align: Horizontal| -> Element<'_, Message> {
         let mut indices: Vec<_> = bar
             .instances
             .iter()
@@ -1000,18 +1006,16 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         let islands = indices
             .into_iter()
             .filter_map(|index| island(IslandId { zone, index }, align));
-        container(row(islands).spacing(style::ISLAND_SPACING))
-            .width(Length::Fill)
-            .align_x(align)
+        row(islands).spacing(style::ISLAND_SPACING).into()
     };
 
     // No background of its own: the surface is transparent around and between the islands, and
     // below them, where a dragged island has room to move and popovers grow.
-    container(row![
+    container(Zones::new(
         zone(Zone::Left, Horizontal::Left),
         zone(Zone::Center, Horizontal::Center),
         zone(Zone::Right, Horizontal::Right),
-    ])
+    ))
     .padding(Padding {
         top: style::EDGE_GAP.into(),
         right: style::EDGE_GAP.into(),
