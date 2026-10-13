@@ -1048,3 +1048,28 @@ The popover talks to iwd only while it's open (D-40's `on_open`/`on_close`). Wit
 **Why:** `paru -S eave` is how Arch users expect to install a bar, and pacman should own what it installed. Pinning eave to the package's release makes the version you see in pacman the version you run.
 
 **Cost:** someone has to cut releases: tag, `updpkgsums`, `.SRCINFO`, push to the AUR. A user who installs `rust` only for eave gets a toolchain of roughly a gigabyte. Plugins are still not updated by pacman; `eave-build update` does that. eave-build's binary is unchanged in size, since the packaged default is one more string.
+
+---
+
+## D-55: Several islands per zone, collapsible items and dividers, set in config.toml
+
+**Status:** accepted (2026-10-13). Extends [D-24](#d-24-floating-islands-on-one-transparent-surface) and [D-34](#d-34-width-groups-set-in-configtoml).
+
+**What:** three layout options. Like `width_group`, the host reads them and never passes them to a widget.
+- **`island = true`**, an entry with no widget, starts another island in the same zone, beside the one before. A zone's islands sit in a row, `ISLAND_SPACING` apart. A marker before any item, or right after another one, changes nothing, so it never makes an empty island.
+- **`divider = true`**, an entry with no widget, puts a thin line before the next item (`kit::divider`). It shows only between two items that show: next to an item that's hidden (collapsed, or with nothing to show) or at an island's edge, it goes too. A divider with no item after it is warned about and dropped.
+- **`collapsible = true`** on an item hides it while its island is collapsed. Every island starts collapsed. An island with collapsible items gets a chevron on the side facing the middle of the screen (a left island's right, a right island's left, a center island's right). It's there only while the pointer is over the island: hovering grows the island to make room, and the chevron fades in. Pressing it shows the collapsible items in their places, and pressing it again hides them. It points the way they come out while they're hidden, and back once they show. An island whose items are all collapsed stays as a small empty island, so the chevron can still be reached. Expanded islands are remembered across reloads while they keep collapsible items, but not across restarts.
+- **Notifications** go to the right zone's last island, the one at the screen's edge. A popover on another right island doesn't hold them.
+
+**How collapsing moves:** collapsed items are simply left out of the island's items, so the island's existing morph (D-27) animates it. The edges spring, the remaining items slide, and items coming back fade in. No new motion code.
+
+**How the chevron knows about hover:** the island tracks the pointer over its own bounds, and on a change it asks for a new layout and a frame. The app gets no message, so hovering the bar still sends the app nothing (D-35). The chevron is a host `Slot` around `Icon::Back`/`Icon::Forward` that sends `ToggleCollapse(island)`. It's always laid out, so iced's operations and overlays find a real node. While hidden it takes no room, gets no events and isn't drawn.
+
+**Alternatives:**
+- **Named groups (`island = "audio"` on each widget):** robust to reordering, but islands would be ordered by where a name first appears, a second ordering rule beside the file's. With markers, order in the file is order on screen, like everything else.
+- **`widget = "divider"`:** reads well, but `widget` names a plugin to compile in, and a divider is layout, which plugins don't do (D-13).
+- **Hiding collapsed items with a fade-out:** the island drops an item as soon as it's gone from the list, so a fade-out would need the host to keep views of hidden items around. The slide of the rest and the springing edge already carry the motion.
+- **A chevron always on screen:** clearer to discover, but it would cost room on every island with collapsible items all the time.
+
+**Cost:** an island with collapsible items handles pointer motion over it (a bounds check per event) and relayouts on enter and leave. Islands without any collapsible item run the same per-event code as before. Binary size unchanged (9,530,720 bytes, aarch64 release, before and after).
+

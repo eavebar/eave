@@ -47,8 +47,8 @@ Core plugins depend only on Hyprland and the kernel, plus an audio server for vo
 - Each widget instance's `subscription()` is tagged with the instance's stable id and mapped to `Message::Widget(id, AnyMessage)` ([D-15](decisions.md)). `update` hands the message to that instance only. Messages for an id that no longer exists (removed by a reload) are dropped.
 - `config.toml` is watched with inotify. When it changes, the host re-reads it and rebuilds only the instances whose entry changed ([D-21](decisions.md)).
 - A widget's `update` returns an `Effect`: a `Task` for async work, plus optional requests to open or close its popover, or to nudge its island. `update` never does I/O.
-- `view(window)` is pure. For the bar it lays out the left, center and right zones from `config.toml`, each as a squircle island only as wide as its items. A zone with nothing to show has no island ([D-24](decisions.md)). When items come or go, the island morphs: its edges spring to the new size, items slide to their new places and new ones fade in ([D-27](decisions.md)). Pressing an island squeezes it; dragging stretches it toward the pointer with a rubber band, most where it was grabbed, and it springs back on release ([D-26](decisions.md), [D-45](decisions.md)). An open popover stretches the same way when a press on it isn't a control's. A widget's nudge pushes the island a little that way and pokes its outline, a jelly of springs that smooths the poke out by itself: the edge bulges at the item, and the island swells on the side it's going toward ([D-32](decisions.md)). Each item is wrapped in a `Slot`, which turns unhandled clicks and scroll steps into messages. An open popover's `Panel` is drawn by the island it grew out of.
-- Nothing is drawn when no message arrives. Pointer tracking is only subscribed while a popover is open, so hovering over the bar sends the app no messages. The pointer entering or leaving an item does redraw it: its `Slot` tells the alternates inside, which fade to their hover option and back ([D-35](decisions.md)). Moving within an item, or resting on it, draws nothing.
+- `view(window)` is pure. For the bar it lays out the left, center and right zones from `config.toml`, each as one or more squircle islands side by side, each only as wide as its items. An island with nothing to show isn't drawn ([D-24](decisions.md)). Items marked `collapsible` are left out while their island is collapsed, and `divider` entries put a line between two items that show ([D-55](decisions.md)). When items come or go, the island morphs: its edges spring to the new size, items slide to their new places and new ones fade in ([D-27](decisions.md)). Pressing an island squeezes it; dragging stretches it toward the pointer with a rubber band, most where it was grabbed, and it springs back on release ([D-26](decisions.md), [D-45](decisions.md)). An open popover stretches the same way when a press on it isn't a control's. A widget's nudge pushes the island a little that way and pokes its outline, a jelly of springs that smooths the poke out by itself: the edge bulges at the item, and the island swells on the side it's going toward ([D-32](decisions.md)). Each item is wrapped in a `Slot`, which turns unhandled clicks and scroll steps into messages. An open popover's `Panel` is drawn by the island it grew out of.
+- Nothing is drawn when no message arrives. Pointer tracking is only subscribed while a popover is open, so hovering over the bar sends the app no messages. The pointer entering or leaving an item does redraw it: its `Slot` tells the alternates inside, which fade to their hover option and back ([D-35](decisions.md)). Moving within an item, or resting on it, draws nothing. An island with collapsible items does the same for itself: the pointer entering it makes room for its chevron, and leaving gives the room back, with no message to the app ([D-55](decisions.md)).
 
 ## Popovers
 
@@ -62,7 +62,7 @@ A popover isn't a surface of its own: the island holding the item turns into it 
 
 ## Notifications
 
-Notifications travel only over the session bus ([D-52](decisions.md)). The plugin that serves `org.freedesktop.Notifications` (eave-notifications) lists what it received as notices, and no other plugin lists any. While there are notices, the right island turns into a panel of them, the same way it turns into a popover ([D-47](decisions.md)):
+Notifications travel only over the session bus ([D-52](decisions.md)). The plugin that serves `org.freedesktop.Notifications` (eave-notifications) lists what it received as notices, and no other plugin lists any. While there are notices, the right island turns into a panel of them (with several islands on the right, the last one, at the screen's edge; [D-55](decisions.md)), the same way it turns into a popover ([D-47](decisions.md)):
 
 1. After each of a widget's messages, the host compares its notices with the ones it keeps (`Bar::toasts`), by key. New ones go on top, changed ones are updated in place, and missing ones go.
 2. While there are any, and no popover is open on the right island, the host keeps a `NoticePanel`, and `view` hands it to the right island of the toast bar (the first bar surface, for now the only one) as its popover, with the key `NOTICES`. A popover still turning back there gives way. Placing, growing the surface, the input region and the morph are a popover's (`NoticesPlaced`). Unlike a popover's, nobody opens it, it doesn't take the keyboard, and clicks elsewhere don't close it.
@@ -101,13 +101,13 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/main.rs              default binary: host + built-in plugins
   src/lib.rs               run(): registry, layer-shell settings, daemon
   src/app.rs               state, Message, update/view/subscription, popover lifecycle, the notifications panel and its clocks, surface fit, reload
-  src/config.rs            config.toml → zone entries
+  src/config.rs            config.toml → zone entries, with their island, divider and collapsible
   src/watch.rs             inotify watch on the config directory
   src/kit.rs               ui nodes → iced elements, styled
   src/icon.rs              status icons (volume, Wi-Fi, wired, battery) as vector paths
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
   src/theme.rs             every color, size and font
-  src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay, switching popovers mid-morph
+  src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay, switching popovers mid-morph, the collapse chevron on hover
   src/squish.rs            how squished the items being drawn are, set by their island
   src/label.rs             a label that can squish (outlines while squished)
   src/squircle.rs          the squircle path
