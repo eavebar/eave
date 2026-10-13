@@ -307,6 +307,8 @@ A key press closes it too, since 2026-10-12 ([D-36](#d-36-popovers-take-the-keyb
 
 We use `rustix::fs::inotify`. rustix 1.x was already in the tree through the Wayland stack, so it's a direct dependency, not a new crate.
 
+**Symlinks** (2026-10-14): dotfiles managers (perch, stow, yadm…) make `config.toml` a symlink into their repository, and a write there never shows in the link's directory, so the bar didn't reload. The watcher also watches the directory the link resolves into, for the file's name there, and follows again after every change, so a re-pointed link is picked up too. Only the last hop of a chain is watched. Whatever writes config.toml (`eave calibrate`, `eave-build init`) writes through the link to its target and never replaces the link. No new dependency.
+
 **Measured** (Asahi, release, two clocks): RSS ~11.7 MB (unchanged within noise), idle CPU 0%, one more thread, binary +65 KB (5.78 → 5.84 MiB).
 
 ---

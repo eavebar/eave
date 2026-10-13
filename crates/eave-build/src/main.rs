@@ -511,15 +511,7 @@ fn install(binary: &Path, target: &Path) -> Result<bool> {
 /// Writes a starter config.toml unless there is one, and the systemd user units. Enabling them
 /// is up to the user (or install.sh): which one to enable depends on how Hyprland is started.
 fn init(config_path: &Path) -> Result<()> {
-    if config_path.exists() {
-        eprintln!("eave-build: keeping {}", config_path.display());
-    } else {
-        let dir = config_path.parent().unwrap_or(Path::new("."));
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        std::fs::write(config_path, STARTER_CONFIG)
-            .map_err(|e| format!("{}: {e}", config_path.display()))?;
-        eprintln!("eave-build: wrote {}", config_path.display());
-    }
+    starter_config(config_path)?;
 
     let units = config_dir()?.join("systemd/user");
     std::fs::create_dir_all(&units).map_err(|e| format!("{}: {e}", units.display()))?;
@@ -536,6 +528,27 @@ fn init(config_path: &Path) -> Result<()> {
         "eave-build: wrote the systemd user units to {}",
         units.display()
     );
+    Ok(())
+}
+
+/// Writes the starter config.toml if there's none. A symlink (a dotfiles manager's) is never
+/// replaced or written through: one pointing nowhere is left for its owner to fix.
+fn starter_config(config_path: &Path) -> Result<()> {
+    if config_path.exists() {
+        eprintln!("eave-build: keeping {}", config_path.display());
+    } else if let Ok(target) = std::fs::read_link(config_path) {
+        eprintln!(
+            "eave-build: {} points to {}, which doesn't exist; not writing a starter config",
+            config_path.display(),
+            target.display()
+        );
+    } else {
+        let dir = config_path.parent().unwrap_or(Path::new("."));
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        std::fs::write(config_path, STARTER_CONFIG)
+            .map_err(|e| format!("{}: {e}", config_path.display()))?;
+        eprintln!("eave-build: wrote {}", config_path.display());
+    }
     Ok(())
 }
 
@@ -1409,5 +1422,38 @@ mod tests {
         for (dir, manifest) in members {
             load_plugin(&dir, manifest, env!("CARGO_PKG_VERSION")).unwrap();
         }
+    }
+
+    #[test]
+    fn the_starter_config_leaves_symlinks_alone() {
+        use std::os::unix::fs::symlink;
+
+        let dir = std::env::temp_dir().join(format!("eave-build-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("dotfiles")).unwrap();
+
+        // A link to a config: kept, and so is what it points to.
+        let real = dir.join("dotfiles/config.toml");
+        std::fs::write(&real, "# mine\n").unwrap();
+        let link = dir.join("config.toml");
+        symlink(&real, &link).unwrap();
+        starter_config(&link).unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "# mine\n");
+
+        // A link to nothing: still a link to nothing.
+        let gone = dir.join("dotfiles/gone.toml");
+        let dangling = dir.join("dangling.toml");
+        symlink(&gone, &dangling).unwrap();
+        starter_config(&dangling).unwrap();
+        assert!(std::fs::symlink_metadata(&dangling).unwrap().is_symlink());
+        assert!(!gone.exists());
+
+        // No file at all: the starter.
+        let fresh = dir.join("new/config.toml");
+        starter_config(&fresh).unwrap();
+        assert_eq!(std::fs::read_to_string(&fresh).unwrap(), STARTER_CONFIG);
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

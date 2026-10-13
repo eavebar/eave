@@ -3,9 +3,14 @@
 //! The watch is on the directory, not the file: editors save by writing a temporary file and
 //! renaming it over the old one, and the file may not exist yet. If the directory itself doesn't
 //! exist, its parent is watched until it appears.
+//!
+//! A symlinked `config.toml` (a dotfiles manager's) is followed: the directory of the file it
+//! points to is watched too, since writes there never reach the link's directory. Only the last
+//! hop is: re-pointing a link in the middle of a chain shows on the next event, not on its own.
 
 use std::ffi::CStr;
 use std::mem::MaybeUninit;
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 use iced::Subscription;
@@ -64,17 +69,24 @@ enum Watching {
     Parent(i32),
 }
 
+/// Where a symlinked `config.toml` points: its directory's watch and its file name there.
+struct Target {
+    wd: i32,
+    name: Vec<u8>,
+}
+
 /// Blocks forever, sending the config after every relevant event. Returns `Ok` once nobody listens.
 fn watch(dir: &Path, changed: UnboundedSender<std::result::Result<Config, String>>) -> Result<()> {
     let parent = dir.parent().ok_or(Errno::INVAL)?;
     let file = dir.join(config::FILE);
     let fd = inotify::init(CreateFlags::CLOEXEC)?;
     let mut watching = arm(&fd, dir, parent)?;
+    let mut target = follow(&fd, &file, dir);
     let mut buffer = [MaybeUninit::uninit(); 4096];
     let mut reader = inotify::Reader::new(&fd, &mut buffer);
 
     loop {
-        let (wd, flags, is_config, is_dir_name) = {
+        let (wd, flags, is_config, is_dir_name, is_target) = {
             let event = reader.next()?;
             let name = event.file_name();
             (
@@ -82,6 +94,9 @@ fn watch(dir: &Path, changed: UnboundedSender<std::result::Result<Config, String
                 event.events(),
                 name == Some(FILE_NAME),
                 name == Some(DIR_NAME),
+                target
+                    .as_ref()
+                    .is_some_and(|target| name.map(CStr::to_bytes) == Some(&target.name[..])),
             )
         };
 
@@ -108,12 +123,27 @@ fn watch(dir: &Path, changed: UnboundedSender<std::result::Result<Config, String
                 // The directory may have arrived with a config already in it.
                 true
             }
+            // In the directory a symlinked config.toml points into. Gone or moved: follow again.
+            _ if target.as_ref().is_some_and(|target| target.wd == wd) => {
+                is_target || flags.intersects(ReadFlags::MOVE_SELF | ReadFlags::IGNORED)
+            }
             // Leftovers from a watch we already replaced.
             _ => false,
         };
 
-        if notify && changed.unbounded_send(config::load_from(&file)).is_err() {
-            return Ok(());
+        if notify {
+            // The link may have been made, re-pointed or removed, or its target may have moved.
+            let followed = follow(&fd, &file, dir);
+            if let Some(old) = target.take()
+                && followed.as_ref().is_none_or(|new| new.wd != old.wd)
+                && !matches!(watching, Watching::Dir(current) if current == old.wd)
+            {
+                let _ = inotify::remove_watch(&fd, old.wd);
+            }
+            target = followed;
+            if changed.unbounded_send(config::load_from(&file)).is_err() {
+                return Ok(());
+            }
         }
     }
 }
@@ -127,6 +157,19 @@ fn arm(fd: &impl rustix::fd::AsFd, dir: &Path, parent: &Path) -> Result<Watching
         }
         Err(error) => Err(error),
     }
+}
+
+/// Watches the directory `file` resolves into, if it's a symlink out of `dir`. inotify hands back
+/// the same watch for a directory it already watches, so a link within `dir` is no extra watch.
+fn follow(fd: &impl rustix::fd::AsFd, file: &Path, dir: &Path) -> Option<Target> {
+    let resolved = std::fs::canonicalize(file).ok()?;
+    let into = resolved.parent()?;
+    if std::fs::canonicalize(dir).is_ok_and(|dir| dir == into) {
+        return None;
+    }
+    let wd = inotify::add_watch(fd, into, DIR_EVENTS).ok()?;
+    let name = resolved.file_name()?.as_bytes().to_vec();
+    Some(Target { wd, name })
 }
 
 #[cfg(test)]
@@ -201,6 +244,69 @@ mod tests {
         settle(&mut receiver);
         std::fs::write(&file, "[[left]]\nwidget = \"c\"").unwrap();
         assert_eq!(widgets(settle(&mut receiver)), ["c"]);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn follows_a_symlinked_config() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!("eave-watch-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (dir, real, other) = (root.join("eave"), root.join("real"), root.join("other"));
+        for each in [&dir, &real, &other] {
+            std::fs::create_dir_all(each).unwrap();
+        }
+        let target = real.join(config::FILE);
+        let link = dir.join(config::FILE);
+        std::fs::write(&target, "[[left]]\nwidget = \"a\"").unwrap();
+        symlink(&target, &link).unwrap();
+
+        let (sender, mut receiver) = mpsc::unbounded();
+        let watched = dir.clone();
+        std::thread::spawn(move || watch(&watched, sender));
+        std::thread::sleep(Duration::from_millis(100));
+
+        // A plain write to where the link points.
+        std::fs::write(&target, "[[left]]\nwidget = \"b\"").unwrap();
+        assert_eq!(widgets(settle(&mut receiver)), ["b"]);
+
+        // An editor-style save there.
+        let temp = real.join(".config.toml.swp");
+        std::fs::write(&temp, "[[left]]\nwidget = \"c\"").unwrap();
+        std::fs::rename(&temp, &target).unwrap();
+        assert_eq!(widgets(settle(&mut receiver)), ["c"]);
+
+        // Other files beside it are ignored.
+        std::fs::write(real.join("hyprland.conf"), "").unwrap();
+        assert!(settle(&mut receiver).is_none());
+
+        // eave calibrate saves through the link, and leaves it a link.
+        let shape = crate::calibrate::shape::Shape {
+            screen: config::Screen {
+                corners: [20.0, 20.0, 12.0, 12.0],
+                ..config::Screen::default()
+            },
+            notch: None,
+        };
+        crate::calibrate::save::save(&link, &shape).unwrap();
+        let saved = settle(&mut receiver).expect("no event").unwrap();
+        assert_eq!(saved.screen, shape.screen);
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+
+        // The link is re-pointed, atomically, to a file of another name.
+        let moved = other.join("eave.toml");
+        std::fs::write(&moved, "[[left]]\nwidget = \"d\"").unwrap();
+        let new_link = dir.join(".config.toml.new");
+        symlink(&moved, &new_link).unwrap();
+        std::fs::rename(&new_link, &link).unwrap();
+        assert_eq!(widgets(settle(&mut receiver)), ["d"]);
+        std::fs::write(&moved, "[[left]]\nwidget = \"e\"").unwrap();
+        assert_eq!(widgets(settle(&mut receiver)), ["e"]);
+        // Where it used to point no longer counts.
+        std::fs::write(&target, "[[left]]\nwidget = \"f\"").unwrap();
+        assert!(settle(&mut receiver).is_none());
 
         std::fs::remove_dir_all(&root).unwrap();
     }

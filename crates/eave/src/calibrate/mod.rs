@@ -6,7 +6,7 @@
 
 mod panel;
 mod rows;
-mod save;
+pub(crate) mod save;
 pub mod shape;
 
 use iced::keyboard::{self, Key, Modifiers, key::Named};
