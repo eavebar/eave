@@ -200,6 +200,12 @@ fn draw_frame(file: &[u8]) -> Option<Frame> {
         resvg::render(&tree, Transform::identity(), &mut pixmap.as_mut());
         pixmap
     };
+    // At least as many pixels as the screen shows it with, so it's only ever scaled down: iced's
+    // tiny-skia renderer places an image at whole pixels of the image, and a small one scaled
+    // up would land a few screen pixels off, past what it repaints, leaving trails behind.
+    let rows = 2 * theme::SPRITE_HEIGHT_PANEL as u32;
+    let times = rows.div_ceil(pixmap.height().max(1));
+    let pixmap = enlarge(pixmap, times)?;
     if pixmap.width().max(pixmap.height()) > MAX_FRAME {
         return None;
     }
@@ -207,6 +213,28 @@ fn draw_frame(file: &[u8]) -> Option<Frame> {
         handle: handle(&pixmap),
         size: Size::new(pixmap.width() as f32, pixmap.height() as f32),
     })
+}
+
+/// Every pixel of `pixmap` as a `times` × `times` block.
+fn enlarge(pixmap: Pixmap, times: u32) -> Option<Pixmap> {
+    if times <= 1 {
+        return Some(pixmap);
+    }
+    let mut large = Pixmap::new(pixmap.width() * times, pixmap.height() * times)?;
+    let paint = PixmapPaint {
+        quality: FilterQuality::Nearest,
+        ..PixmapPaint::default()
+    };
+    let scale = times as f32;
+    large.draw_pixmap(
+        0,
+        0,
+        pixmap.as_ref(),
+        &paint,
+        Transform::from_scale(scale, scale),
+        None,
+    );
+    Some(large)
 }
 
 /// Draws a shipped icon file, off the UI thread.
@@ -593,6 +621,23 @@ fn shrink(mut pixmap: Pixmap) -> Option<Pixmap> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_small_frame_is_enlarged_whole_pixels_at_a_time() {
+        // 16 × 10, its left half opaque.
+        let mut art = Pixmap::new(16, 10).unwrap();
+        art.fill_rect(
+            resvg::tiny_skia::Rect::from_xywh(0.0, 0.0, 8.0, 10.0).unwrap(),
+            &resvg::tiny_skia::Paint::default(),
+            Transform::identity(),
+            None,
+        );
+        let frame = draw_frame(&art.encode_png().unwrap()).unwrap();
+        assert_eq!(frame.size, Size::new(64.0, 40.0));
+        let drawn = enlarge(art, 4).unwrap();
+        let alpha = |x: u32| drawn.pixel(x, 20).unwrap().alpha();
+        assert_eq!((alpha(31), alpha(32)), (255, 0), "a sharp edge, no blur");
+    }
 
     #[test]
     fn a_shipped_file_is_drawn_once_and_its_shape_per_color() {
