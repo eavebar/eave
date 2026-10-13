@@ -1678,4 +1678,6 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 
 **Alternatives:** keep the counter beside the bell (what it was); a dot without a number (says less); reserve the badge's room always (an island wider for nothing at rest).
 
-**Cost:** one small widget, no dependency. The badge is drawn as shapes, so a picture (an `app_icon`, a `cover`) under it would draw over it; it's meant for symbol icons.
+**On top:** the badge draws in a layer of its own. Within one layer the renderer draws by kind (shapes, then pictures, then text), not in the order things were drawn, so the bell could show through it. A nested layer isn't clipped by the island's, so the island hands down what it shows (`island::clip`, ambient like the squish) and the badge keeps to it.
+
+**Cost:** one small widget and one layer while a badge shows, no dependency.

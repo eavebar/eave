@@ -2,7 +2,8 @@
 //! right corner, like unread notifications on a bell. The badge grows in from nothing and shrinks
 //! back on the morph spring, counts through the numbers in between like a counter, and springs
 //! from a circle to a pill when the number gets a second digit. Like the counter, it steps on the
-//! frames the compositor asks for, and stops asking once it's still.
+//! frames the compositor asks for, and stops asking once it's still. It's drawn in a layer of its
+//! own, over its content.
 
 use std::time::Instant;
 
@@ -18,7 +19,7 @@ use eave_api::ui::Tone;
 
 use crate::counter::{Count, shape};
 use crate::spring::{self, MAX_FRAME, REST_DISTANCE, Spring};
-use crate::{squish, theme};
+use crate::{island, squish, theme};
 
 /// The most the badge shows: two digits keep it a short pill.
 const MOST: u32 = 99;
@@ -173,6 +174,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Pip<'_, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        use iced::advanced::Renderer as _;
         use iced::advanced::graphics::geometry::Renderer as _;
 
         let content = layout.children().next().expect("the content");
@@ -196,7 +198,8 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Pip<'_, M> {
         let center = Point::new(left + size.width / 2.0, bounds.y + theme::PIP_DROP);
         // It grows and squishes about its own middle, like the island's other things do.
         let squish = squish::current();
-        let mut frame = Frame::with_bounds(renderer, layout.bounds().expand(theme::PIP_HEIGHT));
+        let area = layout.bounds().expand(theme::PIP_HEIGHT);
+        let mut frame = Frame::with_bounds(renderer, area);
         frame.translate(Vector::new(center.x, center.y));
         frame.scale_nonuniform(Vector::new(squish.x * grow, squish.y * grow));
         frame.translate(Vector::new(-center.x, -center.y));
@@ -214,7 +217,14 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Pip<'_, M> {
             shaping: text::Shaping::Basic,
             ..canvas::Text::default()
         });
-        renderer.draw_geometry(frame.into_geometry());
+        // A layer of its own, so it lands over the content whatever that's drawn with: within a
+        // layer, the renderer draws by kind, not in order. Kept to what the island shows.
+        let Some(layer) = area.intersection(&island::clip().unwrap_or(*viewport)) else {
+            return;
+        };
+        renderer.with_layer(layer, |renderer| {
+            renderer.draw_geometry(frame.into_geometry());
+        });
     }
 
     fn update(

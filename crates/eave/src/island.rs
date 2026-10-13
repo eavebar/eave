@@ -1238,9 +1238,11 @@ fn draw_island<M>(
                     // And it goes with the stretch where it ends up.
                     let moved = moved + motion.pull(shape, bounds.center() + moved);
                     renderer.with_translation(moved, |renderer| {
-                        squish::with(squished, || {
-                            item.as_widget()
-                                .draw(tree, renderer, theme, style, child, cursor, viewport);
+                        with_clip(clip - moved, || {
+                            squish::with(squished, || {
+                                item.as_widget()
+                                    .draw(tree, renderer, theme, style, child, cursor, viewport);
+                            });
                         });
                         // In the item's moved coordinates, the shape is the other way.
                         fade(renderer, bounds, shape - moved, shown);
@@ -1271,6 +1273,28 @@ fn draw_island<M>(
             });
         });
     });
+}
+
+thread_local! {
+    static CLIP: Cell<Option<Rectangle>> = const { Cell::new(None) };
+}
+
+/// What the island being drawn shows of its items, in the coordinates they're drawn in. Something
+/// that draws in a layer of its own (a count badge, over its content) keeps to it: a nested layer
+/// isn't clipped by the one around it. Ambient like [`squish::current`], for the same reason.
+pub(crate) fn clip() -> Option<Rectangle> {
+    CLIP.with(Cell::get)
+}
+
+fn with_clip<R>(clip: Rectangle, draw: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Rectangle>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CLIP.with(|current| current.set(self.0));
+        }
+    }
+    let _restore = Restore(CLIP.with(|current| current.replace(Some(clip))));
+    draw()
 }
 
 /// `shape`, grown by `pull` the way it points, to take in what the drag stretched out of it.
