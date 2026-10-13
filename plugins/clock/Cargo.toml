@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 eave-api.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 serde.workspace = true
 
 [dev-dependencies]
