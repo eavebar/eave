@@ -119,6 +119,7 @@ mod tests {
 # My bar.
 renderer = \"cpu\"   # the GPU drains the battery
 notch = \"auto\"   # found by eave
+islands = { radius = 24 }   # rounder
 
 [[center]]
 widget = \"clock\"   # every minute
@@ -129,6 +130,7 @@ widget = \"clock\"   # every minute
         );
         assert!(edited.contains("notch = { width = 370, height = 66, radius = 18, smoothing = 0.25, shoulder = 6, top = 0 }   # found by eave\n"), "{edited}");
         assert!(edited.contains("widget = \"clock\"   # every minute\n"));
+        assert!(edited.contains("islands = { radius = 24 }   # rounder\n"));
         // New keys go with the others above the zones, so they aren't read as a zone's.
         let screen = edited.find("screen = ").unwrap();
         assert!(screen < edited.find("[[center]]").unwrap(), "{edited}");
