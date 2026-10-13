@@ -254,6 +254,8 @@ struct Motion {
     /// The fastest the island has slid as a whole in the push going on, signed (negative is
     /// left). 0 when it isn't being pushed.
     pushed: f32,
+    /// How long the push going on has lasted, in seconds: the swell builds up over it.
+    pushing: f32,
     /// The previous frame, while something is moving.
     last: Option<Instant>,
 }
@@ -278,6 +280,7 @@ impl Default for Motion {
             stretch_y: Spring::new(0.0, SQUISH),
             seen: None,
             pushed: 0.0,
+            pushing: 0.0,
             last: None,
         }
     }
@@ -510,9 +513,10 @@ impl Motion {
     /// there. When it stops, the swell is kicked across to the other end, and the jelly wiggles
     /// back flat. A resize moves its edges apart or together, not the same way, so it doesn't
     /// count, and neither does a popover's morph.
-    fn lean_with_push(&mut self) {
+    fn lean_with_push(&mut self, elapsed: f32) {
         if self.popover.present || self.press.is_some() {
             self.pushed = 0.0;
+            self.pushing = 0.0;
             return;
         }
         let (left, right) = (self.edges.left.velocity, self.edges.right.velocity);
@@ -529,9 +533,11 @@ impl Motion {
             if speed.abs() > self.pushed.abs() {
                 self.pushed = speed;
             }
-            // Going left, it's pushed from the right: its right end swells.
+            self.pushing += elapsed;
+            // Going left, it's pushed from the right: its right end swells, gradually.
             let way = speed.signum();
-            let lean = strength(speed, theme::PUSH_LEAN);
+            let building = (self.pushing / theme::PUSH_BUILD.as_secs_f32()).min(1.0);
+            let lean = strength(speed, theme::PUSH_LEAN) * building;
             for side in [Side::Top, Side::Bottom] {
                 self.jelly
                     .kick(side, |along| -way * lean * toward_end(along));
@@ -544,6 +550,7 @@ impl Motion {
                     .kick(side, |along| way * wiggle * toward_end(along));
             }
             self.pushed = 0.0;
+            self.pushing = 0.0;
         }
     }
 
@@ -787,7 +794,7 @@ impl Motion {
         for spring in self.paced() {
             spring.advance(paced);
         }
-        self.lean_with_push();
+        self.lean_with_push(paced);
         self.jelly.advance(paced);
         // The fades wait on how far the shape has come.
         self.aim();
@@ -2390,8 +2397,8 @@ mod tests {
                 left_after = left_after.max(top(0.1));
             }
         });
-        assert!(right_most > 1.0, "the right end swelled: {right_most}");
-        assert!(left_after > 0.5, "then the left end: {left_after}");
+        assert!(right_most > 0.5, "the right end swelled: {right_most}");
+        assert!(left_after > 0.3, "then the left end: {left_after}");
         assert!(frames < 200, "and it settles");
         assert!(motion.jelly.is_flat());
     }

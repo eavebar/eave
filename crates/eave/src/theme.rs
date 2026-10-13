@@ -113,10 +113,12 @@ pub const JELLY_LEAN: f32 = 120.0;
 /// A pushed island (one sliding as a whole, because a neighbor made room for itself) piles up at
 /// the end it's pushed from: that end of its top and bottom edges swells out, kicked up to this
 /// many logical pixels per second for as long as it slides at `PUSH_FULL_SPEED` or more (less,
-/// slower). It counts as sliding above `PUSH_MOVING`. When it stops, the swell is kicked across
-/// to the other end, at up to `PUSH_WIGGLE`, and the jelly settles from there.
-pub const PUSH_LEAN: f32 = 160.0;
-pub const PUSH_WIGGLE: f32 = 140.0;
+/// slower), working up to that over `PUSH_BUILD`. It counts as sliding above `PUSH_MOVING`. When
+/// it stops, the swell is kicked across to the other end, at up to `PUSH_WIGGLE`, and the jelly
+/// settles from there. About 1 px at most each way.
+pub const PUSH_LEAN: f32 = 45.0;
+pub const PUSH_BUILD: Duration = Duration::from_millis(250);
+pub const PUSH_WIGGLE: f32 = 90.0;
 pub const PUSH_FULL_SPEED: f32 = 600.0;
 pub const PUSH_MOVING: f32 = 20.0;
 /// How wide a nudge's bump in an island's edge is, end to end.
