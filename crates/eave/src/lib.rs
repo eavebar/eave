@@ -24,6 +24,7 @@ mod meter;
 mod notch;
 mod slider;
 mod slot;
+mod spring;
 mod sprite;
 mod squircle;
 mod squish;

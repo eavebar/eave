@@ -34,6 +34,7 @@ use iced::{
 
 use crate::field::AnyFocused;
 use crate::jelly::{Jelly, Side};
+use crate::spring::{DRAG, FADE, MAX_FRAME, MORPH, NUDGE, PLAYFUL, REST_DISTANCE, SQUISH, Spring};
 use crate::squircle::{squircle, warp};
 use crate::squish::{self, Squish};
 use crate::theme;
@@ -212,46 +213,6 @@ struct State {
     /// Whether it's a live island, so `shape` is rebuilt when that changes.
     live: bool,
 }
-
-/// How a spring moves: how hard it pulls toward its target, and its damping ratio (below 1 it
-/// overshoots a little before settling).
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Feel {
-    stiffness: f32,
-    damping: f32,
-}
-
-/// The press squeeze: springy, so letting go overshoots a little.
-const PLAYFUL: Feel = Feel {
-    stiffness: theme::SPRING_STIFFNESS,
-    damping: theme::SPRING_DAMPING,
-};
-/// The drag: soft, so the stretch eases after the pointer and back.
-const DRAG: Feel = Feel {
-    stiffness: theme::DRAG_STIFFNESS,
-    damping: theme::DRAG_DAMPING,
-};
-/// Nudges: back into place without swinging past.
-const NUDGE: Feel = Feel {
-    stiffness: theme::NUDGE_STIFFNESS,
-    damping: theme::NUDGE_DAMPING,
-};
-/// Shape and content changes: settle without wobbling.
-const MORPH: Feel = Feel {
-    stiffness: theme::MORPH_STIFFNESS,
-    damping: theme::MORPH_DAMPING,
-};
-/// The handover between an island's items and its popover's content: quicker than the shape, so
-/// one side is gone in time for the other to come in while the shape still moves.
-const FADE: Feel = Feel {
-    stiffness: theme::FADE_STIFFNESS,
-    damping: theme::FADE_DAMPING,
-};
-/// A popover's overshoot: kicked once, it swings past rest and back.
-const SQUISH: Feel = Feel {
-    stiffness: theme::SQUISH_STIFFNESS,
-    damping: theme::SQUISH_DAMPING,
-};
 
 /// Where everything is going and how it's moving there. Positions are in logical pixels, in
 /// surface coordinates; fades go from 0 (hidden) to 1 (shown).
@@ -1022,58 +983,6 @@ fn slots(widths: &[f32], groups: &[Option<&str>]) -> Vec<f32> {
             None => widths[index],
         })
         .collect()
-}
-
-/// The longest step a single frame may take.
-const MAX_FRAME: Duration = Duration::from_millis(50);
-/// Springs are integrated in steps no longer than this, so they stay stable at any frame rate.
-pub(crate) const SUBSTEP: f32 = 1.0 / 480.0;
-/// Close enough to the target, and slow enough, to stop: well under a physical pixel, or a
-/// hundredth of a fade.
-pub(crate) const REST_DISTANCE: f32 = 0.01;
-pub(crate) const REST_SPEED: f32 = 0.5;
-
-/// A damped spring along one axis.
-#[derive(Debug, Clone, Copy)]
-struct Spring {
-    value: f32,
-    velocity: f32,
-    target: f32,
-    feel: Feel,
-}
-
-impl Spring {
-    /// At rest at `value`.
-    fn new(value: f32, feel: Feel) -> Self {
-        Self {
-            value,
-            velocity: 0.0,
-            target: value,
-            feel,
-        }
-    }
-
-    fn advance(&mut self, seconds: f32) {
-        let Feel { stiffness, damping } = self.feel;
-        let damping = 2.0 * damping * stiffness.sqrt();
-        let mut left = seconds;
-        while left > 0.0 {
-            let dt = left.min(SUBSTEP);
-            let force = -stiffness * (self.value - self.target) - damping * self.velocity;
-            self.velocity += force * dt;
-            self.value += self.velocity * dt;
-            left -= dt;
-        }
-    }
-
-    fn at_rest(&self) -> bool {
-        (self.value - self.target).abs() < REST_DISTANCE && self.velocity.abs() < REST_SPEED
-    }
-
-    fn settle(&mut self) {
-        self.value = self.target;
-        self.velocity = 0.0;
-    }
 }
 
 /// Moves almost one to one at first, then gives less and less, approaching `limit` without ever
