@@ -21,6 +21,7 @@ mod kit;
 mod label;
 mod markdown;
 mod meter;
+mod notch;
 mod slider;
 mod slot;
 mod sprite;

@@ -27,6 +27,10 @@ pub const BAR_HEIGHT: u32 = EDGE_GAP as u32 + ISLAND_HEIGHT + RESERVED_ROOM as u
 /// The bar surface: an island, the gap above it and all the room below it.
 pub const SURFACE_HEIGHT: u32 = EDGE_GAP as u32 + ISLAND_HEIGHT + DRAG_ROOM as u32;
 
+/// How far an island attached to a screen edge reaches past it (D-70): further than its corners
+/// and anything that moves it, so the edge never shows a gap or a corner.
+pub const ATTACH_OVERHANG: f32 = 32.0;
+
 pub const ISLAND_BG: Color = Color::BLACK;
 pub const ISLAND_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 pub const HOVER_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);

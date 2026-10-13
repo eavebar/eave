@@ -28,7 +28,9 @@ use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, r
 use iced::alignment::Horizontal;
 use iced::keyboard::{self, key};
 use iced::widget::canvas::{Cache, Path, Stroke};
-use iced::{Color, Element, Event, Length, Point, Rectangle, Size, Transformation, Vector, window};
+use iced::{
+    Color, Element, Event, Length, Padding, Point, Rectangle, Size, Transformation, Vector, window,
+};
 
 use crate::field::AnyFocused;
 use crate::jelly::{Jelly, Side};
@@ -54,6 +56,11 @@ pub struct Island<'a, M> {
     expanded: bool,
     /// A live island: snug around its items and rounder.
     live: bool,
+    /// How far its shape reaches past its layout, toward the edges it's attached to (D-70), and its
+    /// popover's with it.
+    bleed: Padding,
+    /// The width of a notch centered at the top of the surface, which its popover stays clear of.
+    notch: Option<f32>,
 }
 
 /// The control at one end of an island that shows and hides its collapsible items: there while
@@ -103,7 +110,22 @@ impl<'a, M> Island<'a, M> {
             toggle_side: Horizontal::Right,
             expanded: false,
             live: false,
+            bleed: Padding::ZERO,
+            notch: None,
         }
+    }
+
+    /// Reaches past its layout by this much each way: to the screen edges it's attached to, and
+    /// past them, so they're never seen to come apart while it moves. Its popover does too.
+    pub fn bleed(mut self, bleed: Padding) -> Self {
+        self.bleed = bleed;
+        self
+    }
+
+    /// A notch this wide, centered at the top of the surface: its popover stays on its side.
+    pub fn notch(mut self, notch: Option<f32>) -> Self {
+        self.notch = notch;
+        self
     }
 
     /// Makes it a live island: less room at its ends and rounder corners, so one item in it is
@@ -1063,8 +1085,15 @@ fn rubber_band(distance: f32, limit: f32) -> f32 {
 
 /// Where a popover goes: as tall as the panel and never narrower than the island, with its top
 /// where the island's is. It grows from the island's left edge, right edge or center, and stays
-/// `EDGE_GAP` clear of the surface's sides.
-fn place(island: Rectangle, panel: Size, align: Horizontal, surface_width: f32) -> Rectangle {
+/// `EDGE_GAP` clear of the surface's sides. With a notch, it stays on the island's side of it,
+/// and may reach right up to it.
+fn place(
+    island: Rectangle,
+    panel: Size,
+    align: Horizontal,
+    surface_width: f32,
+    notch: Option<f32>,
+) -> Rectangle {
     let padding = 2.0 * f32::from(theme::PANEL_PADDING);
     let width = (panel.width + padding).max(island.width).ceil();
     let height = (panel.height + padding).max(island.height).ceil();
@@ -1074,7 +1103,16 @@ fn place(island: Rectangle, panel: Size, align: Horizontal, surface_width: f32) 
         Horizontal::Center => island.center_x() - width / 2.0,
     };
     let gap = f32::from(theme::EDGE_GAP);
-    let x = x.min(surface_width - gap - width).max(gap).round();
+    let (mut from, mut to) = (gap, surface_width - gap);
+    if let Some(notch) = notch {
+        let middle = surface_width / 2.0;
+        if island.center_x() < middle {
+            to = to.min(middle - notch / 2.0);
+        } else {
+            from = from.max(middle + notch / 2.0);
+        }
+    }
+    let x = x.min(to - width).max(from).round();
     Rectangle::new(Point::new(x, island.y), Size::new(width, height))
 }
 
@@ -1137,6 +1175,7 @@ fn draw_island<M>(
     trees: &[Tree],
     layout: Layout<'_>,
     panel: Option<(&Element<'_, M>, &Tree, Layout<'_>)>,
+    bleed: Padding,
     renderer: &mut iced::Renderer,
     theme: &iced::Theme,
     style: &renderer::Style,
@@ -1172,22 +1211,37 @@ fn draw_island<M>(
         state.shape.clear();
     }
 
+    // What's drawn: the shape, reaching on to the edges it's attached to.
+    let body = Rectangle::new(
+        Point::new(shape.x - bleed.left, shape.y - bleed.top),
+        Size::new(
+            shape.width + bleed.left + bleed.right,
+            shape.height + bleed.top + bleed.bottom,
+        ),
+    );
     renderer.with_translation(motion.offset(), |renderer| {
         renderer.with_transformation(transformation, |renderer| {
-            let frame_size = Size::new(shape.width + 2.0 * room.x, shape.height + 2.0 * room.y);
+            let frame_size = Size::new(body.width + 2.0 * room.x, body.height + 2.0 * room.y);
             let geometry = state.shape.draw(renderer, frame_size, |frame| {
-                let size = shape.size();
-                let radius = radius(state.live, size.height);
+                let size = body.size();
+                // As round as the shape itself would be: what reaches past it doesn't count.
+                let radius = radius(state.live, shape.height);
                 let smoothing = theme::ISLAND_SMOOTHING;
                 let outline = Rectangle::new(Point::ORIGIN + room, size);
+                // The jelly bends the shape itself: its sides are where they'd be without the
+                // reach, and what reaches past one moves with it.
+                let jellied = Rectangle::new(
+                    Point::ORIGIN + room + Vector::new(bleed.left, bleed.top),
+                    shape.size(),
+                );
                 // Bent by the jelly and stretched by the drag while they move, both paths the
                 // same way.
                 let bend = |path: Path| {
                     if bent {
                         warp(&path, |at| {
-                            let at = motion.jelly.displace(outline, at);
+                            let at = motion.jelly.displace(jellied, at);
                             if pulled {
-                                at + motion.pull(outline, at)
+                                at + motion.pull(jellied, at)
                             } else {
                                 at
                             }
@@ -1212,7 +1266,7 @@ fn draw_island<M>(
                         .with_width(1.0),
                 );
             });
-            renderer.with_translation(Vector::new(shape.x, shape.y) - room, |renderer| {
+            renderer.with_translation(Vector::new(body.x, body.y) - room, |renderer| {
                 renderer.draw_geometry(geometry);
             });
 
@@ -1440,6 +1494,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             &tree.children,
             layout,
             None,
+            self.bleed,
             renderer,
             theme,
             style,
@@ -1702,7 +1757,13 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             .layout(panel, renderer, &limits);
 
         let island = own_bounds(state, self.layout) + self.translation;
-        let rect = place(island, content.size(), self.island.align, bounds.width);
+        let rect = place(
+            island,
+            content.size(),
+            self.island.align,
+            bounds.width,
+            self.island.notch,
+        );
         state
             .motion
             .place_panel(rect, rect.y + rect.height <= bounds.height);
@@ -1733,6 +1794,7 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             &self.tree.children,
             self.layout,
             Some((&popover.content, panel, content)),
+            island.bleed,
             renderer,
             theme,
             style,
@@ -2180,23 +2242,33 @@ mod tests {
         let gap = f32::from(theme::EDGE_GAP);
         let width = 200.0 + pad;
 
-        let left = place(rect(6.0, 100.0), panel, Horizontal::Left, 1000.0);
+        let left = place(rect(6.0, 100.0), panel, Horizontal::Left, 1000.0, None);
         assert_eq!((left.x, left.y), (6.0, 6.0));
         assert_eq!(left.size(), Size::new(width, 100.0 + pad));
 
-        let right = place(rect(894.0, 100.0), panel, Horizontal::Right, 1000.0);
+        let right = place(rect(894.0, 100.0), panel, Horizontal::Right, 1000.0, None);
         assert_eq!(right.x + right.width, 994.0);
 
-        let center = place(rect(450.0, 100.0), panel, Horizontal::Center, 1000.0);
+        let center = place(rect(450.0, 100.0), panel, Horizontal::Center, 1000.0, None);
         assert_eq!(center.center_x(), 500.0);
 
         // Never narrower than the island.
-        let wide = place(rect(300.0, 400.0), panel, Horizontal::Center, 1000.0);
+        let wide = place(rect(300.0, 400.0), panel, Horizontal::Center, 1000.0, None);
         assert_eq!(wide.width, 400.0);
 
         // Kept on screen.
-        let clamped = place(rect(950.0, 44.0), panel, Horizontal::Left, 1000.0);
+        let clamped = place(rect(950.0, 44.0), panel, Horizontal::Left, 1000.0, None);
         assert_eq!(clamped.x + clamped.width, 1000.0 - gap);
+
+        // With a 200-wide notch, from 400 to 600, each stays on its island's side, and may reach
+        // right up to the notch.
+        let notch = Some(200.0);
+        let before = place(rect(330.0, 70.0), panel, Horizontal::Center, 1000.0, notch);
+        assert_eq!(before.x + before.width, 400.0);
+        let after = place(rect(600.0, 70.0), panel, Horizontal::Center, 1000.0, notch);
+        assert_eq!(after.x, 600.0);
+        let far = place(rect(6.0, 100.0), panel, Horizontal::Left, 1000.0, notch);
+        assert_eq!(far.x, 6.0);
     }
 
     #[test]
