@@ -2086,7 +2086,7 @@ The settings are grouped by the thing they're about, not by situation, because e
 **How precise the even gap is:** measured with the island's and the screen's outlines flattened to 0.005 px.
 - **Circles** (`smoothing = 0`): exactly the gap. The arcs share a center.
 - **Squircles:** the arcs still share a center, but the easing curves on either side of them don't stay parallel, since a Figma squircle one gap in isn't a Figma squircle with the same smoothing. The gap dips to 5.91 px at smoothing 0.65 and 5.80 at 1.0. That's under a fifth of a pixel, so it's kept rather than drawing the island's corner as a true offset curve, which every morph and popover would have to carry.
-- **Squeezed into the island's height:** 5.77 px for a 20 px screen corner on a 30 px island, still within the quarter pixel. From about 21 px (logical) on, the island moves in: 2 px for 25, 8 for 30, 17 for 39.
+- **Squeezed into the island's height:** 5.77 px for a 20 px screen corner on a 30 px island, still within the quarter pixel. From 21 px (logical) on, the island moves in: 0.6 px for 21, 5 for 25, 11 for 30, 22 for 39.
 
 **Alternatives:**
 - **The theme's corners below the gap, as D-73 had it:** a square screen with round islands is what started this.
@@ -2094,5 +2094,5 @@ The settings are grouped by the thing they're about, not by situation, because e
 - **Lowering the island instead of moving it in:** it would break the row of islands at the top, and the notch's island height.
 - **Making the island's corner as round as the screen's:** capped by the island's height, which is the problem.
 
-**Cost:** no dependency. The shift costs a few million point-to-segment distances when the screen setting changes, nothing per frame.
+**Cost:** no dependency. Finding the shift takes up to 3 ms (release) when the screen setting changes, and nothing per frame.
 
