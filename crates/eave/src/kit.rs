@@ -53,20 +53,26 @@ pub fn node<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage
 /// it, its sliders and main button take that color: the content's, never one a plugin picked
 /// (D-61).
 pub fn panel<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage> {
-    in_panel(node, icons, Place::Panel)
+    in_panel(node, icons, Place::Panel, theme::SCROLL_MAX_HEIGHT)
 }
 
-/// A dialog's content: a panel's, with more room to scroll in (D-88).
-pub fn dialog<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage> {
-    in_panel(node, icons, Place::Dialog)
+/// A dialog's content: a panel's, with more room to scroll in (D-88): up to `scroll` tall.
+pub fn dialog<'a>(node: Node<AnyMessage>, icons: &Icons, scroll: f32) -> Element<'a, AnyMessage> {
+    in_panel(node, icons, Place::Dialog, scroll)
 }
 
-fn in_panel<'a>(node: Node<AnyMessage>, icons: &Icons, place: Place) -> Element<'a, AnyMessage> {
+fn in_panel<'a>(
+    node: Node<AnyMessage>,
+    icons: &Icons,
+    place: Place,
+    scroll: f32,
+) -> Element<'a, AnyMessage> {
     let content = large_cover(node.kind())
         .and_then(|url| icons.covers.get(url))
         .and_then(|cover| cover.as_ref()?.color());
     let ctx = Ctx {
         content,
+        scroll,
         ..Ctx::new(place)
     };
     render(node, ctx, icons)
@@ -1001,6 +1007,8 @@ struct Ctx {
     centered: bool,
     /// The color of what the popover shows (its cover's), for its sliders and main button.
     content: Option<Color>,
+    /// How tall a scroll gets.
+    scroll: f32,
 }
 
 impl Ctx {
@@ -1012,6 +1020,7 @@ impl Ctx {
             place,
             centered: false,
             content: None,
+            scroll: theme::SCROLL_MAX_HEIGHT,
         }
     }
 
@@ -1537,11 +1546,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 scroll
             };
             container(Glide::new(scroll).bottom(bottom))
-                .max_height(if ctx.place == Place::Dialog {
-                    theme::DIALOG_SCROLL_MAX_HEIGHT
-                } else {
-                    theme::SCROLL_MAX_HEIGHT
-                })
+                .max_height(ctx.scroll)
                 .into()
         }
         Kind::Badge {

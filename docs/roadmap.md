@@ -28,7 +28,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 
 - [x] **6. Media.** `plugins/media` on `crates/eave-mpris`: any MPRIS player over the session bus. The track's cover in the bar, title and artist, right click to play or pause, scroll to skip; cover, seek bar, controls and players in the popover ([D-56](decisions.md)). Covers through a new `ui::cover`, from files or https ([D-57](decisions.md)).
 - [x] **6.6 The dormer.** A keybind drops a search dialog out of the top center: widgets' actions and popovers, found by typing. Installed apps come through the new `apps` plugin, and the built-in widgets list what they can do ([D-84](decisions.md)).
-- [x] **6.7 Dialogs.** A widget's panel in the middle of the screen, which what opened it turns into: its popover, its item's island, a notification or the dormer. eave-claude's chat is the first ([D-88](decisions.md)).
+- [x] **6.7 Dialogs.** A widget's panel in the middle of the screen, which comes out of what opened it: its popover, its item's island, a notification or the dormer. eave-claude's chat is the first ([D-88](decisions.md)).
 - [x] **6.5 Style.** Black and white, with color only as a signal or from the content. A soft white fill marks what's current, the slider is a line that thickens under the pointer, and a media popover takes its cover's color ([D-61](decisions.md), [design.md](design.md)).
 
 ## Next

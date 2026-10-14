@@ -1,7 +1,8 @@
 //! A widget's dialog (D-88): its panel in the middle of the screen, for what needs more room than
-//! a popover, like a conversation. What was just acted on turns into it: the popover, the panel of
-//! notifications or the item's island morphs straight into it, and so does the dormer. Asked for
-//! out of the blue, it drops out of the top, as the dormer does. It goes back where it came from.
+//! a popover, like a conversation. It comes out of what was just acted on: the shape of the
+//! popover, the panel of notifications or the item's island springs on to it while the island
+//! stays on the bar, and the dormer turns into it. Asked for out of the blue, it drops out of the
+//! top, as the dormer does. It goes back where it came from.
 
 use std::time::{Duration, Instant};
 
@@ -16,7 +17,7 @@ pub const ORIGIN_WINDOW: Duration = Duration::from_secs(1);
 /// What happens to the dialog.
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// The one asked for is ready to open, this far from the surface's top.
+    /// The one asked for is ready to open, with this much of the screen below the surface's top.
     Opened(f32),
     /// Its island placed it.
     Placed(Rectangle),
@@ -31,8 +32,8 @@ pub enum Event {
 pub enum Origin {
     /// The notch, or the top edge, like the dormer.
     Top,
-    /// An island on the bar: the one whose item, popover or notification was acted on. It turns
-    /// into the dialog, and back.
+    /// An island on the bar: the one whose item, popover or notification was acted on. The dialog
+    /// comes out of its shape, and goes back onto it.
     Island(IslandId),
 }
 
@@ -67,19 +68,19 @@ pub struct Dialog {
     pub instance: u64,
     /// False while it goes back, until its island says it's done.
     pub open: bool,
-    /// Where its top goes, from the surface's top.
-    pub top: f32,
+    /// How far the screen reaches down from the surface's top: it's centered in that.
+    pub room: f32,
     /// Where its island put it, in surface coordinates. The surface grows to fit it.
     pub rect: Option<Rectangle>,
     pub origin: Origin,
 }
 
 impl Dialog {
-    pub fn new(instance: u64, top: f32, origin: Origin) -> Self {
+    pub fn new(instance: u64, room: f32, origin: Origin) -> Self {
         Self {
             instance,
             open: true,
-            top,
+            room,
             rect: None,
             origin,
         }

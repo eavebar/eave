@@ -3,8 +3,9 @@
 //! surface grows to make room while it's there. Widgets' notifications turn the right island at
 //! the screen's edge into a panel the same way, while there are any. The dormer, the search
 //! dialog for widgets' actions, drops out of the top of the screen the same way too (D-84). So do
-//! widgets' dialogs, which whatever was acted on to open them turns into (D-88).
+//! widgets' dialogs, which come out of whatever was acted on to open them (D-88).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -71,6 +72,8 @@ pub struct Bar {
     recent: Recent,
     /// A widget's dialog, from when it opens until it's back where it came from (D-88).
     dialog: Option<Dialog>,
+    /// Each island's shape as it was last drawn, for a dialog to come out of and go back into.
+    shapes: RefCell<HashMap<IslandId, island::Shape>>,
     /// The dialog asked for, while where its top goes is looked up: whose, and where it comes
     /// out of.
     asked: Option<(u64, Origin)>,
@@ -104,7 +107,7 @@ pub struct Bar {
 }
 
 /// One island: its zone, and which of the zone's islands it is, counted in bar order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IslandId {
     zone: Zone,
     index: usize,
@@ -215,9 +218,8 @@ const NOTICES: u64 = u64::MAX;
 const DORMER: u64 = u64::MAX - 1;
 /// A widget dialog's popover key.
 const DIALOG: u64 = u64::MAX - 2;
-/// Where the dormer's top, or a dialog's, goes when the screen's height can't be had, from the
-/// surface's top.
-const CENTER_TOP: f32 = 160.0;
+/// How tall the screen is taken to be, from the surface's top, when its height can't be had.
+const CENTER_ROOM: f32 = 800.0;
 
 /// The time a notification gets back when the pointer leaves the panel, if it had less: enough
 /// to read the last words or reach for its close button.
@@ -319,6 +321,7 @@ impl Bar {
             notch_sag: zones::Sag::default(),
             recent: Recent::default(),
             dialog: None,
+            shapes: RefCell::default(),
             asked: None,
             touched: None,
             windows: Vec::new(),
@@ -675,8 +678,8 @@ impl Bar {
     }
 
     /// Opens `id`'s dialog, out of what was just acted on. One on screen takes it in where it is,
-    /// and the dormer turns into it. Otherwise where it goes is looked up first, then the island
-    /// acted on turns into it, popover and all, or it drops out of the top.
+    /// and the dormer turns into it. Otherwise the screen's height is looked up first, then it
+    /// comes out of the island acted on, popover and all, or drops out of the top.
     fn ask_dialog(&mut self, id: u64) -> Task<Message> {
         let wanted = self
             .find(id)
@@ -697,11 +700,11 @@ impl Bar {
         }
         // Picked in the dormer: the dormer turns into it, and it goes back into the notch.
         if touch == Some(Touch::Dormer)
-            && let Some(top) = self.dormer.as_ref().map(|session| session.top)
+            && let Some(room) = self.dormer.as_ref().map(|session| session.room)
         {
             let mut hooks = self.close_popover();
             self.dormer = None;
-            self.dialog = Some(Dialog::new(id, top, Origin::Top));
+            self.dialog = Some(Dialog::new(id, room, Origin::Top));
             self.pointer_inside = false;
             hooks.extend(self.dialog_opened(id));
             return send(hooks);
@@ -711,12 +714,17 @@ impl Bar {
             _ => Origin::Top,
         };
         self.asked = Some((id, origin));
-        Task::perform(center_top(self.screen.inset[0]), |top| {
-            Message::Dialog(dialog::Event::Opened(top))
+        Task::perform(center(self.screen.inset[0]), |(_, room)| {
+            Message::Dialog(dialog::Event::Opened(room))
         })
     }
 
-    /// Whether `island` is on the bar the dialog shows on, to turn into it.
+    /// Where `island`'s shape is put as it's drawn.
+    fn shape(&self, island: IslandId) -> island::Shape {
+        self.shapes.borrow_mut().entry(island).or_default().clone()
+    }
+
+    /// Whether `island` is on the bar the dialog shows on, to come out of it.
     fn island_shows(&self, island: IslandId) -> bool {
         island.zone != Zone::Dormer
             && (self
@@ -944,21 +952,15 @@ impl Bar {
     }
 
     /// Whether the notifications wait: their island is an open popover, and an island does one
-    /// thing at a time.
+    /// thing at a time. Not for a dialog that came out of it: the island is back meanwhile.
     fn toasts_held(&self) -> bool {
         let island = self.notice_island();
-        // Or a dialog it turned into: they come back once it's back.
-        let dialog = self
-            .dialog
-            .as_ref()
-            .is_some_and(|dialog| dialog.origin == Origin::Island(island));
-        dialog
-            || self.popovers.iter().any(|popover| {
-                popover.open
-                    && self
-                        .find(popover.instance)
-                        .is_some_and(|instance| instance.island() == island)
-            })
+        self.popovers.iter().any(|popover| {
+            popover.open
+                && self
+                    .find(popover.instance)
+                    .is_some_and(|instance| instance.island() == island)
+        })
     }
 
     /// Takes in `id`'s notices: new ones come in on top, changed ones are updated in place, and
@@ -1551,10 +1553,12 @@ fn handle_dormer(bar: &mut Bar, event: dormer::Event) -> Task<Message> {
         Event::Toggle if bar.dormer_open() => send(bar.close_popover()),
         Event::Toggle if bar.toast_window().is_some() => {
             let inset = bar.screen.inset[0];
-            Task::perform(center_top(inset), |top| Message::Dormer(Event::Opened(top)))
+            Task::perform(center(inset), |(top, room)| {
+                Message::Dormer(Event::Opened(top, room))
+            })
         }
         Event::Toggle => Task::none(),
-        Event::Opened(top) => {
+        Event::Opened(top, room) => {
             if bar.dormer_open() || bar.toast_window().is_none() {
                 return Task::none();
             }
@@ -1570,9 +1574,10 @@ fn handle_dormer(bar: &mut Bar, event: dormer::Event) -> Task<Message> {
                 Some(session) => {
                     session.open = true;
                     session.top = top;
+                    session.room = room;
                     session.search(String::new(), &bar.recent);
                 }
-                None => bar.dormer = Some(Session::new(top)),
+                None => bar.dormer = Some(Session::new(top, room)),
             }
             bar.refresh_dormer();
             send(hooks)
@@ -1625,7 +1630,7 @@ fn handle_dormer(bar: &mut Bar, event: dormer::Event) -> Task<Message> {
 fn handle_dialog(bar: &mut Bar, event: dialog::Event) -> Task<Message> {
     use dialog::Event;
     match event {
-        Event::Opened(top) => {
+        Event::Opened(room) => {
             let Some((id, origin)) = bar.asked.take() else {
                 return Task::none();
             };
@@ -1635,8 +1640,9 @@ fn handle_dialog(bar: &mut Bar, event: dialog::Event) -> Task<Message> {
             if !wanted || bar.dialog_open() || bar.toast_window().is_none() {
                 return Task::none();
             }
-            // The popover it comes out of turns into it, straight on: there's nothing left of it
-            // to fold back. The dormer gives way.
+            // The popover it comes out of goes at once, under the dialog's shape as that sets
+            // off: there's nothing left of it to fold back, and the island is back. The dormer
+            // gives way.
             let hooks = bar.close_popover();
             if let Origin::Island(island) = origin {
                 let instances = &bar.instances;
@@ -1648,8 +1654,7 @@ fn handle_dialog(bar: &mut Bar, event: dialog::Event) -> Task<Message> {
             }
             let mut hooks = hooks;
             bar.dormer = None;
-            let top = top.max(bar.screen.surface_height() as f32);
-            bar.dialog = Some(Dialog::new(id, top, origin));
+            bar.dialog = Some(Dialog::new(id, room, origin));
             // Out of the bar, it was opened by a click there; out of the top, by nothing there.
             bar.pointer_inside = origin != Origin::Top;
             hooks.extend(bar.dialog_opened(id));
@@ -1687,19 +1692,23 @@ fn handle_dialog(bar: &mut Bar, event: dialog::Event) -> Task<Message> {
     }
 }
 
-/// Where the dormer's top goes, or a dialog's, from the surface's: a fifth of the way down the
-/// focused screen. `inset` is how far down the surface starts.
-async fn center_top(inset: f32) -> f32 {
-    let Some(monitor) = notch::focused().await else {
-        return CENTER_TOP;
+/// Where the dormer's top goes, from the surface's: a fifth of the way down the focused screen;
+/// and how far that screen reaches down from the surface's top, which a dialog is centered in.
+/// `inset` is how far down the surface starts.
+async fn center(inset: f32) -> (f32, f32) {
+    let height = match notch::focused().await {
+        // Turned a quarter, the screen's height is the mode's width.
+        Some(monitor) => {
+            let height = if monitor.transform % 2 == 1 {
+                monitor.width
+            } else {
+                monitor.height
+            };
+            height as f32 / monitor.scale
+        }
+        None => CENTER_ROOM + inset,
     };
-    // Turned a quarter, the screen's height is the mode's width.
-    let height = if monitor.transform % 2 == 1 {
-        monitor.width
-    } else {
-        monitor.height
-    };
-    (height as f32 / monitor.scale / 5.0 - inset).round()
+    ((height / 5.0 - inset).round(), (height - inset).round())
 }
 
 /// `name` with a capital first letter: a widget's name as a title.
@@ -1764,14 +1773,10 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                 .filter(|popover| popover.window == window)
                 .filter(|popover| instances().any(|instance| instance.id == popover.instance))
                 .max_by_key(|popover| popover.open);
-            // A dialog it turned into wins, then a popover: the notifications wait for them.
-            let dialog = bar.dialog.as_ref().filter(|dialog| {
-                bar.toast_window() == Some(window) && dialog.origin == Origin::Island(island)
-            });
-            let popover = match (dialog, popover) {
-                (Some(dialog), _) => Some(dialog_popover(bar, dialog)),
-                (None, Some(popover)) => Some(popover_view(bar, popover)),
-                (None, None) => notices
+            // A popover wins: the notifications wait for it.
+            let popover = match popover {
+                Some(popover) => Some(popover_view(bar, popover)),
+                None => notices
                     .filter(|_| island == notice_island)
                     .map(|panel| notices_view(bar, panel)),
             };
@@ -1807,7 +1812,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                     .notch(bar.screen.notch.map(|notch| notch.width))
                     .shoulders(shoulders)
                     .corners(bar.screen.island_corners(Place::default()))
-                    .height(bar.screen.island_height()),
+                    .height(bar.screen.island_height())
+                    .shape(bar.shape(island)),
                 attach,
             ))
         };
@@ -1820,16 +1826,9 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             .filter(|instance| instance.entry.zone == zone)
             .map(|instance| instance.entry.island)
             .collect();
-        // Notifications show even when no widget on the right does, and so does a dialog they
-        // turned into.
+        // Notifications show even when no widget on the right does.
         if notices.is_some() && zone == notice_island.zone {
             indices.push(notice_island.index);
-        }
-        if let Some(Origin::Island(island)) = bar.dialog.as_ref().map(|dialog| dialog.origin)
-            && island.zone == zone
-            && bar.toast_window() == Some(window)
-        {
-            indices.push(island.index);
         }
         indices.sort_unstable();
         indices.dedup();
@@ -1901,18 +1900,14 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
 
 /// The island in the middle at the top, for the dormer or a widget's dialog: a dot where it comes
 /// out of the notch, or the top edge, which drops out as a ball and unfolds into it (D-86). The
-/// same island for both, so the dormer can turn into a dialog (D-88). A dialog that an island on
-/// the bar turned into is that island's instead. Only there while one is, on the bar the
-/// notifications show on.
+/// same island for both, so the dormer can turn into a dialog (D-88). A dialog that comes out of
+/// an island on the bar starts as that island's shape instead, and the island stays. Only there
+/// while one is, on the bar the notifications show on.
 fn center_view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     if bar.toast_window() != Some(window) {
         return Space::new().into();
     }
-    let dialog = bar
-        .dialog
-        .as_ref()
-        .filter(|dialog| dialog.origin == Origin::Top);
-    let popover = match (dialog, &bar.dormer) {
+    let popover = match (&bar.dialog, &bar.dormer) {
         (Some(dialog), _) => dialog_popover(bar, dialog),
         (None, Some(session)) => dormer_popover(bar, session),
         (None, None) => return Space::new().into(),
@@ -1931,19 +1926,25 @@ fn center_view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         .into()
 }
 
-/// A widget's dialog, as an island turns into it: the one acted on, which morphs straight into it
-/// from its popover or its items, or the one in the middle, which drops out of the notch like the
-/// dormer.
+/// A widget's dialog, as the island in the middle turns into it: out of the shape of the island
+/// acted on, its popover or its items, which morphs straight into it; or out of the notch like
+/// the dormer.
 fn dialog_popover<'a>(bar: &'a Bar, dialog: &Dialog) -> island::Popover<'a, Message> {
     use dialog::Event;
     let id = dialog.instance;
+    // The scroll gives way on a short screen, so it always fits.
+    let scroll = (dialog.room - style::DIALOG_CHROME).clamp(0.0, style::DIALOG_SCROLL_MAX_HEIGHT);
     // A widget can stop offering its dialog while it goes back: it goes back empty.
     let content: Element<'_, AnyMessage> =
         match bar.find(id).and_then(|instance| instance.widget.dialog()) {
-            Some(panel) => kit::dialog(panel.into_node(), &bar.icons),
+            Some(panel) => kit::dialog(panel.into_node(), &bar.icons, scroll),
             None => Space::new().into(),
         };
-    let top = dialog.origin == Origin::Top;
+    let home = match dialog.origin {
+        Origin::Island(island) => Some(bar.shape(island)),
+        Origin::Top => None,
+    };
+    let top = home.is_none();
     island::Popover {
         key: DIALOG,
         content: content.map(move |message| Message::Widget(id, message)),
@@ -1952,12 +1953,16 @@ fn dialog_popover<'a>(bar: &'a Bar, dialog: &Dialog) -> island::Popover<'a, Mess
         on_closed: Message::Dialog(Event::Closed),
         on_hover: None,
         width: style::DIALOG_WIDTH,
-        placement: Placement::Centered { top: dialog.top },
+        placement: Placement::Middle {
+            room: dialog.room,
+            min_top: bar.screen.surface_height() as f32,
+        },
         drop: top.then(|| dormer_drop(&bar.screen)),
         on_neck: top.then(|| -> Box<dyn Fn(bool) -> Message> {
             Box::new(|caught| Message::Dialog(Event::Neck(caught)))
         }),
         sag: top.then(|| bar.notch_sag.clone()),
+        home,
         on_key: None,
     }
 }
@@ -2048,6 +2053,7 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         drop: Some(dormer_drop(&bar.screen)),
         on_neck: Some(Box::new(|caught| Message::Dormer(Event::Neck(caught)))),
         sag: Some(bar.notch_sag.clone()),
+        home: None,
         on_key: Some(Box::new(|key| {
             use keyboard::key::Named;
             match key {
@@ -2221,6 +2227,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         drop: None,
         on_neck: None,
         sag: None,
+        home: None,
     }
 }
 
@@ -2295,6 +2302,7 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
         drop: None,
         on_neck: None,
         sag: None,
+        home: None,
     }
 }
 
@@ -2377,6 +2385,8 @@ pub fn style(_: &Bar, _: &Theme) -> theme::Style {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use eave_api::ui::label;
     use eave_api::{Effect, Widget};
 
@@ -3175,7 +3185,7 @@ mod tests {
     #[test]
     fn the_dormer_opens_with_the_keyboard_and_closes_back() {
         let (mut bar, window) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         assert!(bar.dormer_open() && bar.is_open());
         assert_eq!(bar.keyboard, Some(window));
         dormer(&mut bar, dormer::Event::Placed(placed()));
@@ -3193,7 +3203,7 @@ mod tests {
     #[test]
     fn the_notch_pinches_as_the_dormer_leaves_and_flattens_as_it_lands() {
         let (mut bar, _) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         assert_eq!(bar.notch_kick, None, "not before the drop leaves");
         dormer(&mut bar, dormer::Event::Neck(false));
         assert_eq!(bar.notch_kick, Some((1, zones::Kick::Pinch)));
@@ -3205,7 +3215,7 @@ mod tests {
     #[test]
     fn the_dormer_never_covers_the_bar() {
         let (mut bar, _) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(-50.0));
+        dormer(&mut bar, dormer::Event::Opened(-50.0, 1000.0));
         let top = bar.dormer.as_ref().unwrap().top;
         assert_eq!(top, bar.screen.surface_height() as f32);
     }
@@ -3218,7 +3228,7 @@ mod tests {
         let _ = update(&mut bar, Message::Pressed(window::Id::unique(), 0, None));
         let _ = update(&mut bar, Message::BarPressed);
         assert_eq!(ASKED.get(), 0);
-        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         assert!(ASKED.get() > 0);
         assert!(rows(&bar).contains(&"Mute".to_string()));
     }
@@ -3230,7 +3240,7 @@ mod tests {
     #[test]
     fn typing_narrows_the_list_and_arrows_pick_a_row() {
         let (mut bar, _) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         // Its actions, and its popover by the widget's name.
         assert_eq!(rows(&bar), ["Mute", "Show it", "Acting"]);
         dormer(&mut bar, dormer::Event::Query("sound".into()));
@@ -3245,13 +3255,13 @@ mod tests {
     #[test]
     fn picking_an_action_sends_it_to_its_widget_and_closes_the_dormer() {
         let (mut bar, _) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         dormer(&mut bar, dormer::Event::Query("mute".into()));
         dormer(&mut bar, dormer::Event::Run(0));
         assert!(!bar.is_open());
 
         // The widget got it: its action follows its state now, and comes first as a recent pick.
-        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         assert_eq!(rows(&bar)[0], "Unmute");
         // The list follows the widget while it's open, too.
         tell_acting(&mut bar, Act::Mute);
@@ -3261,14 +3271,14 @@ mod tests {
     #[test]
     fn an_action_or_a_row_can_open_a_popover() {
         let (mut bar, _) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         dormer(&mut bar, dormer::Event::Query("show".into()));
         dormer(&mut bar, dormer::Event::Run(0));
         assert!(bar.popover_of(0).is_some());
         assert!(!bar.dormer_open());
 
         let _ = update(&mut bar, Message::BarPressed);
-        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         dormer(&mut bar, dormer::Event::Query("acting".into()));
         dormer(&mut bar, dormer::Event::Run(0));
         assert!(bar.popover_of(0).is_some());
@@ -3278,7 +3288,7 @@ mod tests {
     fn the_dormer_and_popovers_take_turns() {
         let (mut bar, window) = acting_bar();
         let _ = update(&mut bar, Message::Pressed(window, 0, None));
-        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         assert!(bar.popover_of(0).is_none() && bar.dormer_open());
         let _ = update(&mut bar, Message::Pressed(window, 0, None));
         assert!(bar.popover_of(0).is_some() && !bar.dormer_open());
@@ -3287,7 +3297,7 @@ mod tests {
     #[test]
     fn a_reload_takes_a_gone_widgets_rows_with_it() {
         let (mut bar, _) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         let _ = bar.apply(config("[[right]]\nwidget = \"d\""));
         assert!(rows(&bar).is_empty());
         // A row picked from before goes nowhere.
@@ -3300,7 +3310,7 @@ mod tests {
         registry.widget::<Acting>("acting");
         let (mut bar, _) = Bar::new(registry, config("[[dormer]]\nwidget = \"acting\""));
         let _ = update(&mut bar, Message::WindowOpened(window::Id::unique()));
-        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         assert_eq!(rows(&bar), ["Mute", "Show it"]);
         dormer(&mut bar, dormer::Event::Run(1));
         assert!(!bar.is_open(), "no island to grow a popover out of");
@@ -3390,7 +3400,7 @@ mod tests {
     };
 
     #[test]
-    fn its_popover_turns_into_a_dialog_asked_for_from_it_and_back_into_its_island() {
+    fn a_dialog_asked_for_from_a_popover_comes_out_of_it_and_leaves_its_island_on_the_bar() {
         let (mut bar, window) = talking_bar();
         let _ = update(&mut bar, Message::Touched(window, 0));
         let _ = update(&mut bar, Message::Pressed(window, 0, None));
@@ -3400,14 +3410,17 @@ mod tests {
         assert_eq!(bar.asked, Some((0, Origin::Island(LEFT))));
         assert!(bar.dialog.is_none(), "not before its top is known");
 
-        let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(200.0)));
+        let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(1000.0)));
         let dialog = bar.dialog.as_ref().unwrap();
         assert!(dialog.open && dialog.instance == 0);
         assert_eq!(dialog.origin, Origin::Island(LEFT));
         assert!(
             bar.popovers.is_empty(),
-            "the popover is the dialog now, with nothing to fold back"
+            "the popover became the dialog, with nothing to fold back: the island is back"
         );
+        // It comes out of the island's shape as drawn, and goes back into it.
+        let home = dialog_popover(&bar, dialog).home.unwrap();
+        assert!(Rc::ptr_eq(&home, &bar.shape(LEFT)));
         assert!(bar.is_open() && bar.dialog_of(0));
         assert_eq!(bar.keyboard, Some(window));
         assert_eq!(heard(bar.dialog_opened(0)), [(0, Talk::Opened)]);
@@ -3432,7 +3445,7 @@ mod tests {
         });
         talk(&mut bar, Talk::Open);
         assert_eq!(bar.asked, Some((0, Origin::Top)));
-        let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(200.0)));
+        let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(1000.0)));
         let _ = update(&mut bar, Message::Dialog(dialog::Event::Neck(false)));
         assert_eq!(bar.notch_kick, Some((1, zones::Kick::Pinch)));
     }
@@ -3444,18 +3457,24 @@ mod tests {
         let _ = update(&mut bar, Message::Acted(island, 1, AnyMessage::new(())));
         talk(&mut bar, Talk::Open);
         assert_eq!(bar.asked, Some((0, Origin::Island(island))));
+        let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(1000.0)));
+        assert!(bar.dialog.is_some());
+        assert!(
+            !bar.toasts_held(),
+            "the island is back, and so are its notifications"
+        );
     }
 
     #[test]
     fn the_dormer_turns_into_a_dialog_picked_in_it() {
         let (mut bar, _) = talking_bar();
-        dormer(&mut bar, dormer::Event::Opened(240.0));
+        dormer(&mut bar, dormer::Event::Opened(240.0, 1000.0));
         dormer(&mut bar, dormer::Event::Query("talk".into()));
         dormer(&mut bar, dormer::Event::Run(0));
         assert!(bar.dormer.is_none() && bar.asked.is_none());
         let dialog = bar.dialog.as_ref().unwrap();
         assert!(dialog.open);
-        assert_eq!((dialog.top, dialog.origin), (240.0, Origin::Top));
+        assert_eq!((dialog.room, dialog.origin), (1000.0, Origin::Top));
     }
 
     #[test]
@@ -3468,7 +3487,7 @@ mod tests {
         ] {
             let (mut bar, _) = talking_bar();
             talk(&mut bar, Talk::Open);
-            let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(200.0)));
+            let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(1000.0)));
             let _ = update(&mut bar, Message::Dialog(dialog::Event::Placed(placed())));
             assert_eq!(bar.dialog.as_ref().unwrap().rect, Some(placed()));
             let _ = update(&mut bar, close);
@@ -3483,14 +3502,14 @@ mod tests {
     fn a_dialog_takes_turns_with_popovers_and_the_dormer() {
         let (mut bar, window) = talking_bar();
         talk(&mut bar, Talk::Open);
-        let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(200.0)));
+        let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(1000.0)));
         assert!(bar.dialog_open());
         let _ = update(&mut bar, Message::Pressed(window, 0, None));
         assert!(bar.popover_of(0).is_some() && !bar.dialog_open());
 
         talk(&mut bar, Talk::Open);
         assert!(bar.dialog_open(), "one going back turns around");
-        dormer(&mut bar, dormer::Event::Opened(200.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         assert!(bar.dormer_open() && bar.dialog.is_none());
     }
 
@@ -3498,7 +3517,7 @@ mod tests {
     fn a_reload_that_drops_the_instance_drops_its_dialog() {
         let (mut bar, _) = talking_bar();
         talk(&mut bar, Talk::Open);
-        let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(200.0)));
+        let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(1000.0)));
         let _ = bar.apply(config("[[right]]\nwidget = \"d\""));
         assert!(bar.dialog.is_none());
     }
