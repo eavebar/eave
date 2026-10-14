@@ -1864,3 +1864,49 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 - a `-symbolic` lookup tinted like `symbol`: still depends on the theme having it.
 - the battery plugin sending an `x-eave-*` hint: other apps' device notifications (a volume OSD, a VPN) would still show letters.
 
+
+---
+
+## D-88: The bar shows on hover or hides over fullscreen windows, and notifications wait
+
+**Status:** accepted (2026-10-14). Amends roadmap step 0 (the bar always on the `top` layer, always keeping its exclusive zone) and [D-47](#d-47-notices-plugins-list-notifications-the-right-island-turns-into-them) (notices show as soon as they come).
+
+**What:**
+- Two new tables in config.toml, one per thing they're about, in the style of `notch`, `screen` and `islands`:
+
+  ```toml
+  bar = { show = "always", fullscreen = "hide", peek = true }
+  notifications = { fullscreen = "critical" }
+  ```
+
+  - `bar.show`, outside fullscreen, is `"always"` or `"hover"`.
+  - `bar.fullscreen` is `"hide"`, `"hover"` or `"show"`.
+  - `bar.peek` brings a bar shown on hover out for `REVEAL_SHOWN` on a workspace switch.
+  - `notifications.fullscreen` is `"show"`, `"critical"` or `"hold"`.
+- **Fullscreen** means a client on the focused monitor's active workspace whose Hyprland fullscreen mode has bit 2. Bit 1 is maximized, which respects the exclusive zone. Hyprland's `fullscreen>>` event fires for both and only for the focused workspace, so the host doesn't trust it on its own. On that event, a workspace or monitor change, and a window opening, closing or moving, it queries `monitors` and `clients` once (`Message::CheckFullscreen`). eave-hyprland gains `Event::Fullscreen`, `Client::fullscreen` with `Client::covers()`, and `Monitor::active_workspace`.
+- **Out or hidden.** The bar is out when its mode is `show`, or `hover` and the pointer is on it, or while it peeks, or while a popover, the notification panel or the dormer is on it, until they have folded back.
+  - Hidden, the islands are drawn lifted off the screen by a `Lift` widget on `MORPH`. The layout doesn't move.
+  - The input region becomes a `REVEAL_EDGE` (2 px) strip on hover, else nothing.
+  - On hover, the pointer gate (`popover_event`) stays open, so `CursorEntered` and `CursorLeft` arrive. Leaving hides it after `HIDE_AFTER` (400 ms).
+- **Exclusive zone.** It is 0 when `bar.show = "hover"`, even while the bar is out, so windows never move as it comes and goes. In fullscreen it doesn't matter.
+- **Layer.** The surfaces go on `overlay` over a fullscreen window while the bar is out, or while `bar.fullscreen = "hover"` waits for the pointer. Otherwise they stay on `top`.
+  - Going back to `top` waits for the slide away (`lift::slide_time`, the time `MORPH` takes to settle from a step).
+  - Hidden on purpose in fullscreen, the bar is under the window, not just transparent above it.
+- **Peeks** come from a workspace switch (with `peek = true`) and from any nudge, and only for a bar shown on hover. With `fullscreen = "hide"`, the bar stays hidden for those, and comes out only for a notification or the dormer.
+- **Held notifications.** In fullscreen, `Bar::held` keeps them out of `cards()`. A panel opens only for those that aren't held. A held notice keeps its place in `toasts`, its clock stopped, since only shown cards run. When fullscreen ends, it shows with its whole time left. Going fullscreen with uncritical ones on screen folds them away until it ends.
+
+**Why:** the bar was on the `top` layer, which Hyprland draws under fullscreen windows. Playing a video fullscreen hid the bar, and every notification with it, since they grow out of the bar's own surface (D-28, D-47). They even ran out there, unseen. Putting notifications on `overlay` all the time would have drawn every one over a film. So it's a setting, and the default lets only critical ones through and keeps the rest for later, the way phones do. The bar's own visibility was the same problem from the other side: once there's a mode that hides it over fullscreen, hiding it on hover elsewhere is the same machinery.
+
+The settings are grouped by the thing they're about, not by situation, because each key then reads on its own (`bar.fullscreen = "hover"`). The vision rules out a config language, and this needs no conditions. Timings stay in `theme.rs`, like every other motion.
+
+**Alternatives:**
+- **Always `overlay` when fullscreen.** A transparent overlay surface over a fullscreen video can keep Hyprland from scanning the video out directly, which costs power for nothing while the bar is hidden.
+- **A separate surface for notifications.** Rejected in D-28 for popovers; the panel is the right island's morph.
+- **Trusting `fullscreen>>1` alone.** That flags maximized windows, which don't cover the bar.
+- **Polling `activeworkspace.hasfullscreen`.** There's an event, so no polling (AGENTS.md). `hasfullscreen` is also true for maximized windows.
+- **Changing the exclusive zone as the bar comes and goes on hover.** Windows would jump every time the pointer touched the top.
+- **Settings grouped by situation** (`fullscreen = { bar = "hover", notifications = "critical" }`): one table would mix two subjects, and the normal case would need a table of its own.
+
+**Cost:** no dependency. While the bar is shown on hover, every pointer event on the bar's surface runs the subscription's filter, which returns nothing except for enter and leave. One `clients` and one `monitors` query per window or workspace event.
+
+**Measured** (Asahi aarch64, release, the user's config with every plugin, the default GPU renderer, each alone on a session bus of its own, 12 s after start, two alternating runs): binary 19,427,344 bytes before and after (stripped, page-aligned). RSS 77.8 and 77.8 MB on main, 77.6 and 77.5 MB on this branch, 77.7 and 77.7 MB with `bar.show = "hover"`: unchanged within noise. Idle CPU 1, 1, 1, 1, 1 and 0 ticks over 10 s. Only aarch64 was built: nothing here is arch-specific.

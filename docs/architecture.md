@@ -81,6 +81,17 @@ The dormer is the host's search dialog for widgets' actions ([D-84](decisions.md
 4. A pick (`Run`) closes the dormer, remembers the pick, and sends the action's message to its widget through the usual `Message::Widget` route, or opens the widget's popover.
 5. It closes like a popover: Esc, a key the field doesn't take, a click elsewhere, or the keybind again. When its island is back, it reports `Closed` and the surface shrinks.
 
+## Showing and hiding
+
+The bar can show on hover, and over fullscreen windows it shows, hides or shows on hover, as `bar` in config.toml says. In fullscreen, notifications can wait ([D-88](decisions.md)):
+
+1. The host's socket2 filter asks Hyprland whether a window covers the focused screen on the way in, and whenever windows open, close or move, go fullscreen or the workspace changes (`CheckFullscreen`). The answer (`Fullscreen`) is a client on the focused monitor's workspace with fullscreen mode 2. Mode 1 is maximized, which keeps clear of the bar.
+2. `Bar::out` says whether the bar is out: always, or while hovered, peeking, or with a popover, the notification panel or the dormer on it, until they've folded back. `view` wraps the islands in a `Lift` (`lift.rs`), which slides them up off the screen on `MORPH` when it isn't. Only the drawing moves, not the layout. Lifted and at rest, they aren't drawn and get no events.
+3. `sync_shown` runs after every message. When `out` changes, it refits the surfaces. A hidden bar's input region is a `REVEAL_EDGE` strip at the top if it shows on hover, else nothing. Popovers, notifications and the dormer add their rects as before. On hover, the bar listens to the pointer: entering brings it out, and leaving hides it after `HIDE_AFTER` unless it comes back (`Unhover`).
+4. Over a fullscreen window the surfaces go on the `overlay` layer while the bar shows or waits for the pointer (`LayerChange`). When it's hidden on purpose, they go back to `top` once it has slid away (`Sink`, after `lift::slide_time`). The fullscreen window is then alone above them.
+5. A bar shown on hover keeps an exclusive zone of 0, so windows don't move when it comes out.
+6. In fullscreen, `Bar::held` keeps notifications out of the cards. They don't count down, since only shown cards do, and the panel opens only for the ones that aren't held.
+
 ## Data sources by widget
 
 | Widget | Source | Mechanism |
@@ -127,6 +138,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/label.rs             a label that can squish (outlines while squished)
   src/squircle.rs          the squircle path
   src/jelly.rs             an island's outline as a ring of coupled springs, which nudges poke
+  src/lift.rs              the bar sliding up off the screen and back, drawn lifted on a spring
   src/zones.rs             the three zones across the bar: sides at the edges, the center pushed aside when they reach it; the notch and grown edge, squished by the dormer's drop
   src/slot.rs              item wrapper: clicks, scroll steps, and the pointer for alternates
   src/alternate.rs         alternate: one option at a time with fades; hover, and growing (expand)
