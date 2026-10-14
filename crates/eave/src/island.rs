@@ -916,9 +916,12 @@ impl Motion {
     }
 
     /// Bounces a drop down (`way` 1) or up (−1): it lurches that way and back, its sides lean into
-    /// it and the side it goes toward bulges, like an island nudged up or down, a little more.
+    /// it and the side it goes toward bulges, like an island nudged up or down, a little more and
+    /// slower.
     fn bounce(&mut self, way: f32) {
-        self.pace = 1.0;
+        // Played slower, like a nudge that says how long it lasts: the same kicks, stretched out.
+        self.pace = (theme::DROP_BOUNCE_LASTING.as_secs_f32() / REACT.settle_time().as_secs_f32())
+            .clamp(0.5, 5.0);
         self.push_y.velocity = way * react(theme::DROP_BOUNCE);
         let (lean, bump) = (
             jelly::poke(theme::JELLY_LEAN),

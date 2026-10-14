@@ -175,6 +175,9 @@ pub const NECK_SPREAD: f32 = 60.0;
 /// How far a drop lurches as its neck lets go of it or catches it, and as it falls into place,
 /// in logical pixels: a nudge up or down, bigger.
 pub const DROP_BOUNCE: f32 = 3.0;
+/// How long a drop's bounce lasts: a nudge's motion slowed down to this, as a paced nudge is.
+/// Slower than a nudge's own, because a drop is heavier than a workspace mark.
+pub const DROP_BOUNCE_LASTING: Duration = Duration::from_millis(420);
 /// How far the notch pinches in from each side as the drop leaves it, and flattens as it lands back,
 /// in logical pixels. Never past its grown room (D-75): it doesn't shrink smaller than it is.
 pub const NOTCH_PINCH: f32 = 4.0;
