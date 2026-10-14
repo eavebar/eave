@@ -1,5 +1,5 @@
 //! Check health: runs `eave doctor --report`, waits for the report it writes, and reads it
-//! (D-95, D-97).
+//! (D-96, D-98).
 
 use std::io;
 use std::os::fd::OwnedFd;

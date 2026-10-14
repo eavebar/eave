@@ -1,4 +1,4 @@
-//! `eave doctor` (D-95): checks what the bar depends on and says what's wrong, and what to do
+//! `eave doctor` (D-96): checks what the bar depends on and says what's wrong, and what to do
 //! about it. config.toml, the widgets it names, their keys, the screen, and the systemd units.
 //! Runs without a bar, so it helps most when the bar won't start. The `essential` plugin's Check
 //! health runs it with `--report` and shows what it wrote.
@@ -236,7 +236,7 @@ fn screen_checks(
                 }
             },
         ),
-        (false, _) if setting.screen.corners != [0.0; 4] => Check::good(
+        (false, _) if setting.screen.is_some() => Check::good(
             format!("{name}'s corners are measured"),
             format!("In {table} of config.toml."),
         ),
@@ -298,7 +298,7 @@ async fn systemd_checks() -> Vec<Check> {
     checks
 }
 
-/// What eave-build runs `check` and `update` in, for the `update` plugin (D-96).
+/// What eave-build runs `check` and `update` in, for the `update` plugin (D-97).
 const UPDATE_UNITS: [&str; 2] = ["eave-update.service", "eave-update-check.service"];
 
 fn unit_check(unit: &str, state: Option<&str>, fix: &str) -> Check {
@@ -462,6 +462,15 @@ mod tests {
         // No notch: an external monitor, or a rotated panel.
         let checks = screen_checks(Some(&monitor("DP-1")), Some((None, 74.0)), &screens);
         assert_eq!(levels(&checks), [Level::Good, Level::Good]);
+        assert!(checks[1].title.contains("nothing measured"));
+        let corners =
+            parse("[monitor.\"DP-1\"]\nscreen = { corners = [20, 20, 0, 0] }\n").screens();
+        let checks = screen_checks(Some(&monitor("DP-1")), None, &corners);
+        assert!(
+            checks[1].title.contains("corners are measured"),
+            "{}",
+            checks[1].title
+        );
         let rotated = Monitor {
             transform: 1,
             ..monitor("eDP-1")

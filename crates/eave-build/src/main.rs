@@ -259,7 +259,7 @@ impl std::fmt::Display for Moved {
     }
 }
 
-/// What `--summary` writes: what moved, and whether it all worked (D-96).
+/// What `--summary` writes: what moved, and whether it all worked (D-97).
 #[derive(serde::Serialize)]
 struct Summary<'a> {
     ok: bool,
@@ -286,7 +286,7 @@ fn write_summary(name: &str, result: &Result<()>, moved: &[Moved]) -> Result<()>
 }
 
 /// Fetches eave and every git plugin config.toml uses, and says which `update` would move and how
-/// far. Checks nothing out and builds nothing (D-96).
+/// far. Checks nothing out and builds nothing (D-97).
 fn check(config_path: &Path, sources: &mut Sources) -> Result<()> {
     let text = std::fs::read_to_string(config_path)
         .map_err(|e| format!("{}: {e}", config_path.display()))?;

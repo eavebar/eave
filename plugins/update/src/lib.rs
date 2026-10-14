@@ -1,4 +1,4 @@
-//! Check for updates and Update eave, in the dormer (D-97). Nothing in the bar itself.
+//! Check for updates and Update eave, in the dormer (D-98). Nothing in the bar itself.
 //!
 //! ```toml
 //! [[dormer]]
@@ -6,7 +6,7 @@
 //! ```
 //!
 //! Each starts one of eave-build's systemd units, `eave-update-check.service` or
-//! `eave-update.service`, which run `eave-build check` or `eave-build update` (D-96). Not the
+//! `eave-update.service`, which run `eave-build check` or `eave-build update` (D-97). Not the
 //! bar's children: an update restarts the bar, and its unit carries on. The plugin follows the
 //! units through systemd's signals and, when one finishes, tells what its summary says in a
 //! notification. A check that finds updates offers Update on it. A bar the update restarted reads

@@ -1,4 +1,4 @@
-//! What eave-build leaves in `~/.cache/eave/<check|update>.toml` with `--summary` (D-96), and what
+//! What eave-build leaves in `~/.cache/eave/<check|update>.toml` with `--summary` (D-97), and what
 //! the notifications say about it.
 
 use std::io;

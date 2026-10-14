@@ -124,7 +124,7 @@ fn prepare(config: &config::Config) {
 
 /// Builds the registry from `plugins`, reads `config.toml` (and keeps watching it), and runs the
 /// bar until it exits. `eave calibrate` runs the calibrator instead (D-71), and `eave doctor` the
-/// checks (D-95).
+/// checks (D-96).
 pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
     match std::env::args().nth(1).as_deref() {
         None | Some("doctor") => {}

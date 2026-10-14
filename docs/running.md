@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/eaveshell/eave/main/install.sh | sh
 [`install.sh`](../install.sh) does these steps, and you can do them by hand too:
 
 1. `cargo install --locked --git https://github.com/eaveshell/eave eave-build`
-2. `eave-build init`: writes a starter `~/.config/eave/config.toml` (an existing one is kept) and the systemd user units into `~/.config/systemd/user/`.
+2. `eave-build init`: writes a starter `~/.config/eave/config.toml` (an existing one is kept) and the systemd user units into `~/.config/systemd/user/`, then reloads systemd.
 3. `eave-build`: clones eave into `~/.local/share/eave/src`, builds the widgets config.toml uses, and installs `~/.local/bin/eave`. The first build takes a few minutes.
 4. `systemctl --user enable --now eave-rebuild.path`, and `eave.service` when `graphical-session.target` is active (see [below](#as-a-systemd-user-service-recommended)). Otherwise it tells you what to add instead.
 
@@ -56,11 +56,21 @@ Nothing changes version until you run this ([D-31](decisions.md)). It fetches ea
 
 With the AUR package, eave itself is pinned to the package's release: a config.toml without `eave = …` builds `eaveshell/eave@v<version>`. `paru -Syu` moves eave and `eave-build` together, and the next `eave-build` moves the bar to the new release. Run `eave-build init` after an upgrade to refresh the units. `eave-build update` still updates your plugins, and never reinstalls `eave-build` over the package ([D-54](decisions.md)).
 
+To see what an update would move first:
+
+```sh
+eave-build check
+```
+
+It fetches eave and every plugin like `update`, and prints what would move and by how many commits, but checks nothing out and builds nothing ([D-97](decisions.md)).
+
+From the dormer, the `update` widget does both: Check for updates and Update eave ([D-98](decisions.md)). They run in two systemd user units that `eave-build init` writes, `eave-update-check.service` and `eave-update.service`, not in the bar: an update restarts the bar, and its unit carries on. With `--summary` there, eave-build leaves what moved, or why it failed, in `~/.cache/eave/check.toml` or `update.toml`. The widget tells it in a notification and removes the file, and a check that found updates offers Update on its notification. Their output is in `journalctl --user -u eave-update` (or `-u eave-update-check`). Nothing is checked or updated unless you pick it.
+
 ## Uninstall
 
 ```sh
 systemctl --user disable --now eave.service eave-rebuild.path
-rm ~/.config/systemd/user/eave{,-rebuild}.* ~/.local/bin/eave
+rm ~/.config/systemd/user/eave{,-rebuild,-update,-update-check}.* ~/.local/bin/eave
 rm -r ~/.local/share/eave ~/.cache/eave     # sources and build cache
 cargo uninstall eave-build                  # or, from the AUR: pacman -R eave
 ```
@@ -158,7 +168,23 @@ systemctl --user enable --now eave-rebuild.path   # eave-build init put the unit
 | Enter, `s` | save to config.toml and quit |
 | Esc, `q` | quit without saving |
 
-It starts from what config.toml says for this monitor, or from the notch the hardware reports. Saving writes `notch` and `screen` into the monitor's `[monitor."…"]` table ([D-94](decisions.md)): the one that already matches it, or a new one named after its make and model, so the same config.toml fits every screen you use. It the notch's and the screen's `grow` as they were, the top-level keys, the rest of the file and its comments, and writes through a symlink. Run it with the binary the bar runs, `~/.local/bin/eave calibrate`, or `cargo run --release -- calibrate` in a checkout.
+It starts from what config.toml says for this monitor, or from the notch the hardware reports. Saving writes `notch` and `screen` into the monitor's `[monitor."…"]` table ([D-94](decisions.md)): the one that already matches it, or a new one named after its make and model, so the same config.toml fits every screen you use. It keeps the notch's and the screen's `grow` as they were, the top-level keys, the rest of the file and its comments, and writes through a symlink. Run it with the binary the bar runs, `~/.local/bin/eave calibrate`, or `cargo run --release -- calibrate` in a checkout. The `essential` widget's Calibrate screen, in the dormer, runs it for you.
+
+## Check the setup
+
+```sh
+eave doctor
+```
+
+It checks what the bar depends on and says what's wrong, and what to do about it ([D-96](decisions.md)):
+
+- config.toml is there and reads, and what the bar would warn about in it: unknown keys, odd values.
+- Every widget it names is in this build and takes its options.
+- No two actions in the dormer want the same key.
+- Hyprland answers. The monitor the bar opens on has its notch measured, if the kernel shows one.
+- `eave.service` and `eave-rebuild.path` are enabled, systemd knows `WAYLAND_DISPLAY` and `HYPRLAND_INSTANCE_SIGNATURE`, and the update units are installed. Asked over D-Bus, and skipped without a systemd user manager.
+
+It doesn't need the bar, so it helps most when the bar won't start. It exits with 1 when it found a problem. Run it with the binary the bar runs, `~/.local/bin/eave doctor`: it checks the widgets that binary has. `--report <path>` also writes what it found as TOML. The `essential` widget's Check health, in the dormer, runs it that way and shows the report in a dialog.
 
 ## The dormer
 

@@ -1,5 +1,5 @@
 //! What `eave doctor` found: a list of checks, as text for a terminal and as TOML for the
-//! `essential` plugin's dialog, which reads it back (D-95).
+//! `essential` plugin's dialog, which reads it back (D-96).
 
 use std::io;
 use std::path::Path;

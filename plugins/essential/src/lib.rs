@@ -1,5 +1,5 @@
 //! The bar's own actions, in the dormer: calibrate the screen, restart the bar, and check its
-//! health (D-97). Nothing in the bar itself.
+//! health (D-98). Nothing in the bar itself.
 //!
 //! ```toml
 //! [[dormer]]
