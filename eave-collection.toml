@@ -13,6 +13,7 @@ plugins = [
     "plugins/keyboard",
     "plugins/media",
     "plugins/network",
+    "plugins/update",
     "plugins/volume",
     "plugins/window",
     "plugins/workspaces",

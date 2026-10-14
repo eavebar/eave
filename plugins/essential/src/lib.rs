@@ -122,15 +122,13 @@ impl Widget for Essential {
             ui::action("Calibrate screen", Message::Calibrate)
                 .id("calibrate")
                 .subtitle("Fit the bar to the screen's corners and notch")
-                .keywords(["eave", "notch", "corners", "measure", "screen", "display"])
-                .leading(ui::icon(Icon::Display)),
+                .keywords(["eave", "notch", "corners", "measure", "screen", "display"]),
         ];
         if self.service {
             actions.push(
                 ui::action("Restart bar", Message::Restart)
                     .id("restart")
-                    .keywords(["eave", "reload", "renderer"])
-                    .leading(ui::icon(Icon::Refresh)),
+                    .keywords(["eave", "reload", "renderer"]),
             );
         }
         let checking = self.health == Health::Checking;
@@ -144,8 +142,7 @@ impl Widget for Essential {
             )
             .id("health")
             .subtitle("config.toml, widgets, keys, screen and systemd")
-            .keywords(["eave", "doctor", "problems", "config", "diagnose"])
-            .leading(ui::icon(Icon::Info)),
+            .keywords(["eave", "doctor", "problems", "config", "diagnose"]),
         );
         actions
     }

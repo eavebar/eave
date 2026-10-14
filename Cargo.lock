@@ -771,6 +771,7 @@ dependencies = [
  "eave-keyboard",
  "eave-media",
  "eave-network",
+ "eave-update",
  "eave-volume",
  "eave-window",
  "eave-workspaces",
@@ -971,6 +972,18 @@ dependencies = [
  "futures-util",
  "pulseaudio",
  "tokio",
+]
+
+[[package]]
+name = "eave-update"
+version = "0.1.0"
+dependencies = [
+ "eave-api",
+ "eave-dbus",
+ "futures-util",
+ "serde",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

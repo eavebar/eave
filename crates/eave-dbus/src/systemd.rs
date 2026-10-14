@@ -182,4 +182,26 @@ mod tests {
         assert!(state("failed").failed());
         assert!(!Unit::default().exists());
     }
+
+    #[test]
+    #[ignore = "needs a systemd user manager"]
+    fn reads_real_units() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let manager = unit("default.target").await.unwrap();
+            assert!(manager.exists(), "{manager:?}");
+            assert_eq!(manager.active, "active");
+            assert_eq!(manager.invocation.len(), 32, "{manager:?}");
+            let missing = unit("eave-no-such.service").await.unwrap();
+            assert!(!missing.exists());
+            let first = std::pin::pin!(watch("default.target"))
+                .next()
+                .await
+                .unwrap();
+            assert_eq!(first, manager);
+        });
+    }
 }

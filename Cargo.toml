@@ -19,6 +19,7 @@ members = [
     "plugins/keyboard",
     "plugins/media",
     "plugins/network",
+    "plugins/update",
     "plugins/volume",
     "plugins/window",
     "plugins/workspaces",
@@ -50,6 +51,7 @@ eave-essential = { path = "plugins/essential", version = "0.1.0" }
 eave-keyboard = { path = "plugins/keyboard", version = "0.1.0" }
 eave-media = { path = "plugins/media", version = "0.1.0" }
 eave-network = { path = "plugins/network", version = "0.1.0" }
+eave-update = { path = "plugins/update", version = "0.1.0" }
 eave-volume = { path = "plugins/volume", version = "0.1.0" }
 eave-window = { path = "plugins/window", version = "0.1.0" }
 eave-workspaces = { path = "plugins/workspaces", version = "0.1.0" }

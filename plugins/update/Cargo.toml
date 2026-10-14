@@ -1,0 +1,17 @@
+[package]
+name = "eave-update"
+version = "0.1.0"
+description = "Check for updates and update eave from the dormer, through eave-build's systemd units, for eave"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+# Starts eave-build's units and follows them through systemd's D-Bus API; notifies.
+eave-dbus.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+serde.workspace = true
+tokio = { version = "1", default-features = false, features = ["rt"] }
+# Reads the summary eave-build leaves.
+toml.workspace = true
