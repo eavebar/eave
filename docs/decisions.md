@@ -1820,6 +1820,7 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
   - Up, as the neck catches it on the way back.
 
   The neck is drawn where the drop is, moved, but flows from where it comes out, which stays put.
+- **The neck follows the notch.** `Zones` writes where it draws the middle of the notch's bottom (or the edge's) to a shared cell (`zones::Sag`), each time it draws, and the island reads it: the neck flows from there, and the drop's dot rests there. Zones draw before the dormer's island, so the two agree on every frame. *(At first the neck flowed from where the bottom rests: as the notch flattened on the drop's return, a 2 px strip of background showed between them.)*
 - **What it comes out of squishes,** within what it's grown by, so it never gets smaller than the hardware's:
   - As the dormer opens, the notch pinches in from each side (up to `NOTCH_PINCH`, a little taller by `BULGE`).
   - As the drop lands back, the notch flattens (up to `NOTCH_FLATTEN`, a little wider).
