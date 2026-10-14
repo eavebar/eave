@@ -36,6 +36,13 @@ pub trait Widget: Sized + 'static {
         None
     }
 
+    /// The dialog contents, if this widget has one: a panel in the middle of the screen, wider
+    /// than a popover, for what needs room, like a conversation. It opens only when asked
+    /// ([`Effect::open_dialog`]), never on a click. Returning `None` while it's open closes it.
+    fn dialog(&self) -> Option<Panel<Self::Message>> {
+        None
+    }
+
     /// Notifications to show on screen now, newest first. Only for a notification engine: the
     /// widget that serves `org.freedesktop.Notifications` lists here what it received. Any other
     /// widget sends its notifications with `Notify` on the session bus, like any app.

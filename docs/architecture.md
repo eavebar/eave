@@ -46,7 +46,7 @@ Core plugins depend only on Hyprland and the kernel, plus an audio server for vo
 
 - Each widget instance's `subscription()` is tagged with the instance's stable id and mapped to `Message::Widget(id, AnyMessage)` ([D-15](decisions.md)). `update` hands the message to that instance only. Messages for an id that no longer exists (removed by a reload) are dropped.
 - `config.toml` is watched with inotify. When it changes, the host re-reads it and rebuilds only the instances whose entry changed ([D-21](decisions.md)).
-- A widget's `update` returns an `Effect`: a `Task` for async work, plus optional requests to open or close its popover, or to nudge its island. `update` never does I/O.
+- A widget's `update` returns an `Effect`: a `Task` for async work, plus optional requests to open or close its popover or its dialog, or to nudge its island. `update` never does I/O.
 - `view(window)` is pure. For the bar it lays out the left, center and right zones from `config.toml`, each as one or more squircle islands side by side, each only as wide as its items. The center zone stays centered on screen unless a side's islands reach it, and is then pushed aside. An island with nothing to show isn't drawn ([D-24](decisions.md)). Items marked `collapsible` are left out while their island is collapsed, and `divider` entries put a line between two items that show ([D-55](decisions.md)). When items come or go, the island morphs: its edges spring to the new size, items slide to their new places and new ones fade in ([D-27](decisions.md)). Pressing an island squeezes it; dragging stretches it toward the pointer with a rubber band, most where it was grabbed, and it springs back on release ([D-26](decisions.md), [D-45](decisions.md)). An open popover stretches the same way when a press on it isn't a control's. A widget's nudge pushes the island a little that way and pokes its outline, a jelly of springs that smooths the poke out by itself: the edge bulges at the item, and the island swells on the side it's going toward ([D-32](decisions.md)). Each item is wrapped in a `Slot`, which turns unhandled clicks and scroll steps into messages. An open popover's `Panel` is drawn by the island it grew out of.
 - Nothing is drawn when no message arrives. Pointer tracking is only subscribed while a popover is open, so hovering over the bar sends the app no messages. The pointer entering or leaving an item does redraw it: its `Slot` tells the alternates inside, which fade to their hover option and back ([D-35](decisions.md)). Moving within an item, or resting on it, draws nothing. An island with collapsible items does the same for itself: the pointer entering it makes room for its chevron, and leaving gives the room back, with no message to the app ([D-55](decisions.md)).
 
@@ -86,11 +86,20 @@ The dormer is the host's search dialog for widgets' actions ([D-84](decisions.md
 The bar can show on hover, and over fullscreen windows it shows, hides or shows on hover, as `bar` in config.toml says. In fullscreen, notifications can wait ([D-88](decisions.md)):
 
 1. The host's socket2 filter asks Hyprland whether a window covers the focused screen on the way in, and whenever windows open, close or move, go fullscreen or the workspace changes (`CheckFullscreen`). The answer (`Fullscreen`) is a client on the focused monitor's workspace with fullscreen mode 2. Mode 1 is maximized, which keeps clear of the bar.
-2. `Bar::out` says whether the bar is out: always, or while hovered, peeking, or with a popover, the notification panel or the dormer on it, until they've folded back. `view` wraps the islands in a `Lift` (`lift.rs`), which slides them up off the screen on `MORPH` when it isn't. Only the drawing moves, not the layout. Lifted and at rest, they aren't drawn and get no events.
+2. `Bar::out` says whether the bar is out: always, or while hovered, peeking, or with a popover, the notification panel, the dormer or a dialog on it, until they've folded back. `view` wraps the islands in a `Lift` (`lift.rs`), which slides them up off the screen on `MORPH` when it isn't. Only the drawing moves, not the layout. Lifted and at rest, they aren't drawn and get no events.
 3. `sync_shown` runs after every message. When `out` changes, it refits the surfaces. A hidden bar's input region is a `REVEAL_EDGE` strip at the top if it shows on hover, else nothing. Popovers, notifications and the dormer add their rects as before. On hover, the bar listens to the pointer: entering brings it out, and leaving hides it after `HIDE_AFTER` unless it comes back (`Unhover`).
 4. Over a fullscreen window the surfaces go on the `overlay` layer while the bar shows or waits for the pointer (`LayerChange`). When it's hidden on purpose, they go back to `top` once it has slid away (`Sink`, after `lift::slide_time`). The fullscreen window is then alone above them.
 5. A bar shown on hover keeps an exclusive zone of 0, so windows don't move when it comes out.
 6. In fullscreen, `Bar::held` keeps notifications out of the cards. They don't count down, since only shown cards do, and the panel opens only for the ones that aren't held.
+
+## Dialogs
+
+A widget's dialog is its panel in the middle of the screen ([D-90](decisions.md)):
+
+1. The widget returns `open_dialog()`. The host looks at what was last acted on (`Bar::touched`), set by an item press (`Touched`), a message from a popover or a notification card (`Acted`), or a dormer pick. If that was within a second, the dialog comes out of it. Otherwise it comes out of the top.
+2. Picked in the dormer, the dormer turns into the dialog on the spot. Otherwise the host looks up how tall the focused screen is, as it does for the dormer (`Dialog(Opened(room))`). Opening it closes any popover. One open in the island acted on is dropped at once, without folding: the dialog's shape covers it as it leaves.
+3. The island in the middle draws every dialog, with the key `DIALOG` and `Placement::Middle`, centered on the screen. Out of an island, its home is that island's shape as last drawn (`Bar::shapes`, `Island::shape`, `Popover::home`): it starts there, popover and all, and springs back onto it when it closes, while the island itself stays on the bar. Out of the top, it comes with a drop, as the dormer does, and the notch squishes as the neck lets go and catches it (`Neck`).
+4. Placing, growing the surface, the input region, the keyboard and closing are the dormer's (`Placed`, `Closed`). It also closes when the widget returns `close_dialog()` or stops offering a dialog.
 
 ## Data sources by widget
 
@@ -117,7 +126,7 @@ Cargo.toml                 workspace, release profile
 crates/eave-api/           the plugin SDK: what plugin authors depend on
   src/widget.rs            the Widget trait
   src/ui.rs                the closed vocabulary: Node, Item, Panel, Notice, Action, Tone
-  src/effect.rs            Effect: a Task plus popover requests
+  src/effect.rs            Effect: a Task plus popover and dialog requests
   src/registry.rs          Registry: widget name → constructor
   src/erased.rs            type erasure for the host (doc-hidden)
 crates/eave/               the host, as a library (`eave::run`) plus the default binary
@@ -130,6 +139,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/icon.rs              status icons (volume, Wi-Fi, wired, battery, brightness, media) as vector paths
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
   src/cover.rs             covers: a file or https URL → cropped, rounded 32 and 256 px bitmaps, off the UI thread
+  src/dialog.rs            a widget's dialog: what turns into it, and what was last acted on
   src/dormer.rs            the dormer's list: what widgets offer, ranked for what's typed, the selection and recent picks
   src/neck.rs              the neck the dormer's drop hangs on: the smooth union of the notch's bottom and the drop, row by row
   src/theme.rs             every color, size and font

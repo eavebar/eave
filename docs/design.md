@@ -75,8 +75,8 @@ All motion is driven by the compositor's frame callbacks, and stops asking for f
 
 | Motion | Where | How |
 |---|---|---|
-| Morph | an island's shape and items, a popover opening, the dormer dropping into the middle | `MORPH`, close to critical: settles without wobbling |
-| Drop | the dormer coming out of the notch or the edge, and back | `MORPH` through its stops: a ball swelling where it comes out, the ball fallen out on a neck that pinches off, then the panel (`DROP_*`, `NECK_*`); it bounces on `REACT` like a nudge as the neck lets go, as it lands, and as the neck catches it back (`DROP_BOUNCE`); the notch or edge squishes on `REACT` (`NOTCH_*`, `EDGE_*`) |
+| Morph | an island's shape and items, a popover opening, the dormer dropping into the middle, a dialog coming out of an island's shape, popover or not, and back | `MORPH`, close to critical: settles without wobbling |
+| Drop | the dormer coming out of the notch or the edge, and a widget's dialog asked for out of the blue ([D-90](decisions.md)), and back | `MORPH` through its stops: a ball swelling where it comes out, the ball fallen out on a neck that pinches off, then the panel (`DROP_*`, `NECK_*`); it bounces on `REACT` like a nudge as the neck lets go, as it lands, and as the neck catches it back (`DROP_BOUNCE`); the notch or edge squishes on `REACT` (`NOTCH_*`, `EDGE_*`) |
 | Lift | the bar sliding off the top and back, when it shows on hover or hides over a fullscreen window | `MORPH`: drawn up by the surface's height. It stays out `HIDE_AFTER` after the pointer leaves, and a peek keeps it out `REVEAL_SHOWN`. A hidden bar is brought out by a `REVEAL_EDGE` strip at the top ([D-88](decisions.md)) |
 | Press, drag | an island under the hand | `HAND`: overshoots a little when let go |
 | Squish, splat | a popover setting off, landing back | `REACT`, on top of the morph: `SQUISH_OPEN`, `SPLAT_*` |

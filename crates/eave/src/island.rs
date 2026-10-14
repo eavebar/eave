@@ -18,6 +18,7 @@
 //! asks, and stops asking once everything is at rest.
 
 use std::cell::Cell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use eave_api::{Nudge, NudgeRequest};
@@ -76,7 +77,13 @@ pub struct Island<'a, M> {
     shows: Padding,
     /// How tall it is at rest: the theme's, or down to where the notch ends (D-76).
     height: f32,
+    /// Where it puts its shape as it's drawn, if given: for another island to come out of it.
+    shape: Option<Shape>,
 }
+
+/// An island's shape as it was last drawn, in surface coordinates: a popover it's turning into
+/// included. Shared with what comes out of it and goes back into it ([`Popover::home`]).
+pub type Shape = Rc<Cell<Rectangle>>;
 
 /// The control at one end of an island that shows and hides its collapsible items: there while
 /// the pointer is over the island, or always while they show.
@@ -125,6 +132,9 @@ pub struct Popover<'a, M> {
     /// How far the bottom of what a drop comes out of is from where it rests right now, as drawn
     /// by whatever draws it, if given: its neck flows from there, so they never come apart.
     pub sag: Option<Sag>,
+    /// Comes out of another island's shape, and goes back into it, instead of its own, if given:
+    /// wherever that is drawn right now (D-90).
+    pub home: Option<Shape>,
 }
 
 /// Turns a key into a message, or leaves it alone.
@@ -138,6 +148,9 @@ pub enum Placement {
     /// Centered across the surface, its top this far down: the dormer, which drops out of an
     /// island at the top into the middle of the screen (D-84).
     Centered { top: f32 },
+    /// In the middle of the screen both ways: `room` is how far it reaches down from the surface's
+    /// top, and the top stays at least `min_top` down. A widget's dialog (D-90).
+    Middle { room: f32, min_top: f32 },
 }
 
 impl<'a, M> Island<'a, M> {
@@ -161,7 +174,14 @@ impl<'a, M> Island<'a, M> {
             corners: [CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING); 4],
             shows: Padding::ZERO,
             height: theme::ISLAND_HEIGHT as f32,
+            shape: None,
         }
+    }
+
+    /// Puts its shape here every time it's drawn.
+    pub fn shape(mut self, shape: Shape) -> Self {
+        self.shape = Some(shape);
+        self
     }
 
     /// This tall at rest, instead of the theme's.
@@ -338,6 +358,8 @@ struct Motion {
     stretch_y: Spring,
     /// How far down the surface a popover that comes out as a drop does it ([`Popover::drop`]).
     drop: Option<f32>,
+    /// Another island's shape it rests at instead of its own ([`Popover::home`]).
+    home: Option<Shape>,
     /// The island's corners, which a drop rounds off into.
     corner: CornerShape,
     /// How far what a drop comes out of has moved its bottom ([`Popover::sag`]).
@@ -372,6 +394,7 @@ impl Default for Motion {
             stretch_x: Spring::new(0.0, REACT),
             stretch_y: Spring::new(0.0, REACT),
             drop: None,
+            home: None,
             corner: CornerShape::SQUARE,
             sag: None,
             seen: None,
@@ -679,11 +702,12 @@ impl Motion {
         items: impl Iterator<Item = (u64, f32)>,
         popover: Option<bool>,
     ) {
-        // A new island grows out of a sliver at its center. A drop starts as a dot.
+        // A new island grows out of a sliver at its center. A drop starts as a dot, and one that
+        // comes out of another island as that island.
         if self.island.is_none() {
-            let sliver = match self.drop {
-                Some(_) => self.home(island),
-                None => Rectangle::new(
+            let sliver = match (self.drop, &self.home) {
+                (Some(_), _) | (_, Some(_)) => self.home(island),
+                (None, None) => Rectangle::new(
                     Point::new(island.center_x(), island.y),
                     Size::new(0.0, island.height),
                 ),
@@ -863,12 +887,15 @@ impl Motion {
         }
     }
 
-    /// Where the shape rests: the island, or for a drop, a dot where it comes out, wherever that's
-    /// drawn right now.
+    /// Where the shape rests: the island, or for a drop, a dot where it comes out, or the other
+    /// island it comes out of, wherever that's drawn right now.
     fn home(&self, island: Rectangle) -> Rectangle {
-        match self.drop {
-            Some(y) => Rectangle::new(Point::new(island.center_x(), y + self.sag()), Size::ZERO),
-            None => island,
+        match (self.drop, &self.home) {
+            (Some(y), _) => {
+                Rectangle::new(Point::new(island.center_x(), y + self.sag()), Size::ZERO)
+            }
+            (None, Some(home)) => home.get(),
+            (None, None) => island,
         }
     }
 
@@ -1354,6 +1381,14 @@ fn centered(panel: Size, surface_width: f32, top: f32) -> Rectangle {
     Rectangle::new(Point::new(x, top.round()), size)
 }
 
+/// Where a [`Placement::Middle`] popover goes: in the middle of the surface's width, and of the
+/// `room` down from its top, but never above `min_top`.
+fn middle(panel: Size, surface_width: f32, room: f32, min_top: f32) -> Rectangle {
+    let rect = centered(panel, surface_width, 0.0);
+    let top = ((room - rect.height) / 2.0).round().max(min_top.round());
+    Rectangle { y: top, ..rect }
+}
+
 /// Tells the host the room the panel needs, when that changed.
 fn report<M>(motion: &mut Motion, popover: &Popover<'_, M>, shell: &mut Shell<'_, M>) {
     if let Some(reach) = motion.reach()
@@ -1405,6 +1440,7 @@ fn draw_island<M>(
     shoulders: Option<CornerShape>,
     band: Option<f32>,
     own_corners: [CornerShape; 4],
+    shape_out: Option<&Shape>,
     renderer: &mut iced::Renderer,
     theme: &iced::Theme,
     style: &renderer::Style,
@@ -1419,6 +1455,9 @@ fn draw_island<M>(
     } else {
         own_bounds(state, layout)
     };
+    if let Some(out) = shape_out {
+        out.set(shape + motion.offset());
+    }
     if shape.width < 1.0 || shape.height < 1.0 {
         return;
     }
@@ -1757,11 +1796,12 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         let width = if self.live { width.max(height) } else { width };
         // An open popover takes the panel's width in the row, so it pushes the islands beside it
         // away instead of covering them. They glide there and back on their own springs. The
-        // island itself stays where its popover grows from: at the zone's side, or centered.
+        // island itself stays where its popover grows from: at the zone's side, or centered. One
+        // in the middle of the surface, a dialog, is clear of them.
         let panel = self
             .popover
             .as_ref()
-            .filter(|popover| popover.open)
+            .filter(|popover| popover.open && popover.placement == Placement::Below)
             .map(|popover| popover.width);
         let room = match panel {
             Some(panel) => width.max(panel),
@@ -1810,6 +1850,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             self.shoulders,
             self.band,
             self.corners,
+            self.shape.as_ref(),
             renderer,
             theme,
             style,
@@ -1925,6 +1966,10 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         }
         motion.swap(self.popover.as_ref().map(|popover| popover.key));
         motion.drop = self.popover.as_ref().and_then(|popover| popover.drop);
+        motion.home = self
+            .popover
+            .as_ref()
+            .and_then(|popover| popover.home.clone());
         motion.corner = self.corners[0];
         motion.sag = self
             .popover
@@ -2094,6 +2139,9 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
                 self.island.notch,
             ),
             Placement::Centered { top } => centered(content.size(), bounds.width, top),
+            Placement::Middle { room, min_top } => {
+                middle(content.size(), bounds.width, room, min_top)
+            }
         };
         state
             .motion
@@ -2129,6 +2177,7 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             island.shoulders,
             island.band,
             island.corners,
+            island.shape.as_ref(),
             renderer,
             theme,
             style,
@@ -2440,6 +2489,32 @@ mod tests {
         );
         assert_eq!(motion.edges.rect(), home);
         assert!(motion.closing_done());
+    }
+
+    #[test]
+    fn a_middle_popover_is_centered_on_the_screen_but_never_over_the_bar() {
+        let panel = Size::new(600.0, 400.0);
+        let padding = 2.0 * f32::from(theme::PANEL_PADDING);
+        let rect = middle(panel, 1000.0, 1000.0, 40.0);
+        assert_eq!(rect.x, ((1000.0 - 600.0 - padding) / 2.0).round());
+        assert_eq!(rect.y, ((1000.0 - 400.0 - padding) / 2.0).round());
+        assert_eq!(middle(panel, 1000.0, 300.0, 40.0).y, 40.0);
+    }
+
+    #[test]
+    fn a_popover_with_a_home_comes_out_of_it_and_rests_there() {
+        let home = Shape::default();
+        home.set(rect(300.0, 80.0));
+        let mut motion = Motion {
+            home: Some(home.clone()),
+            ..Motion::default()
+        };
+        motion.arrange(rect(0.0, 20.0), [(1, 10.0)].into_iter(), None);
+        assert_eq!(motion.edges.rect(), rect(300.0, 80.0));
+        // It moved: home follows it.
+        home.set(rect(500.0, 90.0));
+        run(&mut motion, Instant::now(), |_| {});
+        assert_eq!(motion.edges.rect(), rect(500.0, 90.0));
     }
 
     #[test]

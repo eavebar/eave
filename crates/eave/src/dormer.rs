@@ -16,8 +16,9 @@ const RECENT: usize = 16;
 pub enum Event {
     /// The keybind: open it, or close it if it's open.
     Toggle,
-    /// It's ready to open, this far from the surface's top.
-    Opened(f32),
+    /// It's ready to open, this far from the surface's top, with this much of the screen below
+    /// the surface's top: for a dialog it turns into.
+    Opened(f32, f32),
     /// What's typed changed.
     Query(String),
     /// The selection moves down (1) or up (-1) a row, round at the ends.
@@ -57,6 +58,8 @@ pub struct Session {
     pub open: bool,
     /// Where its top goes, from the surface's.
     pub top: f32,
+    /// How far the screen reaches down from the surface's top.
+    pub room: f32,
     /// Where its island put it, in surface coordinates. The surface grows to fit it.
     pub rect: Option<Rectangle>,
     pub query: String,
@@ -68,10 +71,11 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(top: f32) -> Self {
+    pub fn new(top: f32, room: f32) -> Self {
         Self {
             open: true,
             top,
+            room,
             rect: None,
             query: String::new(),
             selected: 0,
@@ -314,7 +318,7 @@ mod tests {
     #[test]
     fn the_selection_wraps_and_follows_its_row() {
         let recent = Recent::default();
-        let mut session = Session::new(0.0);
+        let mut session = Session::new(0.0, 1000.0);
         session.refresh(vec![entry(0, "A"), entry(0, "B"), entry(0, "C")], &recent);
         session.step(-1);
         assert_eq!(session.row(session.selected).unwrap().title, "C");
