@@ -1,6 +1,6 @@
 [package]
 name = "eave-iwd"
-version = "0.1.0"
+version = "0.1.1"
 description = "Wi-Fi controls for eave plugins, through iwd's D-Bus API"
 edition.workspace = true
 license.workspace = true

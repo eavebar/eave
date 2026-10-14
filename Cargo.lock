@@ -878,7 +878,7 @@ dependencies = [
 
 [[package]]
 name = "eave-iwd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eave-dbus",
  "futures-util",
