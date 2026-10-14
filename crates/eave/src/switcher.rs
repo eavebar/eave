@@ -137,6 +137,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Switcher<'_, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        let p = crate::theme::Palette::of(theme);
         use iced::advanced::Renderer as _;
 
         if let Some(shown) = tree.state.downcast_ref::<Motion>().shown {
@@ -147,7 +148,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Switcher<'_, M> {
                     border: Border::default().rounded(theme::BUTTON_RADIUS),
                     ..renderer::Quad::default()
                 },
-                theme::SWITCHER_MARK,
+                p.switcher_mark,
             );
         }
         let Some(row) = layout.children().next() else {

@@ -1,5 +1,5 @@
 //! The host side of [`eave_api::ui::toggle`]: a pill with a knob. A click sends the widget's
-//! message; when the plugin's state flips, the knob slides over and the pill turns white.
+//! message; when the plugin's state flips, the knob slides over and the pill fills with the ink.
 
 use iced::advanced::widget::{Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, renderer};
@@ -63,12 +63,13 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Toggle<M> {
         &self,
         tree: &Tree,
         renderer: &mut iced::Renderer,
-        _theme: &iced::Theme,
+        theme: &iced::Theme,
         _style: &renderer::Style,
         layout: Layout<'_>,
         _cursor: mouse::Cursor,
         _viewport: &Rectangle,
     ) {
+        let p = crate::theme::Palette::of(theme);
         use iced::advanced::Renderer as _;
 
         let t = tree.state.downcast_ref::<Ease>().value();
@@ -79,7 +80,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Toggle<M> {
                 border: Border::default().rounded(bounds.height / 2.0),
                 ..renderer::Quad::default()
             },
-            mix(theme::TRACK, theme::ACCENT_FILL, t),
+            mix(p.track, p.accent_fill, t),
         );
         let inset = (bounds.height - theme::TOGGLE_KNOB) / 2.0;
         let travel = bounds.width - 2.0 * inset - theme::TOGGLE_KNOB;
@@ -93,7 +94,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Toggle<M> {
                 border: Border::default().rounded(theme::TOGGLE_KNOB / 2.0),
                 ..renderer::Quad::default()
             },
-            mix(theme::tone(Tone::Dim), theme::ON_ACCENT, t),
+            mix(p.tone(Tone::Dim), p.on_accent, t),
         );
     }
 

@@ -10,6 +10,7 @@ members = [
     "crates/eave-mpris",
     "crates/eave-net",
     "crates/eave-pulse",
+    "plugins/appearance",
     "plugins/apps",
     "plugins/battery",
     "plugins/brightness",
@@ -39,6 +40,7 @@ eave-hyprland = { path = "crates/eave-hyprland", version = "0.2.0" }
 eave-iwd = { path = "crates/eave-iwd", version = "0.1.1" }
 eave-mpris = { path = "crates/eave-mpris", version = "0.1.0" }
 eave-net = { path = "crates/eave-net", version = "0.1.0" }
+eave-appearance = { path = "plugins/appearance", version = "0.1.0" }
 eave-apps = { path = "plugins/apps", version = "0.1.0" }
 eave-battery = { path = "plugins/battery", version = "0.1.0" }
 eave-brightness = { path = "plugins/brightness", version = "0.1.0" }

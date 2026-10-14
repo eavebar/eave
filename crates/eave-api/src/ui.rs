@@ -67,6 +67,9 @@ pub enum Icon {
     Bell { muted: bool },
     /// A sun whose rays light up with the level: a screen's brightness.
     Brightness { level: f32 },
+    /// Light or dark mode: a crescent moon when dark, a ringed sun when light (not the
+    /// brightness one).
+    Appearance { dark: bool },
     /// A keyboard: its backlight.
     KeyboardLight,
     /// Three level bars, like an equalizer: media. Uneven while `playing`, low and level when

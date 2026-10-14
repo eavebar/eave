@@ -10,6 +10,9 @@ repository.workspace = true
 eave-api.workspace = true
 # Reports clicks anywhere while a popover is open, so a click outside closes it (D-14).
 eave-hyprland.workspace = true
+# `theme = "system"` (D-92): the settings portal's color scheme, on the session bus. Already in
+# the build through the built-in plugins that talk D-Bus.
+eave-dbus.workspace = true
 iced = { version = "0.14", default-features = false, features = ["tiny-skia", "wayland", "tokio", "crisp", "advanced", "canvas", "image-without-codecs"] }
 # App icons (D-38): draws SVG icons, and through its tiny-skia decodes and scales PNG ones, into
 # small bitmaps. No text, fonts or embedded raster images, which app icons don't need.
@@ -42,6 +45,7 @@ rustix = { version = "1", default-features = false, features = ["std", "fs"] }
 # iced_exdevtools 0.19.1 fails to build against winit-core beta.3 (new Key variant); drop once fixed upstream.
 winit-core = "=0.31.0-beta.2"
 # Built-in plugins, only used by the default binary (src/main.rs).
+eave-appearance = { workspace = true, optional = true }
 eave-apps = { workspace = true, optional = true }
 eave-battery = { workspace = true, optional = true }
 eave-brightness = { workspace = true, optional = true }
@@ -56,6 +60,7 @@ eave-workspaces = { workspace = true, optional = true }
 [features]
 default = ["builtin", "gpu"]
 builtin = [
+    "dep:eave-appearance",
     "dep:eave-apps",
     "dep:eave-battery",
     "dep:eave-brightness",

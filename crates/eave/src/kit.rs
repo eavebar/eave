@@ -41,40 +41,54 @@ use crate::steps::Steps;
 use crate::switcher::Switcher;
 use crate::tabs::Tabs;
 use crate::text_area::TextArea;
-use crate::theme;
+use crate::theme::{self, Palette};
 use crate::timeline;
 use crate::toggle::Toggle;
 
 /// A node in the bar.
-pub fn node<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage> {
-    render(node, Ctx::new(Place::Bar), icons)
+pub fn node<'a>(
+    node: Node<AnyMessage>,
+    icons: &Icons,
+    palette: &'static Palette,
+) -> Element<'a, AnyMessage> {
+    render(node, Ctx::new(Place::Bar, palette), icons)
 }
 
 /// A popover's content, laid out at the panel's width. When it shows a large cover with color in
 /// it, its sliders and main button take that color: the content's, never one a plugin picked
 /// (D-61).
-pub fn panel<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage> {
-    in_panel(node, icons, Place::Panel, theme::SCROLL_MAX_HEIGHT)
+pub fn panel<'a>(
+    node: Node<AnyMessage>,
+    icons: &Icons,
+    palette: &'static Palette,
+) -> Element<'a, AnyMessage> {
+    in_panel(node, icons, palette, Place::Panel, theme::SCROLL_MAX_HEIGHT)
 }
 
 /// A dialog's content: a panel's, with more room to scroll in (D-90): up to `scroll` tall.
-pub fn dialog<'a>(node: Node<AnyMessage>, icons: &Icons, scroll: f32) -> Element<'a, AnyMessage> {
-    in_panel(node, icons, Place::Dialog, scroll)
+pub fn dialog<'a>(
+    node: Node<AnyMessage>,
+    icons: &Icons,
+    palette: &'static Palette,
+    scroll: f32,
+) -> Element<'a, AnyMessage> {
+    in_panel(node, icons, palette, Place::Dialog, scroll)
 }
 
 fn in_panel<'a>(
     node: Node<AnyMessage>,
     icons: &Icons,
+    palette: &'static Palette,
     place: Place,
     scroll: f32,
 ) -> Element<'a, AnyMessage> {
     let content = large_cover(node.kind())
         .and_then(|url| icons.covers.get(url))
-        .and_then(|cover| cover.as_ref()?.color());
+        .and_then(|cover| cover.as_ref()?.color(palette.scheme));
     let ctx = Ctx {
         content,
         scroll,
-        ..Ctx::new(place)
+        ..Ctx::new(place, palette)
     };
     render(node, ctx, icons)
 }
@@ -101,13 +115,14 @@ fn large_cover<M>(kind: &Kind<M>) -> Option<&str> {
 pub fn notices<'a, M: 'a>(
     cards: impl IntoIterator<Item = ((u64, u64), Element<'a, M>)>,
     footer: Option<Element<'a, M>>,
+    p: &'static Palette,
 ) -> Element<'a, M> {
     // A keyed column diffs a kept child without checking it's the same kind of widget, and its
     // guess at which child is which can be off when several change at once. So every child is
     // a container, which diffs what's in it the checking way, and a card carries the line
     // above it.
     let entry = |line: bool, content: Element<'a, M>| -> Element<'a, M> {
-        let line = line.then(separator);
+        let line = line.then(|| separator(p));
         container(
             column![]
                 .push(line)
@@ -129,13 +144,17 @@ pub fn notices<'a, M: 'a>(
 }
 
 /// The line under the cards when more wait: how many, and a way to their list.
-pub fn more_notices<'a, M: Clone + 'a>(count: usize, on_press: M) -> Element<'a, M> {
+pub fn more_notices<'a, M: Clone + 'a>(
+    count: usize,
+    on_press: M,
+    p: &'static Palette,
+) -> Element<'a, M> {
     let label = row![
         text(format!("{count} more"))
             .size(theme::SMALL_SIZE)
             .font(theme::STRONG_FONT),
         Space::new().width(Length::Fill),
-        icon::view(eave_api::ui::Icon::Forward, theme::tone(Tone::Dim)),
+        icon::view(eave_api::ui::Icon::Forward, p.tone(Tone::Dim)),
     ]
     .align_y(alignment::Vertical::Center);
     button(label)
@@ -147,10 +166,10 @@ pub fn more_notices<'a, M: Clone + 'a>(count: usize, on_press: M) -> Element<'a,
 }
 
 /// A thin horizontal line between groups.
-fn separator<'a, M: 'a>() -> Element<'a, M> {
+fn separator<'a, M: 'a>(p: &'static Palette) -> Element<'a, M> {
     rule::horizontal(1)
-        .style(|_| rule::Style {
-            color: theme::SEPARATOR,
+        .style(move |_| rule::Style {
+            color: p.separator,
             radius: 0.0.into(),
             fill_mode: rule::FillMode::Full,
             snap: true,
@@ -159,9 +178,9 @@ fn separator<'a, M: 'a>() -> Element<'a, M> {
 }
 
 /// A short vertical line between items in an island, as `divider = true` in config.toml asks.
-pub fn divider<'a, M: 'a>() -> Element<'a, M> {
-    let line = rule::vertical(theme::DIVIDER_WIDTH).style(|_| rule::Style {
-        color: theme::DIVIDER,
+pub fn divider<'a, M: 'a>(p: &'static Palette) -> Element<'a, M> {
+    let line = rule::vertical(theme::DIVIDER_WIDTH).style(move |_| rule::Style {
+        color: p.divider,
         radius: 0.0.into(),
         fill_mode: rule::FillMode::Full,
         snap: true,
@@ -205,9 +224,11 @@ pub struct Card {
 /// A click anywhere else on it sends its `on_press`. Its widget's messages are wrapped by `wrap`;
 /// `engaged` hears the reply field get the focus from a click, or lose it. `dismiss` is what its
 /// close button sends, for the whole stack; `unfold`, what "Show all" sends.
+#[allow(clippy::too_many_arguments)]
 pub fn notice<'a, M: Clone + 'a>(
     card: Card,
     icons: &Icons,
+    p: &'static Palette,
     now: SystemTime,
     wrap: impl Fn(AnyMessage) -> M + Clone + 'a,
     engaged: impl Fn(bool) -> M + Clone + 'a,
@@ -222,7 +243,7 @@ pub fn notice<'a, M: Clone + 'a>(
         previous,
     } = card;
     let on_press = notice.on_press.clone();
-    let source = source(&notice, icons, now, wrap.clone(), dismiss);
+    let source = source(&notice, icons, p, now, wrap.clone(), dismiss);
     let step = notice.step.as_ref().map(|step| step.index);
     let content = |notice: NoticeParts<AnyMessage>, earlier, unfolded| {
         content(
@@ -230,6 +251,7 @@ pub fn notice<'a, M: Clone + 'a>(
             earlier,
             unfolded,
             icons,
+            p,
             now,
             wrap.clone(),
             engaged.clone(),
@@ -265,6 +287,7 @@ pub fn notice<'a, M: Clone + 'a>(
 fn source<'a, M: Clone + 'a>(
     notice: &NoticeParts<AnyMessage>,
     icons: &Icons,
+    p: &'static Palette,
     now: SystemTime,
     wrap: impl Fn(AnyMessage) -> M + 'a,
     dismiss: Option<M>,
@@ -279,12 +302,12 @@ fn source<'a, M: Clone + 'a>(
             } else {
                 Font::DEFAULT
             })
-            .color(theme::tone(tone))
+            .color(p.tone(tone))
             .wrapping(text::Wrapping::None)
     };
     // Every notification has an icon: its symbol, else its app's, else a bell. One still loading
     // keeps its place empty, so nothing moves when it arrives.
-    let symbol = |symbol| icon::view(symbol, theme::tone(Tone::Normal));
+    let symbol = |symbol| icon::view(symbol, p.tone(Tone::Normal));
     let bell = || symbol(eave_api::ui::Icon::Bell { muted: false });
     let blank = || -> Element<'a, M> {
         Space::new()
@@ -305,7 +328,7 @@ fn source<'a, M: Clone + 'a>(
             None => blank(),
         },
         (None, Some(app_id)) => match icons.apps.get(app_id) {
-            Some(Some(_)) => app_icon(app_id, Tone::Normal, icons).map(wrap),
+            Some(Some(_)) => app_icon(app_id, Tone::Normal, icons, p).map(wrap),
             Some(None) => bell(),
             None => blank(),
         },
@@ -314,7 +337,7 @@ fn source<'a, M: Clone + 'a>(
     let dot = critical.then(|| {
         text("●")
             .size(theme::NOTICE_DOT)
-            .color(theme::tone(Tone::Critical))
+            .color(p.tone(Tone::Critical))
     });
     // The last words take the free room, so the time is at the far end. A `Clip` is only as wide
     // as its text, even when given more.
@@ -326,13 +349,13 @@ fn source<'a, M: Clone + 'a>(
     let (name, last): (Option<Element<'a, M>>, Element<'a, M>) = match (name, thread) {
         (name, Some(thread)) => (
             name.map(Element::from),
-            container(Clip::new(thread, theme::ISLAND_BG))
+            container(Clip::new(thread, p.island_bg))
                 .width(Length::Fill)
                 .into(),
         ),
         (Some(name), None) => (
             None,
-            container(Clip::new(name, theme::ISLAND_BG))
+            container(Clip::new(name, p.island_bg))
                 .width(Length::Fill)
                 .into(),
         ),
@@ -345,9 +368,9 @@ fn source<'a, M: Clone + 'a>(
         .map(|step| {
             row((0..step.count).map(|index| {
                 let color = match index.cmp(&step.index) {
-                    std::cmp::Ordering::Less => theme::tone(Tone::Dim),
-                    std::cmp::Ordering::Equal => theme::tone(Tone::Accent),
-                    std::cmp::Ordering::Greater => theme::TRACK,
+                    std::cmp::Ordering::Less => p.tone(Tone::Dim),
+                    std::cmp::Ordering::Equal => p.tone(Tone::Accent),
+                    std::cmp::Ordering::Greater => p.track,
                 };
                 container(Space::new())
                     .width(theme::STEP_DOT)
@@ -364,11 +387,8 @@ fn source<'a, M: Clone + 'a>(
         });
     let close = dismiss.map(|message| -> Element<'a, M> {
         button(
-            container(icon::view(
-                eave_api::ui::Icon::Close,
-                theme::tone(Tone::Dim),
-            ))
-            .center(Length::Fixed(theme::NOTICE_CLOSE)),
+            container(icon::view(eave_api::ui::Icon::Close, p.tone(Tone::Dim)))
+                .center(Length::Fixed(theme::NOTICE_CLOSE)),
         )
         .on_press(message)
         .padding(0)
@@ -429,12 +449,13 @@ fn content<'a, M: Clone + 'a>(
     earlier: Vec<NoticeParts<AnyMessage>>,
     unfolded: bool,
     icons: &Icons,
+    p: &'static Palette,
     now: SystemTime,
     wrap: impl Fn(AnyMessage) -> M + Clone + 'a,
     engaged: impl Fn(bool) -> M + 'a,
     unfold: M,
 ) -> Element<'a, M> {
-    let ctx = Ctx::new(Place::Panel);
+    let ctx = Ctx::new(Place::Panel, p);
     // Its own picture: wide ones whole, under the text; the rest beside it.
     let cover = cover::key(&notice)
         .and_then(|key| icons.covers.get(&key))
@@ -453,18 +474,18 @@ fn content<'a, M: Clone + 'a>(
     let summary = text(notice.summary)
         .size(theme::TEXT_SIZE)
         .font(theme::STRONG_FONT)
-        .color(theme::tone(summary_tone))
+        .color(p.tone(summary_tone))
         .wrapping(text::Wrapping::WordOrGlyph);
     let markdown = notice.markdown;
     let body = notice.body.filter(|body| !body.is_empty()).map(|body| {
         let line = (theme::TEXT_SIZE * LINE_HEIGHT).ceil();
         let body: Element<'a, M> = if markdown {
-            markdown::view(&body, theme::tone(Tone::Dim))
+            markdown::view(&body, p.tone(Tone::Dim), p)
         } else {
             text(body)
                 .size(theme::TEXT_SIZE)
                 .line_height(LINE_HEIGHT)
-                .color(theme::tone(Tone::Dim))
+                .color(p.tone(Tone::Dim))
                 .wrapping(text::Wrapping::WordOrGlyph)
                 .into()
         };
@@ -475,7 +496,7 @@ fn content<'a, M: Clone + 'a>(
                 .on_press(unfold)
                 .padding(0)
                 .style(quiet_button_style);
-            Fold::new(body, theme::ISLAND_BG, line * theme::NOTICE_BODY_LINES)
+            Fold::new(body, p.island_bg, line * theme::NOTICE_BODY_LINES)
                 .more(more)
                 .into()
         }
@@ -500,14 +521,14 @@ fn content<'a, M: Clone + 'a>(
             let when = notice.time.map(|time| {
                 text(ago(time, now))
                     .size(theme::SMALL_SIZE)
-                    .color(theme::tone(Tone::Dim))
+                    .color(p.tone(Tone::Dim))
             });
             row![Clip::new(
                 text(said)
                     .size(theme::TEXT_SIZE - 1.0)
-                    .color(theme::tone(Tone::Dim))
+                    .color(p.tone(Tone::Dim))
                     .wrapping(text::Wrapping::None),
-                theme::ISLAND_BG,
+                p.island_bg,
             )]
             .push(when)
             .spacing(theme::SPACING)
@@ -524,10 +545,10 @@ fn content<'a, M: Clone + 'a>(
 
     let progress = notice.progress.map(|fraction| {
         row![
-            Meter::new(fraction, None, theme::tone(Tone::Normal)),
+            Meter::new(fraction, None, p.tone(Tone::Normal)),
             text(format!("{:.0}%", fraction * 100.0))
                 .size(theme::SMALL_SIZE)
-                .color(theme::tone(Tone::Dim)),
+                .color(p.tone(Tone::Dim)),
         ]
         .spacing(theme::SPACING)
         .align_y(alignment::Vertical::Center)
@@ -571,6 +592,7 @@ fn answers<'a, M: Clone + 'a>(
     wrap: impl Fn(AnyMessage) -> M + Clone + 'a,
     engaged: impl Fn(bool) -> M + 'a,
 ) -> Option<Element<'a, M>> {
+    let p = ctx.palette;
     let mut buttons: Vec<(String, Option<AnyMessage>, bool)> = Vec::new();
     if let Some(back) = on_back {
         buttons.push(("Back".into(), Some(back), false));
@@ -594,7 +616,7 @@ fn answers<'a, M: Clone + 'a>(
         let rows: Vec<Element<'a, M>> = choices
             .options
             .into_iter()
-            .map(|option| choice(option, multiple).map(wrap.clone()))
+            .map(|option| choice(option, multiple, ctx.palette).map(wrap.clone()))
             .collect();
         options = Some(column(rows).spacing(2));
     }
@@ -612,10 +634,10 @@ fn answers<'a, M: Clone + 'a>(
     let reply = reply.map(|reply| -> Element<'a, M> {
         if reply.sent {
             return row![
-                icon::view(eave_api::ui::Icon::Check, theme::tone(Tone::Normal)),
+                icon::view(eave_api::ui::Icon::Check, p.tone(Tone::Normal)),
                 text("Sent")
                     .size(theme::SMALL_SIZE)
-                    .color(theme::tone(Tone::Dim)),
+                    .color(p.tone(Tone::Dim)),
             ]
             .spacing(6)
             .height(theme::BUTTON_HEIGHT)
@@ -690,7 +712,7 @@ fn answers<'a, M: Clone + 'a>(
     )
 }
 
-/// A button among a notification's answers: a label, filled white if it's the main one, and as
+/// A button among a notification's answers: a label, filled with the ink if it's the main one, and as
 /// wide as `width` gives it.
 fn answer_button<'a>(
     label: String,
@@ -699,13 +721,14 @@ fn answer_button<'a>(
     width: Length,
     ctx: Ctx,
 ) -> Element<'a, AnyMessage> {
+    let p = ctx.palette;
     let content = text(label)
         .size(theme::TEXT_SIZE)
         .font(theme::STRONG_FONT)
         .color(if prominent {
-            theme::ON_ACCENT
+            p.on_accent
         } else {
-            theme::tone(Tone::Normal)
+            p.tone(Tone::Normal)
         })
         .wrapping(text::Wrapping::None);
     let fill = prominent.then(|| ctx.fill());
@@ -735,7 +758,11 @@ fn answer_button<'a>(
 /// One option to pick: its label, with "Recommended" beside it if it is, and what it means
 /// under it. A picked one is lit like the list row in use; with several to pick, a check box says
 /// which.
-fn choice<'a>(option: ChoiceParts<AnyMessage>, multiple: bool) -> Element<'a, AnyMessage> {
+fn choice<'a>(
+    option: ChoiceParts<AnyMessage>,
+    multiple: bool,
+    p: &'static Palette,
+) -> Element<'a, AnyMessage> {
     let picked = option.picked;
     let label = text(option.label)
         .size(theme::TEXT_SIZE)
@@ -744,22 +771,18 @@ fn choice<'a>(option: ChoiceParts<AnyMessage>, multiple: bool) -> Element<'a, An
         } else {
             Font::DEFAULT
         })
-        .color(theme::tone(if picked {
-            Tone::Accent
-        } else {
-            Tone::Normal
-        }))
+        .color(p.tone(if picked { Tone::Accent } else { Tone::Normal }))
         .wrapping(text::Wrapping::WordOrGlyph);
     let tag = option.recommended.then(|| {
         container(
             text("Recommended")
                 .size(theme::SMALL_SIZE - 1.0)
-                .color(theme::tone(Tone::Dim)),
+                .color(p.tone(Tone::Dim)),
         )
         .padding([0, 5])
-        .style(|_| container::Style {
+        .style(move |_| container::Style {
             border: Border {
-                color: theme::BADGE_BORDER,
+                color: p.badge_border,
                 width: 1.0,
                 radius: theme::BADGE_RADIUS.into(),
             },
@@ -773,7 +796,7 @@ fn choice<'a>(option: ChoiceParts<AnyMessage>, multiple: bool) -> Element<'a, An
     let description = option.description.map(|description| {
         text(description)
             .size(theme::SMALL_SIZE)
-            .color(theme::tone(Tone::Dim))
+            .color(p.tone(Tone::Dim))
             .wrapping(text::Wrapping::WordOrGlyph)
     });
     let words = column![title]
@@ -781,17 +804,13 @@ fn choice<'a>(option: ChoiceParts<AnyMessage>, multiple: bool) -> Element<'a, An
         .spacing(1)
         .width(Length::Fill);
     let check = multiple.then(|| -> Element<'a, AnyMessage> {
-        let mark = picked.then(|| icon::view(eave_api::ui::Icon::Check, theme::ON_ACCENT));
+        let mark = picked.then(|| icon::view(eave_api::ui::Icon::Check, p.on_accent));
         container(mark)
             .center(Length::Fixed(theme::CHECK_SIZE))
             .style(move |_| container::Style {
-                background: picked.then_some(Background::Color(theme::ACCENT_FILL)),
+                background: picked.then_some(Background::Color(p.accent_fill)),
                 border: Border {
-                    color: if picked {
-                        theme::ACCENT_FILL
-                    } else {
-                        theme::CHECK_RING
-                    },
+                    color: if picked { p.accent_fill } else { p.check_ring },
                     width: if picked { 0.0 } else { 1.5 },
                     radius: 5.0.into(),
                 },
@@ -1012,10 +1031,11 @@ struct Ctx {
     content: Option<Color>,
     /// How tall a scroll gets.
     scroll: f32,
+    palette: &'static Palette,
 }
 
 impl Ctx {
-    fn new(place: Place) -> Self {
+    fn new(place: Place, palette: &'static Palette) -> Self {
         Self {
             tone: Tone::Normal,
             color: None,
@@ -1024,18 +1044,19 @@ impl Ctx {
             centered: false,
             content: None,
             scroll: theme::SCROLL_MAX_HEIGHT,
+            palette,
         }
     }
 
     /// What a slider's fill and a prominent button are filled with: the content's color, or
-    /// white.
+    /// the ink's.
     fn fill(&self) -> Color {
-        self.content.unwrap_or(theme::ACCENT_FILL)
+        self.content.unwrap_or(self.palette.accent_fill)
     }
 
     fn color(&self, tone: Option<Tone>) -> Color {
         self.color
-            .unwrap_or_else(|| theme::tone(tone.unwrap_or(self.tone)))
+            .unwrap_or_else(|| self.palette.tone(tone.unwrap_or(self.tone)))
     }
 
     fn size(&self) -> f32 {
@@ -1059,6 +1080,7 @@ impl Ctx {
 }
 
 fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMessage> {
+    let p = ctx.palette;
     let all = |children: Vec<Node<AnyMessage>>| {
         children
             .into_iter()
@@ -1075,7 +1097,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 .font(ctx.font())
                 .color(ctx.color(tone))
                 .wrapping(text::Wrapping::None),
-            theme::ISLAND_BG,
+            p.island_bg,
         )
         .into(),
         Kind::Label {
@@ -1092,7 +1114,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 .font(theme::HEADING_FONT)
                 .color(ctx.color(tone))
                 .wrapping(text::Wrapping::None),
-            theme::ISLAND_BG,
+            p.island_bg,
         )
         .into(),
         Kind::Heading {
@@ -1104,7 +1126,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             .color(ctx.color(tone))
             .into(),
         Kind::Icon { icon, tone } => icon::view(icon, ctx.color(tone)),
-        Kind::AppIcon { app_id, tone } => app_icon(&app_id, tone.unwrap_or(ctx.tone), icons),
+        Kind::AppIcon { app_id, tone } => app_icon(&app_id, tone.unwrap_or(ctx.tone), icons, p),
         Kind::Image { file, tint, tone } => match icons.files.get(&FileKey::of(file)) {
             Some(Some(icon)) if tint => icon.symbol(ctx.color(tone)),
             Some(Some(icon)) => icon.view(dim_opacity(tone.unwrap_or(ctx.tone))),
@@ -1204,7 +1226,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                     .style(bar_button_style)
             } else if only_icon && prominent {
                 let inner = Ctx {
-                    color: Some(theme::ON_ACCENT),
+                    color: Some(p.on_accent),
                     ..ctx
                 };
                 let fill = ctx.fill();
@@ -1226,7 +1248,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             } else {
                 let inner = Ctx {
                     text: Text::Strong,
-                    color: prominent.then_some(theme::ON_ACCENT),
+                    color: prominent.then_some(p.on_accent),
                     ..ctx
                 };
                 let fill = prominent.then(|| ctx.fill());
@@ -1251,12 +1273,12 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             });
             Switcher::new(row(options).spacing(theme::SPACING / 2), current).into()
         }
-        Kind::Separator => separator(),
+        Kind::Separator => separator(p),
         Kind::Divider { text: caption } => {
             let caption = text(caption)
                 .size(theme::SMALL_SIZE)
-                .color(theme::tone(Tone::Dim));
-            row![separator(), caption, separator()]
+                .color(p.tone(Tone::Dim));
+            row![separator(p), caption, separator(p)]
                 .spacing(theme::SPACING + 2)
                 .align_y(alignment::Vertical::Center)
                 .into()
@@ -1271,7 +1293,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 .size(theme::SMALL_SIZE)
                 .color(ctx.color(tone))
                 .wrapping(text::Wrapping::None),
-            theme::ISLAND_BG,
+            p.island_bg,
         )
         .into(),
         Kind::Timeline(steps) => timeline::view(
@@ -1307,7 +1329,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 .collect(),
         ),
         Kind::Step { content, .. } => render(*content, ctx, icons),
-        Kind::Diff { title, lines } => code::diff(Some(title), lines, ""),
+        Kind::Diff { title, lines } => code::diff(Some(title), lines, "", p),
         Kind::Empty => text("").into(),
         Kind::Fill if ctx.panel() => Space::new().width(Length::Fill).into(),
         Kind::Fill => Space::new().into(),
@@ -1355,7 +1377,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             let caption = text(title.to_uppercase())
                 .size(theme::SMALL_SIZE)
                 .font(theme::STRONG_FONT)
-                .color(theme::tone(Tone::Dim));
+                .color(p.tone(Tone::Dim));
             let trailing = trailing.map(|node| render(*node, ctx, icons));
             row![caption, fill(ctx)]
                 .push(trailing)
@@ -1386,7 +1408,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                     .font(theme::HEADING_FONT)
                     .color(ctx.color(None))
                     .wrapping(text::Wrapping::None),
-                theme::ISLAND_BG,
+                p.island_bg,
             );
             // A subtitle sits under the title, one line too, cut if it's long.
             let title: Element<'a, AnyMessage> = match subtitle {
@@ -1395,9 +1417,9 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                     Clip::new(
                         text(subtitle)
                             .size(theme::SMALL_SIZE)
-                            .color(theme::tone(Tone::Dim))
+                            .color(p.tone(Tone::Dim))
                             .wrapping(text::Wrapping::None),
-                        theme::ISLAND_BG,
+                        p.island_bg,
                     )
                 ]
                 .width(Length::Fill)
@@ -1417,9 +1439,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 .into()
         }
         Kind::Detail { name, value } => {
-            let name = text(name)
-                .size(theme::TEXT_SIZE)
-                .color(theme::tone(Tone::Dim));
+            let name = text(name).size(theme::TEXT_SIZE).color(p.tone(Tone::Dim));
             let value =
                 container(row![render(*value, ctx, icons)].align_y(alignment::Vertical::Center))
                     .width(Length::Fill)
@@ -1473,7 +1493,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 .padding(Padding::ZERO.right(3))
                 .align_y(alignment::Vertical::Center);
             let alert = matches!(tone, Some(Tone::Critical | Tone::Warning))
-                .then(|| theme::tone(tone.unwrap_or_default()));
+                .then(|| p.tone(tone.unwrap_or_default()));
             Field::new(content, alert).into()
         }
         Kind::Display(content) => render(
@@ -1492,9 +1512,9 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             };
             container(render(*content, inner, icons))
                 .center(Length::Fixed(theme::MARK_SIZE))
-                .style(|_| container::Style {
+                .style(move |_| container::Style {
                     border: Border {
-                        color: theme::tone(Tone::Accent),
+                        color: p.tone(Tone::Accent),
                         width: theme::MARK_RING,
                         radius: (theme::MARK_SIZE / 2.0).into(),
                     },
@@ -1515,7 +1535,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             let (_, first) = pages.into_iter().next().expect("not empty");
             render(first, ctx, icons)
         }
-        Kind::Markdown { text: source, tone } => markdown::view(&source, ctx.color(tone)),
+        Kind::Markdown { text: source, tone } => markdown::view(&source, ctx.color(tone), p),
         Kind::TextArea {
             placeholder,
             value,
@@ -1560,7 +1580,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
         } => {
             let color = ctx.color(tone);
             let edge = match tone.unwrap_or(ctx.tone) {
-                Tone::Normal | Tone::Dim => theme::BADGE_BORDER,
+                Tone::Normal | Tone::Dim => p.badge_border,
                 _ => color,
             };
             container(
@@ -1580,12 +1600,12 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             })
             .into()
         }
-        Kind::Keys { shortcut, tone } => keycaps(&shortcut, ctx.color(tone)),
+        Kind::Keys { shortcut, tone } => keycaps(&shortcut, ctx.color(tone), p),
     }
 }
 
 /// A shortcut as keycaps, `[Ctrl] [K]`: each key on a faint filled cap, in the text's tone.
-fn keycaps<'a>(shortcut: &Shortcut, color: Color) -> Element<'a, AnyMessage> {
+fn keycaps<'a>(shortcut: &Shortcut, color: Color, p: &'static Palette) -> Element<'a, AnyMessage> {
     let caps = shortcut::labels(shortcut).into_iter().map(|label| {
         container(
             text(label)
@@ -1594,8 +1614,8 @@ fn keycaps<'a>(shortcut: &Shortcut, color: Color) -> Element<'a, AnyMessage> {
                 .color(color),
         )
         .padding(theme::KEYCAP_PADDING)
-        .style(|_| container::Style {
-            background: Some(Background::Color(theme::KEYCAP_BG)),
+        .style(move |_| container::Style {
+            background: Some(Background::Color(p.keycap_bg())),
             border: Border::default().rounded(theme::BADGE_RADIUS),
             ..container::Style::default()
         })
@@ -1658,14 +1678,14 @@ struct ListItem {
 
 /// A row: leading icon, title over subtitle, then trailing at the far end, then its shortcut's
 /// keys. The selected row is
-/// lit: a soft white fill behind, a heavier title, and its icons at full white.
+/// lit: a soft fill of ink behind, a heavier title, and its icons in the accent.
 fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMessage> {
+    let p = ctx.palette;
     let background = if item.selected {
         // The selected fill over the island, which is what a fading title fades into.
-        let tint = theme::SELECTED_BG;
-        Color::from_rgb(tint.r * tint.a, tint.g * tint.a, tint.b * tint.a)
+        over(p.selected_bg, p.island_bg)
     } else {
-        theme::ISLAND_BG
+        p.island_bg
     };
     let leading_ctx = Ctx {
         tone: if item.selected {
@@ -1689,7 +1709,7 @@ fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMess
         Clip::new(
             text(subtitle)
                 .size(theme::SMALL_SIZE)
-                .color(theme::tone(Tone::Dim))
+                .color(p.tone(Tone::Dim))
                 .wrapping(text::Wrapping::None),
             background,
         )
@@ -1719,7 +1739,7 @@ fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMess
     let trailing = item.trailing.map(|node| render(*node, trailing_ctx, icons));
     let keys = item
         .shortcut
-        .map(|shortcut| keycaps(&shortcut, trailing_ctx.color(None)));
+        .map(|shortcut| keycaps(&shortcut, trailing_ctx.color(None), p));
     let content = row![]
         .push(leading)
         .push(lines)
@@ -1752,7 +1772,7 @@ fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMess
             .width(Length::Fill)
             .padding(padding)
             .style(move |_| container::Style {
-                background: selected.then_some(Background::Color(theme::SELECTED_BG)),
+                background: selected.then_some(Background::Color(p.selected_bg)),
                 border: Border::default().rounded(theme::BUTTON_RADIUS),
                 ..container::Style::default()
             })
@@ -1762,6 +1782,16 @@ fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMess
         Some(message) => mouse_area(row).on_right_press(message).into(),
         None => row,
     }
+}
+
+/// `color` laid over `under`, as one opaque color.
+fn over(color: Color, under: Color) -> Color {
+    let mix = |top: f32, bottom: f32| top * color.a + bottom * (1.0 - color.a);
+    Color::from_rgb(
+        mix(color.r, under.r),
+        mix(color.g, under.g),
+        mix(color.b, under.b),
+    )
 }
 
 /// How opaque a picture in its own colors is: a tone only dims it.
@@ -1776,7 +1806,12 @@ fn dim_opacity(tone: Tone) -> f32 {
 /// The app's icon at the size of a status icon, dimmed for `Tone::Dim`. Until it has loaded, or
 /// if it has none, the app id's first letter in a box of the same size, so nothing moves when it
 /// arrives.
-fn app_icon<'a>(app_id: &str, tone: Tone, icons: &Icons) -> Element<'a, AnyMessage> {
+fn app_icon<'a>(
+    app_id: &str,
+    tone: Tone,
+    icons: &Icons,
+    p: &'static Palette,
+) -> Element<'a, AnyMessage> {
     match icons.apps.get(app_id) {
         Some(Some(icon)) => icon.view(dim_opacity(tone)),
         _ => {
@@ -1789,7 +1824,7 @@ fn app_icon<'a>(app_id: &str, tone: Tone, icons: &Icons) -> Element<'a, AnyMessa
                 letter,
                 theme::TEXT_SIZE,
                 Font::DEFAULT,
-                theme::tone(tone),
+                p.tone(tone),
             ))
             .width(theme::ICON_SIZE)
             .height(theme::ICON_SIZE)
@@ -1799,19 +1834,20 @@ fn app_icon<'a>(app_id: &str, tone: Tone, icons: &Icons) -> Element<'a, AnyMessa
     }
 }
 
-fn state_background(status: button::Status) -> Option<Background> {
+fn state_background(p: &Palette, status: button::Status) -> Option<Background> {
     match status {
-        button::Status::Hovered => Some(Background::Color(theme::HOVER_BG)),
-        button::Status::Pressed => Some(Background::Color(theme::PRESSED_BG)),
+        button::Status::Hovered => Some(Background::Color(p.hover_bg)),
+        button::Status::Pressed => Some(Background::Color(p.pressed_bg)),
         button::Status::Active | button::Status::Disabled => None,
     }
 }
 
 /// Buttons in the bar: plain until hovered.
-fn bar_button_style(_: &Theme, status: button::Status) -> button::Style {
+fn bar_button_style(theme: &Theme, status: button::Status) -> button::Style {
+    let p = Palette::of(theme);
     button::Style {
-        background: state_background(status),
-        text_color: theme::tone(Tone::Normal),
+        background: state_background(p, status),
+        text_color: p.tone(Tone::Normal),
         border: Border::default().rounded(theme::BUTTON_RADIUS),
         ..button::Style::default()
     }
@@ -1823,14 +1859,15 @@ fn icon_button_style(theme: &Theme, status: button::Status) -> button::Style {
 }
 
 /// A button that's only its text, dim until hovered: a card's "Show all".
-fn quiet_button_style(_: &Theme, status: button::Status) -> button::Style {
+fn quiet_button_style(theme: &Theme, status: button::Status) -> button::Style {
+    let p = Palette::of(theme);
     let tone = match status {
         button::Status::Hovered | button::Status::Pressed => Tone::Normal,
         button::Status::Active | button::Status::Disabled => Tone::Dim,
     };
     button::Style {
         background: None,
-        text_color: theme::tone(tone),
+        text_color: p.tone(tone),
         ..button::Style::default()
     }
 }
@@ -1845,64 +1882,71 @@ fn filled(fill: Color, status: button::Status) -> Color {
 }
 
 /// Text buttons in a popover: filled even at rest, so they read as buttons. A prominent one is
-/// filled with `prominent`: white, or the content's color.
-fn text_button_style(_: &Theme, status: button::Status, prominent: Option<Color>) -> button::Style {
+/// filled with `prominent`: the ink's color, or the content's.
+fn text_button_style(
+    theme: &Theme,
+    status: button::Status,
+    prominent: Option<Color>,
+) -> button::Style {
+    let p = Palette::of(theme);
     let background = match prominent {
         Some(fill) => filled(fill, status),
         None => match status {
-            button::Status::Hovered => theme::PRESSED_BG,
-            button::Status::Pressed => theme::HOVER_BG,
-            _ => theme::BUTTON_BG,
+            button::Status::Hovered => p.pressed_bg,
+            button::Status::Pressed => p.hover_bg,
+            _ => p.button_bg,
         },
     };
     button::Style {
         background: Some(Background::Color(background)),
-        text_color: theme::tone(Tone::Normal),
+        text_color: p.tone(Tone::Normal),
         border: Border::default().rounded(theme::BUTTON_RADIUS),
         ..button::Style::default()
     }
 }
 
 /// List rows: the selected one tinted, the others plain until hovered.
-fn row_style(_: &Theme, status: button::Status, selected: bool) -> button::Style {
+fn row_style(theme: &Theme, status: button::Status, selected: bool) -> button::Style {
+    let p = Palette::of(theme);
     let background = match (selected, status) {
-        (true, button::Status::Pressed) => {
-            Some(Background::Color(theme::SELECTED_BG.scale_alpha(1.4)))
-        }
-        (true, _) => Some(Background::Color(theme::SELECTED_BG)),
-        (false, status) => state_background(status),
+        (true, button::Status::Pressed) => Some(Background::Color(p.selected_bg.scale_alpha(1.4))),
+        (true, _) => Some(Background::Color(p.selected_bg)),
+        (false, status) => state_background(p, status),
     };
     button::Style {
         background,
-        text_color: theme::tone(Tone::Normal),
+        text_color: p.tone(Tone::Normal),
         border: Border::default().rounded(theme::BUTTON_RADIUS),
         ..button::Style::default()
     }
 }
 
 /// A prominent icon button (play and pause): a disc filled with `fill`.
-fn prominent_button_style(_: &Theme, status: button::Status, fill: Color) -> button::Style {
+fn prominent_button_style(theme: &Theme, status: button::Status, fill: Color) -> button::Style {
+    let p = Palette::of(theme);
     button::Style {
         background: Some(Background::Color(filled(fill, status))),
-        text_color: theme::ON_ACCENT,
+        text_color: p.on_accent,
         border: Border::default().rounded(theme::PROMINENT_BUTTON / 2.0),
         ..button::Style::default()
     }
 }
 
 /// The text input inside a [`Field`], which draws the box around it.
-fn field_style(_: &Theme, _status: text_input::Status) -> text_input::Style {
+fn field_style(theme: &Theme, _status: text_input::Status) -> text_input::Style {
+    let p = Palette::of(theme);
     text_input::Style {
         background: Background::Color(Color::TRANSPARENT),
         border: Border::default(),
-        icon: theme::tone(Tone::Dim),
-        placeholder: theme::PLACEHOLDER,
-        value: theme::tone(Tone::Normal),
-        selection: theme::SELECTION,
+        icon: p.tone(Tone::Dim),
+        placeholder: p.placeholder,
+        value: p.tone(Tone::Normal),
+        selection: p.selection,
     }
 }
 
-fn scrollable_style(_: &Theme, status: scrollable::Status) -> scrollable::Style {
+fn scrollable_style(theme: &Theme, status: scrollable::Status) -> scrollable::Style {
+    let p = Palette::of(theme);
     let scroller = match status {
         scrollable::Status::Hovered {
             is_vertical_scrollbar_hovered: true,
@@ -1911,8 +1955,8 @@ fn scrollable_style(_: &Theme, status: scrollable::Status) -> scrollable::Style 
         | scrollable::Status::Dragged {
             is_vertical_scrollbar_dragged: true,
             ..
-        } => theme::SCROLLER.scale_alpha(1.6),
-        _ => theme::SCROLLER,
+        } => p.scroller.scale_alpha(1.6),
+        _ => p.scroller,
     };
     let rail = scrollable::Rail {
         background: None,
@@ -1922,7 +1966,7 @@ fn scrollable_style(_: &Theme, status: scrollable::Status) -> scrollable::Style 
             border: Border::default().rounded(1.5),
         },
     };
-    let default = scrollable::default(&Theme::Dark, status);
+    let default = scrollable::default(theme, status);
     scrollable::Style {
         container: container::Style::default(),
         vertical_rail: rail,

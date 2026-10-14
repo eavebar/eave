@@ -171,7 +171,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Steps<'_, M> {
         renderer.with_layer(reach, |renderer| {
             renderer.with_translation(slide, |renderer| {
                 draw(renderer);
-                island::fade(renderer, cover, reach - slide, shown);
+                island::fade(renderer, theme, cover, reach - slide, shown);
             });
         });
     }

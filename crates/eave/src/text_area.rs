@@ -255,12 +255,13 @@ impl<'a, M: Clone + 'a> From<TextArea<'a, M>> for Element<'a, M> {
 }
 
 /// Plain inside the [`Field`](crate::field::Field) that draws the box around it.
-fn style(_: &Theme, _status: text_editor::Status) -> text_editor::Style {
+fn style(theme: &Theme, _status: text_editor::Status) -> text_editor::Style {
+    let p = crate::theme::Palette::of(theme);
     text_editor::Style {
         background: Background::Color(Color::TRANSPARENT),
         border: Border::default(),
-        placeholder: theme::PLACEHOLDER,
-        value: theme::tone(eave_api::ui::Tone::Normal),
-        selection: theme::SELECTION,
+        placeholder: p.placeholder,
+        value: p.normal,
+        selection: p.selection,
     }
 }

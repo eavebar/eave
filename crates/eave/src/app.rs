@@ -12,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime};
 use eave_api::erased::{AnyMessage, DialogRequest, ErasedWidget, PopoverRequest};
 use eave_api::ui::{self as ui, Action, Icon, Notice, NoticeParts, Pixels, Tone, Urgency};
 use eave_api::{NudgeRequest, Registry};
+use eave_dbus::portal::{self, ColorScheme};
 use iced::alignment::Horizontal;
 use iced::widget::{Space, container, row, stack};
 use iced::{
@@ -34,6 +35,7 @@ use crate::notch::{self, Notch, Place, Side};
 use crate::shortcut;
 use crate::slot::Slot;
 use crate::squircle::CornerShape;
+use crate::theme::{Palette, Scheme};
 use crate::zones::{self, Zones};
 use crate::{icon, kit, theme as style, watch};
 
@@ -128,6 +130,8 @@ pub struct Bar {
     /// numbered by [`Bar::sinks`].
     sinking: Option<u64>,
     sinks: u64,
+    /// The desktop's color scheme, which `theme = "system"` follows (D-92).
+    desktop: ColorScheme,
 }
 
 /// One island: its zone, and which of the zone's islands it is, counted in bar order.
@@ -317,6 +321,8 @@ pub enum Message {
     WindowClosed(window::Id),
     /// `config.toml` changed on disk: the new contents, or why they couldn't be loaded.
     ConfigChanged(Result<Config, String>),
+    /// The desktop's color scheme, now or since it changed.
+    ColorScheme(ColorScheme),
     /// The screen for the `notch`, `screen` and `islands` settings has been looked into.
     ScreenFound(
         (config::Notch, config::Screen, config::Islands),
@@ -383,6 +389,7 @@ impl Bar {
             layer: Layer::Top,
             sinking: None,
             sinks: 0,
+            desktop: ColorScheme::NoPreference,
         };
         let task = bar.apply(config);
         (bar, task)
@@ -1065,6 +1072,21 @@ impl Bar {
     }
 
     /// How the bar shows right now: outside fullscreen, or over a fullscreen window (D-88).
+    /// Which way round the palette is: as `theme` says, or for `"system"` as the desktop
+    /// prefers, dark unless it prefers light.
+    pub fn scheme(&self) -> Scheme {
+        match (self.config.theme, self.desktop) {
+            (config::Theme::Light, _) | (config::Theme::System, ColorScheme::Light) => {
+                Scheme::Light
+            }
+            _ => Scheme::Dark,
+        }
+    }
+
+    fn palette(&self) -> &'static Palette {
+        self.scheme().palette()
+    }
+
     fn showing(&self) -> Showing {
         if self.fullscreen {
             self.config.bar.fullscreen
@@ -1852,6 +1874,10 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
                 Task::none()
             }
         }
+        Message::ColorScheme(scheme) => {
+            bar.desktop = scheme;
+            Task::none()
+        }
         Message::ConfigChanged(config) => match config {
             // Editors often fire several events per save; only a real change rebuilds anything.
             Ok(config) if config == bar.config => Task::none(),
@@ -2055,6 +2081,7 @@ fn capitalized(name: &str) -> String {
 
 /// Every surface is a bar.
 pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
+    let palette = bar.palette();
     let notices = bar
         .notices
         .as_ref()
@@ -2087,12 +2114,12 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                 if instance.entry.collapsible && !expanded && instance.revealed.is_none() {
                     continue;
                 }
-                let Some(item) = item_view(instance, window, &bar.icons) else {
+                let Some(item) = item_view(instance, window, &bar.icons, palette) else {
                     continue;
                 };
                 // Only between two items that show: one next to a hidden item goes with it.
                 if instance.entry.divider && !items.is_empty() {
-                    items.push((instance.id | DIVIDER_KEY, kit::divider()));
+                    items.push((instance.id | DIVIDER_KEY, kit::divider(palette)));
                     groups.push(None);
                 }
                 items.push((instance.id, item));
@@ -2126,7 +2153,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             };
             // Hovering shows it; while the items are out, it stays to put them back.
             let toggle = collapsible.then(|| Toggle {
-                element: toggle_view(island, side, expanded),
+                element: toggle_view(island, side, expanded, palette),
                 side,
                 expanded,
             });
@@ -2302,6 +2329,7 @@ fn dialog_popover<'a>(bar: &'a Bar, dialog: &Dialog) -> island::Popover<'a, Mess
         Some((panel, user_keys)) => kit::dialog(
             panel_keys(panel.into_node(), user_keys, &mut keys),
             &bar.icons,
+            bar.palette(),
             scroll,
         ),
         None => Space::new().into(),
@@ -2324,6 +2352,7 @@ fn dialog_popover<'a>(bar: &'a Bar, dialog: &Dialog) -> island::Popover<'a, Mess
             min_top: bar.screen.surface_height() as f32,
         },
         drop: top.then(|| drop_top(bar)),
+        drop_color: drop_color(bar).filter(|_| top),
         on_neck: top.then(|| -> Box<dyn Fn(bool) -> Message> {
             Box::new(|caught| Message::Dialog(Event::Neck(caught)))
         }),
@@ -2339,6 +2368,15 @@ fn drop_top(bar: &Bar) -> f32 {
     match bar.config.bar.style {
         Style::Solid => band_bottom(&bar.screen),
         Style::Islands => dormer_drop(&bar.screen),
+    }
+}
+
+/// The color of what a drop comes out of, when it isn't the islands': the notch's black, or the
+/// top edge's (D-92). A solid bar's band is the islands' color.
+fn drop_color(bar: &Bar) -> Option<Color> {
+    match bar.config.bar.style {
+        Style::Solid => None,
+        Style::Islands => Some(style::BEZEL),
     }
 }
 
@@ -2424,7 +2462,7 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         ui::column([field, ui::label("Nothing found").tone(Tone::Dim)])
     };
     // Its rows hold pictures only, so every message in it is the dormer's own.
-    let content = kit::panel(node, &bar.icons)
+    let content = kit::panel(node, &bar.icons, bar.palette())
         .map(|message: AnyMessage| Message::Dormer(message.downcast().unwrap_or(Event::Move(0))));
     island::Popover {
         key: DORMER,
@@ -2436,6 +2474,7 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         width: style::PANEL_WIDE_WIDTH,
         placement: Placement::Centered { top: session.top },
         drop: Some(drop_top(bar)),
+        drop_color: drop_color(bar),
         on_neck: Some(Box::new(|caught| Message::Dormer(Event::Neck(caught)))),
         sag: Some(bar.notch_sag.clone()),
         home: None,
@@ -2546,13 +2585,18 @@ fn bleed(edges: config::Edges) -> Padding {
 
 /// The chevron that shows and hides an island's collapsible items. It points the way they come
 /// out while they're hidden, and back once they show.
-fn toggle_view<'a>(island: IslandId, side: Horizontal, expanded: bool) -> Element<'a, Message> {
+fn toggle_view<'a>(
+    island: IslandId,
+    side: Horizontal,
+    expanded: bool,
+    palette: &Palette,
+) -> Element<'a, Message> {
     let icon = if (side == Horizontal::Left) != expanded {
         Icon::Back
     } else {
         Icon::Forward
     };
-    let content = container(icon::view(icon, style::tone(Tone::Dim)))
+    let content = container(icon::view(icon, palette.dim))
         .padding([0, style::ITEM_PADDING])
         .center_y(Length::Fill);
     Slot::new(content)
@@ -2564,11 +2608,12 @@ fn item_view<'a>(
     instance: &'a Instance,
     window: window::Id,
     icons: &Icons,
+    palette: &'static Palette,
 ) -> Option<Element<'a, Message>> {
     let id = instance.id;
     let parts = instance.widget.item().into_parts();
     let on_press = parts.on_press;
-    let content: Element<'_, AnyMessage> = container(kit::node(parts.content?, icons))
+    let content: Element<'_, AnyMessage> = container(kit::node(parts.content?, icons, palette))
         .padding([0, style::ITEM_PADDING])
         .center_y(Length::Fill)
         .into();
@@ -2629,6 +2674,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
             kit::panel(
                 panel_keys(panel.into_node(), user_keys, &mut keys),
                 &bar.icons,
+                bar.palette(),
             )
         }
         None => Space::new().into(),
@@ -2649,6 +2695,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         placement: Placement::Below,
         on_key,
         drop: None,
+        drop_color: None,
         on_neck: None,
         sag: None,
         home: None,
@@ -2700,6 +2747,7 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
                 previous,
             },
             &bar.icons,
+            bar.palette(),
             now,
             move |message| Message::Acted(notice_island, instance, message),
             move |focused| Message::ReplyFocused(instance, key, focused),
@@ -2711,11 +2759,15 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
     // The cards that wait: how many notices they hold, and whose popover lists them.
     let footer = waiting.first().map(|card| {
         let count = waiting.iter().map(Vec::len).sum();
-        kit::more_notices(count, Message::MoreNotices(bar.toasts[card[0]].instance))
+        kit::more_notices(
+            count,
+            Message::MoreNotices(bar.toasts[card[0]].instance),
+            bar.palette(),
+        )
     });
     island::Popover {
         key: NOTICES,
-        content: kit::notices(shown, footer),
+        content: kit::notices(shown, footer, bar.palette()),
         open: panel.open,
         on_placed: Box::new(Message::NoticesPlaced),
         on_closed: Message::NoticesClosed,
@@ -2724,6 +2776,7 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
         placement: Placement::Below,
         on_key: None,
         drop: None,
+        drop_color: None,
         on_neck: None,
         sag: None,
         home: None,
@@ -2742,6 +2795,9 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
     subscriptions.push(window::open_events().map(Message::WindowOpened));
     subscriptions.push(window::close_events().map(Message::WindowClosed));
     subscriptions.push(watch::config_changes().map(Message::ConfigChanged));
+    if bar.config.theme == config::Theme::System {
+        subscriptions.push(Subscription::run(portal::color_scheme).map(Message::ColorScheme));
+    }
     // Pointer, click and key tracking only while a popover is open, or the bar shows on hover:
     // otherwise every hover over the bar would wake us.
     if bar.is_open() || bar.typing() || bar.showing() == Showing::Hover {
@@ -2846,11 +2902,17 @@ async fn covered() -> bool {
 
 /// Surfaces are transparent: the islands draw their own backgrounds, so they can have rounded
 /// corners and the wallpaper shows around them.
-pub fn style(_: &Bar, _: &Theme) -> theme::Style {
+pub fn style(_: &Bar, theme: &Theme) -> theme::Style {
     theme::Style {
         background_color: Color::TRANSPARENT,
-        text_color: style::tone(eave_api::ui::Tone::Normal),
+        text_color: Palette::of(theme).normal,
     }
+}
+
+/// The theme every surface draws with: light or dark, as `theme` in config.toml says (D-92).
+/// Widgets that draw themselves find the palette through it.
+pub fn theme(bar: &Bar, _: window::Id) -> Theme {
+    bar.scheme().theme()
 }
 
 #[cfg(test)]

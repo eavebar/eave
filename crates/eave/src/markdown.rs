@@ -10,11 +10,11 @@ use iced::widget::{Space, column, container, row, rule, text};
 use iced::{Background, Border, Color, Element, Font, Length, Padding, alignment, font};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use crate::theme;
+use crate::theme::{self, Palette};
 
 /// `source`, as widgets, its text in `color`.
-pub fn view<'a, M: 'a>(source: &str, color: Color) -> Element<'a, M> {
-    let mut builder = Builder::new(color);
+pub fn view<'a, M: 'a>(source: &str, color: Color, palette: &'static Palette) -> Element<'a, M> {
+    let mut builder = Builder::new(color, palette);
     let options =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     for event in Parser::new_ext(source, options) {
@@ -49,6 +49,7 @@ struct Style {
 
 struct Builder<'a, M> {
     color: Color,
+    palette: &'static Palette,
     frames: Vec<Frame<'a, M>>,
     spans: Vec<Span<'static>>,
     style: Style,
@@ -61,9 +62,10 @@ struct Builder<'a, M> {
 }
 
 impl<'a, M: 'a> Builder<'a, M> {
-    fn new(color: Color) -> Self {
+    fn new(color: Color, palette: &'static Palette) -> Self {
         Self {
             color,
+            palette,
             frames: vec![Frame {
                 kind: FrameKind::Root,
                 blocks: Vec::new(),
@@ -99,7 +101,7 @@ impl<'a, M: 'a> Builder<'a, M> {
                     .font(theme::MONO_FONT)
                     .size(theme::TEXT_SIZE - 1.0)
                     .color(self.color)
-                    .background(Background::Color(theme::CODE_BG))
+                    .background(Background::Color(self.palette.code_bg))
                     .border(Border::default().rounded(3.0))
                     .padding(Padding::from([0, 2]));
                 self.spans.push(span);
@@ -113,7 +115,7 @@ impl<'a, M: 'a> Builder<'a, M> {
             Event::TaskListMarker(done) => self.span(if done { "☑ " } else { "☐ " }.into()),
             Event::Html(html) | Event::InlineHtml(html) => {
                 let span =
-                    Span::new(html.into_string()).color(theme::tone(eave_api::ui::Tone::Dim));
+                    Span::new(html.into_string()).color(self.palette.tone(eave_api::ui::Tone::Dim));
                 self.spans.push(span);
             }
             Event::InlineMath(math) | Event::DisplayMath(math) => self.span(math.into_string()),
@@ -191,7 +193,11 @@ impl<'a, M: 'a> Builder<'a, M> {
             TagEnd::CodeBlock => {
                 let code = self.code.take().unwrap_or_default();
                 let language = std::mem::take(&mut self.language);
-                self.push(crate::code::block(code.trim_end_matches('\n'), &language));
+                self.push(crate::code::block(
+                    code.trim_end_matches('\n'),
+                    &language,
+                    self.palette,
+                ));
             }
             TagEnd::Table => {
                 if let Some(rows) = self.table.take() {
@@ -241,7 +247,7 @@ impl<'a, M: 'a> Builder<'a, M> {
             None => theme::TEXT_SIZE,
         };
         let color = if style.link > 0 {
-            theme::tone(eave_api::ui::Tone::Accent)
+            self.palette.tone(eave_api::ui::Tone::Accent)
         } else {
             self.color
         };
@@ -299,7 +305,7 @@ impl<'a, M: 'a> Builder<'a, M> {
                     text(marker)
                         .size(theme::TEXT_SIZE)
                         .line_height(1.35)
-                        .color(theme::tone(eave_api::ui::Tone::Dim)),
+                        .color(self.palette.tone(eave_api::ui::Tone::Dim)),
                 )
                 .width(18)
                 .align_x(alignment::Horizontal::Right);
@@ -308,9 +314,9 @@ impl<'a, M: 'a> Builder<'a, M> {
                     .into()
             }
             FrameKind::Quote => {
-                let bar = container(Space::new().width(3).height(Length::Fill)).style(|_| {
+                let bar = container(Space::new().width(3).height(Length::Fill)).style(|theme| {
                     container::Style {
-                        background: Some(Background::Color(theme::QUOTE_BAR)),
+                        background: Some(Background::Color(Palette::of(theme).quote_bar)),
                         border: Border::default().rounded(1.5),
                         ..container::Style::default()
                     }
@@ -343,8 +349,8 @@ impl<'a, M: 'a> Builder<'a, M> {
 
 fn separator<'a, M: 'a>() -> Element<'a, M> {
     rule::horizontal(1)
-        .style(|_| rule::Style {
-            color: theme::SEPARATOR,
+        .style(|theme| rule::Style {
+            color: Palette::of(theme).separator,
             radius: 0.0.into(),
             fill_mode: rule::FillMode::Full,
             snap: true,
@@ -389,7 +395,7 @@ mod tests {
 
     /// How many top-level blocks `source` makes.
     fn blocks(source: &str) -> usize {
-        let mut builder = Builder::<()>::new(Color::WHITE);
+        let mut builder = Builder::<()>::new(Color::WHITE, &theme::DARK);
         let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
         for event in Parser::new_ext(source, options) {
             builder.event(event);
@@ -421,7 +427,7 @@ mod tests {
 
     #[test]
     fn numbered_items_count_on_from_their_start() {
-        let mut builder = Builder::<()>::new(Color::WHITE);
+        let mut builder = Builder::<()>::new(Color::WHITE, &theme::DARK);
         for event in Parser::new("3. c\n4. d") {
             if let Event::End(TagEnd::Item) = event {
                 break;

@@ -1,6 +1,6 @@
 # Design
 
-How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs`](../crates/eave/src/theme.rs); this page says what they're for. The choices were made by comparing variants side by side ([D-61](decisions.md)).
+How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs`](../crates/eave/src/theme.rs); this page says what they're for. The choices were made by comparing variants side by side ([D-61](decisions.md)). The bar comes in two schemes, dark and light, each the other's mirror ([D-92](decisions.md)): this page describes the dark one, and the light one swaps black and white.
 
 ## The feel
 
@@ -8,7 +8,7 @@ How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs
 
 ## Five rules
 
-1. **Black islands, white ink.** Islands and popovers are black. What's in them is white. Hierarchy comes from brightness: full white for the thing to notice, 94 % for text, 50 % for secondary text. There are no tinted greys.
+1. **Black islands, white ink** (or, light, white islands and black ink). Islands and popovers are black. What's in them is white. Hierarchy comes from brightness: full white for the thing to notice, 94 % for text, 50 % for secondary text. There are no tinted greys.
 2. **Color is a signal.** Color shows up only when it tells you something:
    - **state:** charging (good), low (warning), critical, a failed connection;
    - **content:** an app's icon, a track's cover, the color taken from that cover, and code, colored by what each piece of it is ([D-65](decisions.md)).
@@ -41,7 +41,9 @@ How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs
 
 `Tone::Normal` and `Tone::Dim` are written as the grey they make on black, not as translucent white, so the strokes of an icon that overlap don't show seams. Islands are always black, so it's the same color.
 
-**Content color.** When a popover shows a large cover, the host finds the cover's strongest hue: the hue with the most saturated, bright pixels. It then lifts that hue to a lightness that reads on black, and uses it for that popover's slider fill and main button. A cover with little color in it (black and white, grey) gives none, and they stay white. Plugins never pick this color: the host takes it from the content ([D-11](decisions.md)).
+**Light.** `theme = "light"`, or `"system"` on a desktop that prefers light ([D-92](decisions.md)): islands are white, `Tone::Normal` black at 88 % and `Tone::Dim` at 50 % (as greys on white), `Tone::Accent` and the accent fill black, with white on them. Every white overlay above is black at about the same alpha. Signals and code are deeper, to read on white: good `#248A3D`, warning `#C25E00`, critical `#D70015`. The notch and the grown top edge stay black in both: they stand for the screen's black border. The dormer drops out of them black, and turns white as it unfolds; it goes black again before it rises back in.
+
+**Content color.** When a popover shows a large cover, the host finds the cover's strongest hue: the hue with the most saturated, bright pixels. It then lifts that hue to a lightness that reads on black (or deepens it, on white), and uses it for that popover's slider fill and main button. A cover with little color in it (black and white, grey) gives none, and they stay white. Plugins never pick this color: the host takes it from the content ([D-11](decisions.md)).
 
 ## Components
 

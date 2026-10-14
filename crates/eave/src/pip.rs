@@ -174,6 +174,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Pip<'_, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        let p = crate::theme::Palette::of(theme);
         use iced::advanced::Renderer as _;
         use iced::advanced::graphics::geometry::Renderer as _;
 
@@ -205,7 +206,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Pip<'_, M> {
         frame.translate(Vector::new(-center.x, -center.y));
         let corner = Point::new(center.x - size.width / 2.0, center.y - size.height / 2.0);
         let pill = Path::rounded_rectangle(corner, size, (size.height / 2.0).into());
-        frame.fill(&pill, theme::tone(Tone::Critical));
+        frame.fill(&pill, p.tone(Tone::Critical));
         frame.fill_text(canvas::Text {
             content: state.count.shown.to_string(),
             position: center,

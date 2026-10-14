@@ -1,0 +1,16 @@
+[package]
+name = "eave-appearance"
+version = "0.1.0"
+description = "Light or dark mode for the whole desktop: click to switch, for eave"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+# Reads the scheme from the settings portal, and writes it through dconf's D-Bus writer (D-92).
+eave-dbus.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

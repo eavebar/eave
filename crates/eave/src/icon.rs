@@ -17,7 +17,8 @@ use iced::widget::canvas::{self, Frame, Geometry, LineCap, LineJoin, Path, Strok
 use iced::{Color, Element, Event, Point, Radians, Rectangle, Renderer, Size, Theme, Vector};
 use iced::{mouse, window};
 
-use crate::{squish, theme};
+use crate::squish;
+use crate::theme::{self, Palette};
 
 /// The grid icons are drawn on, in units.
 const GRID: f32 = 16.0;
@@ -146,8 +147,8 @@ struct Glyph {
 struct State {
     pour: Pour,
     still: canvas::Cache,
-    /// What `still` holds a drawing of.
-    drawn: Cell<Option<(Icon, Color)>>,
+    /// What `still` holds a drawing of, and on what background.
+    drawn: Cell<Option<(Icon, Color, Color)>>,
 }
 
 impl<M> canvas::Program<M> for Glyph {
@@ -174,19 +175,21 @@ impl<M> canvas::Program<M> for Glyph {
         &self,
         state: &State,
         renderer: &Renderer,
-        _theme: &Theme,
+        theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
+        let background = Palette::of(theme).island_bg;
         let squish = squish::current();
         let pouring = matches!(self.icon, Icon::Battery { charging: true, .. });
         if squish.is_none() && !pouring {
-            if state.drawn.replace(Some((self.icon, self.color))) != Some((self.icon, self.color)) {
+            let drawn = Some((self.icon, self.color, background));
+            if state.drawn.replace(drawn) != drawn {
                 state.still.clear();
             }
             return vec![state.still.draw(renderer, bounds.size(), |frame| {
                 frame.scale(theme::ICON_SIZE / GRID);
-                self.paint(frame, Gulp::default());
+                self.paint(frame, Gulp::default(), background);
             })];
         }
         let mut frame = if squish.is_none() {
@@ -210,16 +213,17 @@ impl<M> canvas::Program<M> for Glyph {
             ));
             frame.translate(-middle);
         }
-        self.paint(&mut frame, gulp);
+        self.paint(&mut frame, gulp, background);
         vec![frame.into_geometry()]
     }
 }
 
 impl Glyph {
-    /// Draws the icon on `frame`, scaled to the grid.
-    fn paint(&self, frame: &mut Frame, gulp: Gulp) {
+    /// Draws the icon on `frame`, scaled to the grid, over `background`.
+    fn paint(&self, frame: &mut Frame, gulp: Gulp, background: Color) {
         let mut pen = Pen {
             frame,
+            background,
             on: self.color,
             off: Color {
                 a: self.color.a * theme::ICON_OFF_ALPHA,
@@ -260,6 +264,8 @@ impl Glyph {
             Icon::Display => pen.display(),
             Icon::Bell { muted } => pen.bell(muted),
             Icon::Brightness { level } => pen.brightness(level),
+            Icon::Appearance { dark: false } => pen.sun(),
+            Icon::Appearance { dark: true } => pen.moon(),
             Icon::KeyboardLight => pen.keyboard_light(),
             Icon::Media { playing: true } => pen.bars(BARS_PLAYING),
             Icon::Media { playing: false } => pen.bars(BARS_PAUSED),
@@ -286,6 +292,8 @@ impl Glyph {
 
 struct Pen<'a> {
     frame: &'a mut Frame,
+    /// What a slash cuts through to: the island's color.
+    background: Color,
     on: Color,
     off: Color,
 }
@@ -480,6 +488,57 @@ impl Pen<'_> {
         }
     }
 
+    /// A sun for light mode, apart from brightness's: a ring, with a dot for each ray.
+    fn sun(&mut self) {
+        let center = Point::new(8.0, 8.0);
+        self.line(&Path::circle(center, 3.25), self.on);
+        for index in 0..8u8 {
+            let angle = -0.5 * PI + f32::from(index) * 0.25 * PI;
+            let (sin, cos) = angle.sin_cos();
+            self.dot(center.x + cos * 6.5, center.y + sin * 6.5, 0.95);
+        }
+    }
+
+    /// A crescent moon: a disc with a smaller one bitten out of its upper right.
+    fn moon(&mut self) {
+        let (outer, outer_radius) = (Point::new(7.5, 8.5), 6.0_f32);
+        let (inner, inner_radius) = (Point::new(11.0, 5.0), 5.0_f32);
+        let between: Vector = inner - outer;
+        let distance = between.x.hypot(between.y);
+        // Where the two circles cross, as angles about the outer one: either side of the bite.
+        let toward = between.y.atan2(between.x);
+        let along =
+            (outer_radius.powi(2) - inner_radius.powi(2) + distance.powi(2)) / (2.0 * distance);
+        let half = (along / outer_radius).clamp(-1.0, 1.0).acos();
+        let crossing = |angle: f32| outer + Vector::new(angle.cos(), angle.sin()) * outer_radius;
+        let about_inner = |point: Point| (point.y - inner.y).atan2(point.x - inner.x);
+        let from = about_inner(crossing(toward - half));
+        let to = about_inner(crossing(toward + half));
+        // Back along the bite, the way that passes the outer circle's middle.
+        let mut sweep = (to - from).rem_euclid(TAU);
+        let middle = from + sweep / 2.0;
+        let facing = (outer.y - inner.y).atan2(outer.x - inner.x);
+        if (middle - facing).cos() < 0.0 {
+            sweep -= TAU;
+        }
+        let moon = Path::new(|path| {
+            path.arc(Arc {
+                center: outer,
+                radius: outer_radius,
+                start_angle: Radians(toward + half),
+                end_angle: Radians(toward - half + TAU),
+            });
+            path.arc(Arc {
+                center: inner,
+                radius: inner_radius,
+                start_angle: Radians(from),
+                end_angle: Radians(from + sweep),
+            });
+            path.close();
+        });
+        self.frame.fill(&moon, self.on);
+    }
+
     /// A keyboard: a row of keys over a space bar.
     fn keyboard_light(&mut self) {
         self.outline(1.25, 3.5, 13.5, 9.0, 2.0);
@@ -496,7 +555,7 @@ impl Pen<'_> {
         self.frame.stroke(
             &path,
             Stroke::default()
-                .with_color(theme::ISLAND_BG)
+                .with_color(self.background)
                 .with_width(theme::ICON_STROKE * 3.0)
                 .with_line_cap(LineCap::Round),
         );

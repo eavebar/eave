@@ -180,6 +180,7 @@ pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
     )
     .subscription(app::subscription)
     .style(app::style)
+    .theme(app::theme)
     .settings(Settings {
         layer_settings: LayerShellSettings {
             anchor: Anchor::Top | Anchor::Left | Anchor::Right,

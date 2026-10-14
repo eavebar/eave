@@ -1237,7 +1237,7 @@ A marker before the zone's first item sets the first island, so no island has to
 
 ## D-61: Black and white, and color only as a signal
 
-**Status:** accepted (2026-10-13). Replaces the blue accent used since the first popovers (D-40). The rules are in [design.md](design.md).
+**Status:** accepted (2026-10-13). Replaces the blue accent used since the first popovers (D-40). The rules are in [design.md](design.md). *Amended by [D-92](#d-92-light-and-dark-the-palette-mirrors): this is the dark scheme; the light one mirrors it, white islands and black ink.*
 
 **What:** the bar is black and white. Brightness, not hue, says what's current, and color appears only as a signal or when it comes from the content. Code counts as content since [D-65](#d-65-code-is-content-colored-code-diffs-and-timelines).
 - **Ink.** `Tone::Normal` is white at 94 % and `Tone::Dim` white at 50 %. Both are neutral; they used to have a blue cast. They're written as the opaque grey they make on black, so overlapping icon strokes don't show seams. `Tone::Accent` is plain white: the thing to notice is the brightest thing there. Plugins keep the same `Tone`s. Only what they look like changed.
@@ -1334,7 +1334,7 @@ The icons are theme names (`battery-caution`, `battery-full-charged`). `notify =
 
 ## D-65: Code is content: colored code, diffs and timelines
 
-**Status:** accepted (2026-10-13). Amends [D-61](#d-61-black-and-white-and-color-only-as-a-signal): code joins covers as content that brings its own color.
+**Status:** accepted (2026-10-13). Amends [D-61](#d-61-black-and-white-and-color-only-as-a-signal): code joins covers as content that brings its own color. *Amended by [D-92](#d-92-light-and-dark-the-palette-mirrors): the light scheme has its own, deeper code hues.*
 
 **Why now:** eave-claude's chat is mostly code, commands and changes to files, and Claude's steps. Set in one grey, a code block was a wall: keywords, strings and comments all looked alike, an edit showed only as its file's name, and every tool call took a full line with a section header for each speaker. The chat was compared in four prototypes; this is the "rail" one, with muted hues.
 
@@ -2004,3 +2004,34 @@ The settings are grouped by the thing they're about, not by situation, because e
 - plugins giving global keys by default: a plugin would take a key everywhere just by being installed.
 
 **Cost:** no dependency. Popover keys are resolved only while one is open, and dormer keys when it asks the widgets, so the bar at rest does nothing more. One small list per open popover or dormer.
+
+---
+
+## D-92: Light and dark: the palette mirrors
+
+**Status:** accepted (2026-10-14). Amends [D-61](#d-61-black-and-white-and-color-only-as-a-signal) and [D-65](#d-65-code-is-content-colored-code-diffs-and-timelines), which now describe the dark scheme.
+
+**What:** `theme` in config.toml is `"system"` (the default), `"light"` or `"dark"`, and applies live.
+- **Two palettes.** Every color in `theme.rs` moved from a `const` into a `Palette`: `DARK` holds the values D-61 and D-65 set, unchanged, and `LIGHT` is its mirror. White islands; ink black at 88 % (`Normal`) and 50 % (`Dim`), written as the grey it makes on white; `Accent` black; every white overlay black at about the same alpha (fills a little lighter, since black on white reads stronger); the accent fill black with white on it. Signals and code hues go deeper so they read on white: good `#248A3D`, warning `#C25E00`, critical `#D70015`. A cover's color is lifted to a lightness of 0.62–0.74 on black, and held to 0.34–0.44 on white, so the white on a prominent button still reads. Sizes, springs and durations stay `const`s.
+- **How it reaches the pixels.** The bar sets iced's theme (`.theme(app::theme)`): `Theme::Dark` or `Theme::Light`. Every widget that draws itself, and every style function, already gets that theme and now asks `Palette::of(theme)`. What kit builds at view time (text colors, the background a `Clip` fades into) takes the palette from `Ctx`, which `app::view` fills from the bar's scheme, next to the icons. Caches that fill with the island's color (the island's shape, the notch's and edge's band, a still icon with a slash) count the scheme in what they were drawn from, so a switch redraws them.
+- **The notch and the grown top edge stay black.** They stand for the hardware around the picture, which is black whatever the theme, like a light menu bar's notch on a Mac. A solid bar's band ([D-89](#d-89-a-solid-bar-with-islands-that-flow-out-of-it)) is the islands' color. `eave calibrate` stays black too: it measures the screen against black. The dormer, and a dialog that drops from the top, come out of that black: the drop is black while it's a ball on its neck, turns the islands' color as it unfolds into the panel, and goes black again as it folds back up, before it rises into the notch (`Popover::drop_color`, following the drop's roundness).
+- **`"system"`** follows the settings portal's `org.freedesktop.appearance` `color-scheme`: read once, then on every `SettingChanged`, with no polling (`eave_dbus::portal`, new in eave-dbus). Light only when the desktop prefers light: no preference, or no portal, is dark, the bar's own look. The host depends on eave-dbus for this; it was already in the build through the plugins that use D-Bus.
+- **The `appearance` plugin** switches the desktop's mode, not the bar's: a ringed sun or a moon (`Icon::Appearance`, new in eave-api; the sun is drawn apart from brightness's), a click to switch, a popover with both, and `light` and `dark` actions. It sets GNOME's `color-scheme` key through dconf's own D-Bus writer (`ca.desrt.dconf.Writer.Change`, a one-key changeset serialized as GVariant by hand, checked byte for byte against GLib's), which portal backends hand to every app that asks. So the bar (with `"system"`), GTK and libadwaita apps all follow one switch. It reads the mode back from the portal, so a change made elsewhere shows too, and nudges up for light, down for dark.
+
+**Why:**
+- Some desktops are light, and a black bar on them is the one dark thing on screen. Mirroring keeps every rule of D-61 (brightness for hierarchy, color only as a signal or content) with the roles of black and white swapped, so plugins change nothing: they still name a `Tone`.
+- iced already threads its theme through every draw and style call, and kit already threads a context: two existing paths, no global state.
+- `"system"` as the default makes the bar match the desktop out of the box. With no preference it stays dark, which is what it was.
+- The switch belongs to the desktop. A plugin that only flipped the bar would leave apps the other way; flipping the desktop's setting flips both.
+
+**Alternatives:**
+- A new eave-api request (`Effect::theme`) for a plugin to set the bar's theme, written to config.toml like `eave calibrate` does. It works without dconf, but switches only the bar, and grows the API for one plugin. Rejected by the user in favor of the desktop's switch.
+- A global (an atomic scheme read by `theme::palette()`). Fewer signatures change, but it's state the view doesn't own, and iced's theme already carries it.
+- A custom iced `Theme` holding the whole palette. More than two values need, and every widget would downcast it.
+- Encoding the changeset with zvariant's `gvariant` feature: a feature flag and more code for 30 lines of bytes.
+- The `gsettings` binary: shelling out (D-23).
+
+**What we give up:** the appearance plugin needs dconf on the session bus, which bends [D-23](#d-23-core-plugins-depend-only-on-hyprland-and-the-kernel). It's opt-in, nothing else depends on it, and without dconf it hides. The bar following the desktop needs a portal backend that has the Settings interface (xdg-desktop-portal-gtk or -gnome; -hyprland has none and falls back to them); without one, `"system"` is dark.
+
+**Measured** (Asahi, release, two clocks on tiny-skia, alternating runs in one session): the binary is 18,181,760 → 18,968,192 bytes (+0.79 MB, text +816 KB). The palettes themselves add 7 KB; the rest is zbus and zvariant code instantiated anew, about half for the host's portal subscription (connection setup, match rules, reading a `Value`) and half for the appearance plugin. RSS about 17.9 → 18.3–18.7 MB in the quiet runs (some runs of both landed near 34 MB, noise), from the session bus connection `"system"` opens. Idle CPU 0–1 ticks in 10 s on both.
+

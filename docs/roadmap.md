@@ -31,6 +31,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **6.7 Showing and hiding.** The bar can show on hover, and hide, show or show on hover over fullscreen windows. A hidden bar peeks on a workspace switch or a nudge. In fullscreen, notifications other than critical ones wait for it to end ([D-88](decisions.md)).
 - [x] **6.8 Dialogs.** A widget's panel in the middle of the screen, which comes out of what opened it: its popover, its item's island, a notification or the dormer. eave-claude's chat is the first ([D-90](decisions.md)).
 - [x] **6.5 Style.** Black and white, with color only as a signal or from the content. A soft white fill marks what's current, the slider is a line that thickens under the pointer, and a media popover takes its cover's color ([D-61](decisions.md), [design.md](design.md)).
+- [x] **6.9 Light and dark.** `theme = "system"`, `"light"` or `"dark"`: a light scheme that mirrors the dark one, following the desktop by default. The `appearance` plugin switches the desktop's mode ([D-92](decisions.md)).
 
 ## Next
 
