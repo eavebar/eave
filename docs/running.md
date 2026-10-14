@@ -200,9 +200,16 @@ A key is modifiers (`ctrl`, `alt`, `shift`, `super`) and one key (a character, `
 
 eave takes no key outside its popovers. To open a popover or run an action from anywhere, bind a key in Hyprland, like the dormer's:
 
+```lua
+-- hyprland.lua (Hyprland 0.56+)
+hl.bind("SUPER + C", hl.dsp.event("eave-popover claude"))       -- opens Claude's popover, or closes it
+hl.bind("SUPER + M", hl.dsp.event("eave-action volume mute"))   -- mutes, or unmutes
+```
+
 ```ini
-bind = SUPER, C, event, eave-popover claude        # opens Claude's popover, or closes it
-bind = SUPER, M, event, eave-action volume mute    # mutes, or unmutes
+# hyprland.conf (older Hyprland)
+bind = SUPER, C, event, eave-popover claude
+bind = SUPER, M, event, eave-action volume mute
 ```
 
 `eave popover <widget>` and `eave action <widget> <id>` do the same from a script or any other shortcut tool. `<widget>` is the name in `widget = "…"`, without its owner (`claude` for `fran/eave-claude`). The built-in widgets' action ids are listed in [plugins.md](plugins.md#action-ids).
