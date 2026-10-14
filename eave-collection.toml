@@ -4,6 +4,7 @@
 [collection]
 description = "eave's built-in widgets"
 plugins = [
+    "plugins/appearance",
     "plugins/apps",
     "plugins/battery",
     "plugins/brightness",

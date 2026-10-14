@@ -45,6 +45,7 @@ rustix = { version = "1", default-features = false, features = ["std", "fs"] }
 # iced_exdevtools 0.19.1 fails to build against winit-core beta.3 (new Key variant); drop once fixed upstream.
 winit-core = "=0.31.0-beta.2"
 # Built-in plugins, only used by the default binary (src/main.rs).
+eave-appearance = { workspace = true, optional = true }
 eave-apps = { workspace = true, optional = true }
 eave-battery = { workspace = true, optional = true }
 eave-brightness = { workspace = true, optional = true }
@@ -59,6 +60,7 @@ eave-workspaces = { workspace = true, optional = true }
 [features]
 default = ["builtin", "gpu"]
 builtin = [
+    "dep:eave-appearance",
     "dep:eave-apps",
     "dep:eave-battery",
     "dep:eave-brightness",

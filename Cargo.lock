@@ -760,6 +760,7 @@ name = "eave"
 version = "0.1.0"
 dependencies = [
  "eave-api",
+ "eave-appearance",
  "eave-apps",
  "eave-battery",
  "eave-brightness",
@@ -796,6 +797,16 @@ dependencies = [
  "iced_runtime",
  "serde",
  "tokio",
+ "toml",
+]
+
+[[package]]
+name = "eave-appearance"
+version = "0.1.0"
+dependencies = [
+ "eave-api",
+ "eave-dbus",
+ "serde",
  "toml",
 ]
 
