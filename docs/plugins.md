@@ -52,6 +52,24 @@ islands = { radius = "auto", smoothing = "auto" }   # or radius = 24, smoothing 
 
 `"auto"`, the default, takes the notch's `radius` and `smoothing`, then the screen's top corners at an even distance. With neither measured, the islands keep the bar's own 14 px squircle corners.
 
+One config.toml can describe several monitors: a `[monitor."…"]` table gives `notch`, `screen` and `islands` for the monitors it names, and the bar uses the table of the monitor it opens on ([D-94](decisions.md)). `eave calibrate` saves into one of these.
+
+```toml
+notch = false   # the top level: every monitor without a table of its own
+
+[monitor."eDP-1"]   # by connector
+notch = { width = 370, height = 66, radius = 20 }
+screen = { corners = [20, 20, 0, 0] }
+
+[monitor."ViewSonic Corporation XG2431"]   # by what Hyprland's description starts with
+screen = { corners = 12 }
+```
+
+- A table matches a monitor named after its connector (`hyprctl monitors` shows the `name`), or one whose `description` (make, model, serial) starts with the table's name. Leave the serial out to cover every monitor of that model.
+- A table named after the connector wins. Otherwise the longest matching description wins. With none, the top-level keys apply.
+- A key the table leaves out comes from the top level, whole: a table with only `screen` gets the top-level `notch`.
+- The bar picks the table when it starts and on every reload, for the monitor it opened on. It doesn't move to another monitor while it runs.
+
 Two more say when the bar and the notifications show ([D-88](decisions.md)):
 
 ```toml

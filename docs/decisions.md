@@ -1514,6 +1514,8 @@ screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0] }
 
 **Limits:** a notch is centered on the whole output, insets aside. A bezel that hides more on one side than the other would put it off center in the bar, which centers it between the insets.
 
+*Superseded in part by [D-94](#d-94-screen-settings-per-monitor): saving writes `notch` and `screen` into the monitor's `[monitor."…"]` table, not the top level.*
+
 ---
 
 ## D-72: The bar keeps off what the bezel hides, and hangs from the top like the notch
@@ -2034,4 +2036,35 @@ The settings are grouped by the thing they're about, not by situation, because e
 **What we give up:** the appearance plugin needs dconf on the session bus, which bends [D-23](#d-23-core-plugins-depend-only-on-hyprland-and-the-kernel). It's opt-in, nothing else depends on it, and without dconf it hides. The bar following the desktop needs a portal backend that has the Settings interface (xdg-desktop-portal-gtk or -gnome; -hyprland has none and falls back to them); without one, `"system"` is dark.
 
 **Measured** (Asahi, release, two clocks on tiny-skia, alternating runs in one session): the binary is 18,181,760 → 18,968,192 bytes (+0.79 MB, text +816 KB). The palettes themselves add 7 KB; the rest is zbus and zvariant code instantiated anew, about half for the host's portal subscription (connection setup, match rules, reading a `Value`) and half for the appearance plugin. RSS about 17.9 → 18.3–18.7 MB in the quiet runs (some runs of both landed near 34 MB, noise), from the session bus connection `"system"` opens. Idle CPU 0–1 ticks in 10 s on both.
+
+---
+
+## D-94: Screen settings per monitor
+
+**Status:** accepted (2026-10-14). Amends [D-71](#d-71-eave-calibrate-measures-the-screens-corners-and-notch): where `eave calibrate` saves.
+
+**Problem:** `notch`, `screen` and `islands` describe one screen, but one config.toml often serves several: a dotfiles repository shared by a MacBook and a desktop, or a laptop that's docked. Each panel has its own corners, bezel and notch, and calibrating one overwrote the other.
+
+**What:**
+- `[monitor."<name>"]` tables hold `notch`, `screen` and `islands` for the monitors they match. The top-level keys stay, as the default for every other monitor.
+- **Matching:** a table named after the connector (`eDP-1`) wins. Otherwise the table whose name Hyprland's `description` ("make model serial") starts with, the longest one. `eave_hyprland::types::Monitor` gained `description`, `make` and `model` to read them.
+- **Merging:** each key a table has replaces the top-level one whole. A key it leaves out is the top level's.
+- **Which monitor:** the one the bar opened on, the focused one at its first look into the screen (`Bar::output`). A reload looks that monitor up by name, not whichever has focus then. Resolving the screen now always asks Hyprland for the monitor, one query per change of these settings, since matching needs it.
+- **`eave calibrate`** starts from the setting that applies to the focused monitor. It saves into the table that matches it, or a new `[monitor."<make> <model>"]` (the connector, when Hyprland knows neither), and leaves the top level alone.
+
+**Why:**
+- **The description, and a prefix of it.** Connector names follow the port, not the monitor: the same external screen is `DP-1` on one port or dock and `DP-3` on another. The description follows the monitor, and Hyprland's own `desc:` monitor rules match it the same way. Leaving the serial out covers every unit of a model, which has the same panel. The connector still works, and wins, for the built-in panel (`eDP-1`), which never moves.
+- **Whole keys, not a deep merge.** A `screen` that's half one monitor's and half the top level's is hard to read off the file, and calibrate measures all of `notch` and `screen` together anyway.
+- **Calibrate per monitor.** A measurement is of one panel. Writing it to the top level would make it every other monitor's too.
+
+**Alternatives:**
+- **`[[monitor]]` entries with a `match = "…"` key:** room for more ways to match, but longer to write, and two entries could match equally.
+- **Matching on connector names only:** simplest, but an external monitor's settings would follow the port.
+- **A separate state file per monitor**, written by calibrate: config.toml is the only user file.
+
+**What we give up:**
+- The bar doesn't follow a monitor plugged in or out while it runs. It stays where it opened, with that monitor's settings, until it restarts. Following hotplug comes with one bar per monitor ([roadmap.md](roadmap.md)).
+- Top-level `notch` and `screen` written by an older `eave calibrate` stay where they are. The monitor's table now overrides them, and they still apply to other monitors.
+
+**Cost:** no dependency. One more Hyprland query when config.toml has no measurements, only when these settings change.
 

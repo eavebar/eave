@@ -107,9 +107,12 @@ pub struct Bar {
     /// What the bar goes around: the notch, if there is one (D-69), and what the bezel hides
     /// (D-71).
     screen: notch::Screen,
-    /// The `notch`, `screen` and `islands` settings being, or last, looked into. `None` before
-    /// the first.
-    screen_setting: Option<(config::Notch, config::Screen, config::Islands)>,
+    /// The `notch`, `screen` and `islands` settings, the top level's and each monitor's, being or
+    /// last looked into. `None` before the first.
+    screen_setting: Option<config::Screens>,
+    /// The connector of the output the bar is on, once the first look into the screen found it:
+    /// the one its settings are picked for (D-94), whichever has focus later.
+    output: Option<String>,
     /// Whether a window covers the bar's screen, fullscreen (D-88).
     fullscreen: bool,
     /// Numbers the looks into whether one does, so only the last one's answer counts.
@@ -323,11 +326,9 @@ pub enum Message {
     ConfigChanged(Result<Config, String>),
     /// The desktop's color scheme, now or since it changed.
     ColorScheme(ColorScheme),
-    /// The screen for the `notch`, `screen` and `islands` settings has been looked into.
-    ScreenFound(
-        (config::Notch, config::Screen, config::Islands),
-        notch::Screen,
-    ),
+    /// The screen for the `notch`, `screen` and `islands` settings has been looked into, on this
+    /// output.
+    ScreenFound(config::Screens, Option<String>, notch::Screen),
     /// An app's icon has loaded, or turned out not to exist.
     AppIcon(String, Option<AppIcon>),
     /// A plugin's icon file has been drawn, or turned out not to be one.
@@ -379,6 +380,7 @@ impl Bar {
             panel_wanted: None,
             screen: notch::Screen::default(),
             screen_setting: None,
+            output: None,
             fullscreen: false,
             checks: 0,
             hovered: false,
@@ -407,12 +409,12 @@ impl Bar {
         self.loading.clear();
         let mut old = std::mem::take(&mut self.instances);
         let mut tasks = Vec::new();
-        let setting = (config.notch, config.screen, config.islands);
-        if self.screen_setting != Some(setting) {
-            self.screen_setting = Some(setting);
+        let setting = config.screens();
+        if self.screen_setting.as_ref() != Some(&setting) {
+            self.screen_setting = Some(setting.clone());
             tasks.push(Task::perform(
-                notch::resolve(setting.0, setting.1, setting.2),
-                move |screen| Message::ScreenFound(setting, screen),
+                notch::resolve(setting.clone(), self.output.clone()),
+                move |(output, screen)| Message::ScreenFound(setting.clone(), output, screen),
             ));
         }
 
@@ -1855,9 +1857,12 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             }
             Task::none()
         }
-        Message::ScreenFound(setting, screen) => {
+        Message::ScreenFound(setting, output, screen) => {
+            if bar.output.is_none() {
+                bar.output = output;
+            }
             // Looked into for a setting that has changed since: its own answer is on the way.
-            if bar.screen_setting != Some(setting) || bar.screen == screen {
+            if bar.screen_setting.as_ref() != Some(&setting) || bar.screen == screen {
                 return Task::none();
             }
             let moved = bar.screen.inset != screen.inset

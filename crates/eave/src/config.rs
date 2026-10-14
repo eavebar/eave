@@ -47,6 +47,15 @@
 //! `islands` rounds the islands' corners that face neither a screen corner nor the notch (D-73),
 //! also in physical pixels. `"auto"`, the default, takes the notch's, then the screen's.
 //!
+//! A `[monitor."…"]` table says all three for one monitor instead (D-94). It's named after the
+//! connector, or after what Hyprland's description starts with: make, model, and serial if only
+//! that one unit. Keys it leaves out come from the top level:
+//!
+//! ```toml
+//! [monitor."ViewSonic Corporation XG2431"]
+//! screen = { corners = 12 }
+//! ```
+//!
 //! `theme` is `"system"` (the default), `"light"` or `"dark"` (D-92). `"system"` follows the
 //! desktop's dark mode, as the settings portal tells it, and is dark when it has no preference.
 //!
@@ -220,6 +229,73 @@ pub struct Islands {
     pub smoothing: Option<f32>,
 }
 
+/// The screen's notch, edges and islands, as they are on one monitor.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct ScreenSetting {
+    pub notch: Notch,
+    pub screen: Screen,
+    pub islands: Islands,
+}
+
+/// A `[monitor."…"]` table: what it says for its monitors instead of the top-level keys. What it
+/// leaves out, the top level says (D-94).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct MonitorScreen {
+    pub notch: Option<Notch>,
+    pub screen: Option<Screen>,
+    pub islands: Option<Islands>,
+}
+
+/// Every screen setting config.toml has: the top level's, and each monitor's.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Screens {
+    pub top: ScreenSetting,
+    pub monitors: Vec<(String, MonitorScreen)>,
+}
+
+impl Config {
+    pub fn screens(&self) -> Screens {
+        Screens {
+            top: ScreenSetting {
+                notch: self.notch,
+                screen: self.screen,
+                islands: self.islands,
+            },
+            monitors: self.monitors.clone(),
+        }
+    }
+}
+
+impl Screens {
+    /// The screen setting for the monitor with this connector name (`eDP-1`) and Hyprland
+    /// description (`make model serial`). A table named after the connector wins; then the one
+    /// whose name the description starts with, the longest; then the top-level keys.
+    pub fn screen_for(&self, name: &str, description: &str) -> ScreenSetting {
+        let monitor = self
+            .matching(name, description)
+            .map(|(_, monitor)| *monitor)
+            .unwrap_or_default();
+        ScreenSetting {
+            notch: monitor.notch.unwrap_or(self.top.notch),
+            screen: monitor.screen.unwrap_or(self.top.screen),
+            islands: monitor.islands.unwrap_or(self.top.islands),
+        }
+    }
+
+    /// The `[monitor."…"]` table for this monitor, and its name, as [`Self::screen_for`] picks it.
+    pub fn matching(&self, name: &str, description: &str) -> Option<&(String, MonitorScreen)> {
+        self.monitors
+            .iter()
+            .find(|(key, _)| key == name)
+            .or_else(|| {
+                self.monitors
+                    .iter()
+                    .filter(|(key, _)| !key.is_empty() && description.starts_with(key.as_str()))
+                    .max_by_key(|(key, _)| key.len())
+            })
+    }
+}
+
 /// When the bar shows (D-88).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Bar {
@@ -333,6 +409,8 @@ pub struct Config {
     pub notch: Notch,
     pub screen: Screen,
     pub islands: Islands,
+    /// `[monitor."…"]` tables, by name: the screen settings of the monitors they match (D-94).
+    pub monitors: Vec<(String, MonitorScreen)>,
     pub bar: Bar,
     pub notifications: Notifications,
     pub warnings: Vec<String>,
@@ -420,6 +498,9 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
     }
     if let Some(value) = table.remove("islands") {
         config.islands = islands(value, &mut config.warnings);
+    }
+    if let Some(value) = table.remove("monitor") {
+        config.monitors = monitors(value, &mut config.warnings);
     }
     if let Some(value) = table.remove("bar") {
         config.bar = bar(value, &mut config.warnings);
@@ -781,6 +862,47 @@ fn islands(value: toml::Value, warnings: &mut Vec<String>) -> Islands {
     islands
 }
 
+/// `[monitor."eDP-1"]` or `[monitor."ViewSonic Corporation XG2431"]`, each with `notch`, `screen`
+/// and `islands` as the top level has them.
+fn monitors(value: toml::Value, warnings: &mut Vec<String>) -> Vec<(String, MonitorScreen)> {
+    let toml::Value::Table(table) = value else {
+        warnings.push(
+            "`monitor` must be tables, like [monitor.\"eDP-1\"] with notch, screen and islands, \
+             ignoring it"
+                .into(),
+        );
+        return Vec::new();
+    };
+    let mut monitors = Vec::new();
+    for (key, value) in table {
+        let toml::Value::Table(settings) = value else {
+            warnings.push(format!(
+                "`monitor.\"{key}\"` must be a table with notch, screen and islands, ignoring it"
+            ));
+            continue;
+        };
+        let mut monitor = MonitorScreen::default();
+        for (name, value) in settings {
+            // The same words as the top level's, about the monitor's own key.
+            let mut said = Vec::new();
+            match name.as_str() {
+                "notch" => monitor.notch = Some(notch(value, &mut said)),
+                "screen" => monitor.screen = Some(screen(value, &mut said)),
+                "islands" => monitor.islands = Some(islands(value, &mut said)),
+                _ => said.push(format!(
+                    "takes notch, screen and islands, ignoring `{name}`"
+                )),
+            }
+            warnings.extend(
+                said.into_iter()
+                    .map(|warning| format!("monitor.\"{key}\": {warning}")),
+            );
+        }
+        monitors.push((key, monitor));
+    }
+    monitors
+}
+
 /// `bar = { show = "always", fullscreen = "hide", peek = true, style = "islands", corners = "round" }`.
 fn bar(value: toml::Value, warnings: &mut Vec<String>) -> Bar {
     let mut bar = Bar::default();
@@ -1055,6 +1177,76 @@ mod tests {
         let odd = parse("islands = { radius = -1, smoothing = 2, shape = 1 }").unwrap();
         assert_eq!(odd.islands, Islands::default());
         assert_eq!(odd.warnings.len(), 3, "{:?}", odd.warnings);
+    }
+
+    #[test]
+    fn each_monitor_gets_its_table_or_the_top_level() {
+        let config = parse(
+            "\
+notch = false
+screen = { corners = 10 }
+
+[monitor.\"eDP-1\"]
+notch = { width = 370 }
+
+[monitor.\"ViewSonic Corporation\"]
+screen = { corners = 4 }
+
+[monitor.\"ViewSonic Corporation XG2431\"]
+screen = { corners = 12 }
+islands = { radius = 6 }
+",
+        )
+        .unwrap();
+        assert!(config.warnings.is_empty(), "{:?}", config.warnings);
+        let screens = config.screens();
+        let corners = |name, description| screens.screen_for(name, description).screen.corners;
+
+        // The connector's table wins, and what it leaves out comes from the top level.
+        let laptop = screens.screen_for("eDP-1", "ViewSonic Corporation XG2431 X");
+        assert!(matches!(laptop.notch, Notch::Fixed(shape) if shape.width == 370.0));
+        assert_eq!(laptop.screen.corners, [10.0; 4]);
+        // Then the longest start of the description.
+        let desk = screens.screen_for("DP-2", "ViewSonic Corporation XG2431 WEE241700714");
+        assert_eq!(desk.screen.corners, [12.0; 4]);
+        assert_eq!(desk.islands.radius, Some(6.0));
+        assert_eq!(desk.notch, Notch::Off);
+        assert_eq!(corners("DP-3", "ViewSonic Corporation VX2758"), [4.0; 4]);
+        // And none: the top level.
+        assert_eq!(corners("HDMI-A-1", "Dell Inc. U2720Q"), [10.0; 4]);
+        assert_eq!(corners("DP-1", "ViewSonic"), [10.0; 4]);
+    }
+
+    #[test]
+    fn odd_monitor_tables_are_warned_about() {
+        let odd = parse(
+            "\
+monitor = { \"eDP-1\" = 3 }
+",
+        )
+        .unwrap();
+        assert!(odd.monitors.is_empty());
+        assert_eq!(odd.warnings.len(), 1, "{:?}", odd.warnings);
+
+        let odd = parse(
+            "\
+[monitor.\"eDP-1\"]
+screen = { corners = -1 }
+bar = { show = \"hover\" }
+",
+        )
+        .unwrap();
+        assert_eq!(odd.warnings.len(), 2, "{:?}", odd.warnings);
+        assert!(
+            odd.warnings
+                .iter()
+                .all(|warning| warning.starts_with("monitor.\"eDP-1\": ")),
+            "{:?}",
+            odd.warnings
+        );
+        assert_eq!(odd.monitors[0].1.screen, Some(Screen::default()));
+
+        assert_eq!(parse("monitor = 1").unwrap().warnings.len(), 1);
     }
 
     #[test]
