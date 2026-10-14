@@ -22,6 +22,7 @@ mod island;
 mod jelly;
 mod kit;
 mod label;
+mod lift;
 mod markdown;
 mod meter;
 mod neck;

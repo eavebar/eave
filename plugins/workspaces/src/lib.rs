@@ -553,7 +553,7 @@ mod tests {
             },
             class: "kitty".into(),
             title: String::new(),
-            focus_history_id: None,
+            ..Client::default()
         }
     }
 
