@@ -168,10 +168,10 @@ pub const DROP_SQUISH: f32 = 4.0;
 /// How far apart the drop and where it comes out still flow together, in logical pixels: the
 /// neck is a wide, smooth bell when the drop is right under it, which narrows as it falls and
 /// pinches off about half this far away.
-pub const NECK_BLEND: f32 = 36.0;
+pub const NECK_BLEND: f32 = 56.0;
 /// How far each way from the drop's middle the neck can spread along the notch's bottom: short of
 /// its lower corners.
-pub const NECK_SPREAD: f32 = 60.0;
+pub const NECK_SPREAD: f32 = 76.0;
 /// How far a drop lurches as its neck lets go of it or catches it, and as it falls into place,
 /// in logical pixels: a nudge up or down, bigger.
 pub const DROP_BOUNCE: f32 = 3.0;
