@@ -64,6 +64,8 @@ How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs
 | Island height | 30 px; with a notch, ending where the notch does ([D-76](decisions.md)) | | |
 | Notch | drawn black by the bar, `grow` px bigger than it is if asked ([D-75](decisions.md)) | | |
 | Top edge | drawn black by the bar, `grow` px thicker than it is if asked; what hangs from the top hangs from there ([D-81](decisions.md)) | | |
+| Notification card | where it's from in small dim type, the time at its end; what it says; buttons sharing its width, the first filled; a wide picture full width under the text | a critical one's source in red with a dot; a stack's earlier notices a dim line each | the time turns into the close button ([D-85](decisions.md)) |
+| Option (on a notification) | a row: its label, what it means dim under it, a "Recommended" badge | picked: lit like the row in use; with several to pick, a white check box | 8 % fill |
 | Code block, diff | 7 % fill, monospace, colored for the language; four lines or more are numbered | a diff's added and removed lines on faint green and red, its header counting them | |
 
 ## Motion

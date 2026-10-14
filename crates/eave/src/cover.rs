@@ -5,6 +5,9 @@
 //! cropped to a square from the middle, shrunk by averaging and given rounded corners, twice: at
 //! icon size and at [`theme::COVER_SIZE`]. Only those small bitmaps are kept, by URL, with the
 //! cover's one strong color, if it has one: the content color a popover's controls take (D-61).
+//! A picture wider than 4:3 is also drawn whole, as wide as a notification card, for a
+//! notification to show it under its text (D-85). A notification's picture can also come as its
+//! pixels ([`load_pixels`]); it's kept by a key made from where its bytes are.
 
 use std::io::Read;
 use std::sync::Arc;
@@ -13,6 +16,9 @@ use std::time::Duration;
 use iced::widget::image;
 use iced::{Color, Element};
 use resvg::tiny_skia::Pixmap;
+
+use eave_api::ui::{NoticeParts, Pixels};
+use iced::Size;
 
 use crate::apps::Picture;
 use crate::theme;
@@ -24,11 +30,13 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// The largest picture decoded, either way, so a hostile file can't take all the memory.
 const MAX_SIDE: usize = 4096;
 
-/// A cover, drawn at both sizes.
+/// A cover, drawn at both sizes, and whole if it's wide.
 #[derive(Debug, Clone)]
 pub struct Cover {
     small: image::Handle,
     large: image::Handle,
+    /// Whole, at most twice a card's width across, and how tall that is for each pixel across.
+    wide: Option<(image::Handle, f32)>,
     color: Option<Color>,
 }
 
@@ -44,8 +52,19 @@ impl Cover {
         Element::new(Picture {
             handle: self.large.clone(),
             opacity,
-            size,
+            size: Size::new(size, size),
         })
+    }
+
+    /// Whole, `width` across, if it's wide enough to be shown that way: a notification's
+    /// screenshot or photo, under its text.
+    pub fn view_wide<'a, M: 'a>(&self, width: f32) -> Option<Element<'a, M>> {
+        let (handle, ratio) = self.wide.as_ref()?;
+        Some(Element::new(Picture {
+            handle: handle.clone(),
+            opacity: 1.0,
+            size: Size::new(width, (width * ratio).round()),
+        }))
     }
 
     /// At icon size, or [`theme::COVER_SIZE`] when `large`, faded to `opacity`.
@@ -58,9 +77,44 @@ impl Cover {
         Element::new(Picture {
             handle,
             opacity,
-            size,
+            size: Size::new(size, size),
         })
     }
+}
+
+/// What a notification's own picture is kept by: its URL, or for one that came as pixels, where
+/// its bytes are. The host holds on to those bytes while it keeps the picture
+/// ([`Icons::pixels`](crate::apps::Icons)), so no other picture can take the address meanwhile.
+pub fn key<M>(notice: &NoticeParts<M>) -> Option<String> {
+    match &notice.pixels {
+        Some(pixels) => Some(pixels_key(pixels)),
+        None => notice.image.clone(),
+    }
+}
+
+/// [`key`] for a picture that came as pixels.
+pub fn pixels_key(pixels: &Pixels) -> String {
+    format!(
+        "pixels:{:p}:{}",
+        pixels.rgba().as_ptr(),
+        pixels.rgba().len()
+    )
+}
+
+/// Draws a picture that came as its pixels, off the UI thread.
+pub async fn load_pixels(pixels: Pixels) -> Option<Cover> {
+    tokio::task::spawn_blocking(move || {
+        let rgba = Rgba {
+            width: pixels.width() as usize,
+            height: pixels.height() as usize,
+            pixels: pixels.rgba().to_vec(),
+        };
+        let size_ok = rgba.width.max(rgba.height) <= MAX_SIDE;
+        size_ok.then(|| draw_rgba(&rgba))
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Fetches and draws the cover at `url`, off the UI thread. `None` when it can't be had.
@@ -145,16 +199,66 @@ struct Rgba {
 }
 
 fn draw(bytes: &[u8]) -> Option<Cover> {
-    let rgba = decode(bytes)?;
+    Some(draw_rgba(&decode(bytes)?))
+}
+
+/// A picture is drawn whole once it's wider than this, height to width: 4:3.
+const WIDE: f32 = 3.0 / 4.0;
+
+fn draw_rgba(rgba: &Rgba) -> Cover {
     let small = (2.0 * theme::ICON_SIZE) as usize;
     let large = (2.0 * theme::COVER_SIZE) as usize;
-    let (side, pixels) = shrink(&rgba, small, theme::COVER_ICON_RADIUS / theme::ICON_SIZE);
+    let (side, pixels) = shrink(rgba, small, theme::COVER_ICON_RADIUS / theme::ICON_SIZE);
     let color = content_color(&pixels);
-    Some(Cover {
+    let wide = (rgba.height as f32 <= rgba.width as f32 * WIDE).then(|| wide(rgba));
+    Cover {
         small: image::Handle::from_rgba(side as u32, side as u32, pixels),
-        large: square(&rgba, large, theme::COVER_RADIUS / theme::COVER_SIZE),
+        large: square(rgba, large, theme::COVER_RADIUS / theme::COVER_SIZE),
+        wide,
         color,
-    })
+    }
+}
+
+/// A wide picture whole, at most twice a card's width across, cropped from the middle to no
+/// taller than [`theme::NOTICE_IMAGE_MAX`] at a card's width, with rounded corners. And its
+/// height for each pixel across.
+fn wide(rgba: &Rgba) -> (image::Handle, f32) {
+    let card = theme::PANEL_WIDTH - 2.0 * f32::from(theme::PANEL_PADDING);
+    let tallest = theme::NOTICE_IMAGE_MAX / card;
+    let height = rgba
+        .height
+        .min((rgba.width as f32 * tallest).floor() as usize)
+        .max(1);
+    let top = (rgba.height - height) / 2;
+    let width = rgba.width.min((2.0 * card) as usize);
+    let out_height = (height * width / rgba.width).max(1);
+    let radius = theme::NOTICE_IMAGE_RADIUS * width as f32 / card;
+    let mut pixels = Vec::with_capacity(width * out_height * 4);
+    for y in 0..out_height {
+        let (y0, y1) = span(y, out_height, height);
+        for x in 0..width {
+            let (x0, x1) = span(x, width, rgba.width);
+            let mut sum = [0u32; 4];
+            for sy in y0..y1 {
+                let row = (top + sy) * rgba.width;
+                for sx in x0..x1 {
+                    let at = (row + sx) * 4;
+                    for (total, value) in sum.iter_mut().zip(&rgba.pixels[at..at + 4]) {
+                        *total += u32::from(*value);
+                    }
+                }
+            }
+            let count = ((y1 - y0) * (x1 - x0)) as u32;
+            let [red, green, blue, alpha] = sum.map(|total| (total / count) as u8);
+            let alpha = (f32::from(alpha) * rounded(x, y, width, out_height, radius)).round() as u8;
+            pixels.extend([red, green, blue, alpha]);
+        }
+    }
+    let ratio = out_height as f32 / width as f32;
+    (
+        image::Handle::from_rgba(width as u32, out_height as u32, pixels),
+        ratio,
+    )
 }
 
 /// How many slices the hue circle is cut into to find the cover's color.
@@ -345,11 +449,16 @@ fn span(index: usize, size: usize, side: usize) -> (usize, usize) {
 /// How much of pixel (`x`, `y`) is inside a `size` square with corners rounded by `radius` of
 /// its side: 1 inside, 0 outside, in between along the curve.
 fn corner(x: usize, y: usize, size: usize, radius: f32) -> f32 {
-    let size = size as f32;
-    let radius = radius * size;
+    rounded(x, y, size, size, radius * size as f32)
+}
+
+/// How much of pixel (`x`, `y`) is inside a `width` × `height` rectangle with corners rounded by
+/// `radius` pixels.
+fn rounded(x: usize, y: usize, width: usize, height: usize, radius: f32) -> f32 {
+    let (width, height) = (width as f32, height as f32);
     let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
-    let dx = (radius - cx).max(cx - (size - radius)).max(0.0);
-    let dy = (radius - cy).max(cy - (size - radius)).max(0.0);
+    let dx = (radius - cx).max(cx - (width - radius)).max(0.0);
+    let dy = (radius - cy).max(cy - (height - radius)).max(0.0);
     let outside = (dx * dx + dy * dy).sqrt() - radius;
     (0.5 - outside).clamp(0.0, 1.0)
 }
@@ -452,6 +561,40 @@ mod tests {
         assert_eq!((rgba.width, rgba.height), (3, 2));
         assert!(decode(b"GIF89a").is_none());
         assert!(decode(&[0xFF, 0xD8, 0, 0]).is_none(), "a broken JPEG");
+    }
+
+    #[test]
+    fn only_wide_pictures_are_drawn_whole() {
+        assert!(draw_rgba(&checker(40, 40)).wide.is_none(), "square");
+        assert!(
+            draw_rgba(&checker(40, 31)).wide.is_none(),
+            "a little under 4:3"
+        );
+        let (handle, ratio) = draw_rgba(&checker(1600, 900)).wide.expect("16:9");
+        let (width, height, _) = pixels(&handle);
+        let card = theme::PANEL_WIDTH - 2.0 * f32::from(theme::PANEL_PADDING);
+        assert_eq!(width, (2.0 * card) as u32, "twice a card across, no more");
+        assert!((ratio - 9.0 / 16.0).abs() < 0.01, "whole: {ratio}");
+        assert_eq!(height, (width as f32 * ratio).round() as u32);
+    }
+
+    #[test]
+    fn a_very_wide_picture_is_cropped_to_the_tallest_a_card_shows() {
+        let (_, ratio) = draw_rgba(&checker(400, 296)).wide.expect("wide");
+        let card = theme::PANEL_WIDTH - 2.0 * f32::from(theme::PANEL_PADDING);
+        assert!(
+            ratio * card <= theme::NOTICE_IMAGE_MAX + 1.0,
+            "{}",
+            ratio * card
+        );
+    }
+
+    #[test]
+    fn pixels_are_kept_by_where_they_are() {
+        let a = Pixels::new(1, 1, vec![0u8; 4]).unwrap();
+        let b = Pixels::new(1, 1, vec![0u8; 4]).unwrap();
+        assert_eq!(pixels_key(&a), pixels_key(&a.clone()));
+        assert_ne!(pixels_key(&a), pixels_key(&b));
     }
 
     #[test]

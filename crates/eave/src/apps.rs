@@ -37,22 +37,25 @@ impl AppIcon {
         Element::new(Picture {
             handle: self.0.clone(),
             opacity,
-            size: theme::ICON_SIZE,
+            size: Size::new(theme::ICON_SIZE, theme::ICON_SIZE),
         })
     }
 }
 
-/// An icon or cover on screen, `size` square. Unlike iced's image, it squishes with its island
+/// An icon or cover on screen, `size` big (square but for a notification's wide picture). Unlike iced's image, it squishes with its island
 /// ([`squish`]): an image can be drawn into any rectangle, so it's drawn into a stretched one.
 pub struct Picture {
     pub handle: image::Handle,
     pub opacity: f32,
-    pub size: f32,
+    pub size: Size,
 }
 
 impl<M> Widget<M, iced::Theme, iced::Renderer> for Picture {
     fn size(&self) -> Size<Length> {
-        Size::new(Length::Fixed(self.size), Length::Fixed(self.size))
+        Size::new(
+            Length::Fixed(self.size.width),
+            Length::Fixed(self.size.height),
+        )
     }
 
     fn layout(
@@ -61,7 +64,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Picture {
         _renderer: &iced::Renderer,
         _limits: &layout::Limits,
     ) -> layout::Node {
-        layout::Node::new(Size::new(self.size, self.size))
+        layout::Node::new(self.size)
     }
 
     fn draw(
@@ -102,6 +105,9 @@ pub struct Icons {
     pub frames: HashMap<FileKey, Option<Frame>>,
     /// Covers by URL: `None` for one that couldn't be had.
     pub covers: HashMap<String, Option<Cover>>,
+    /// The pixels of the covers that came as pixels, by their key among `covers`: held while
+    /// their cover is, so no other picture can take their address and so their key.
+    pub pixels: HashMap<String, eave_api::ui::Pixels>,
 }
 
 /// The icons a view shows, so the host can load the ones it doesn't have.

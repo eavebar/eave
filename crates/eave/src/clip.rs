@@ -2,10 +2,10 @@
 //! cut at the edge of its room, and its last few pixels fade into the background behind it. Short
 //! text is left as it is.
 
-use iced::advanced::widget::{Tree, tree};
-use iced::advanced::{Layout, Widget, layout, mouse, renderer};
+use iced::advanced::widget::{Operation, Tree, tree};
+use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, renderer};
 use iced::gradient::Linear;
-use iced::{Background, Color, Element, Length, Point, Radians, Rectangle, Size};
+use iced::{Background, Color, Element, Event, Length, Point, Radians, Rectangle, Size};
 
 use crate::theme;
 
@@ -114,20 +114,32 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Clip<'_, M> {
 }
 
 /// Text that may run longer than `max` high: laid out in full, cut at `max`, and its last lines
-/// fading into the background behind it, so a cut list or paragraph doesn't leave a hole.
+/// fading into the background behind it, so a cut list or paragraph doesn't leave a hole. Under a
+/// cut, it can show [`more`](Fold::more): a way to see the rest.
 pub struct Fold<'a, M> {
     content: Element<'a, M>,
+    more: Option<Element<'a, M>>,
     background: Color,
     max: f32,
 }
+
+/// Between a cut and what's under it.
+const MORE_GAP: f32 = 2.0;
 
 impl<'a, M> Fold<'a, M> {
     pub fn new(content: impl Into<Element<'a, M>>, background: Color, max: f32) -> Self {
         Self {
             content: content.into(),
+            more: None,
             background,
             max,
         }
+    }
+
+    /// Shown under the content only when it's cut: a "Show all".
+    pub fn more(mut self, more: impl Into<Element<'a, M>>) -> Self {
+        self.more = Some(more.into());
+        self
     }
 }
 
@@ -148,8 +160,19 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Fold<'_, M> {
             self.content
                 .as_widget_mut()
                 .layout(&mut tree.children[0], renderer, &natural);
+        let cut = content.size().height > self.max + 0.5;
         let height = content.size().height.min(self.max);
-        layout::Node::with_children(Size::new(width, height), vec![content])
+        let mut children = vec![content];
+        let mut total = height;
+        if let Some(more) = self.more.as_mut().filter(|_| cut) {
+            let node = more
+                .as_widget_mut()
+                .layout(&mut tree.children[1], renderer, &natural)
+                .move_to(Point::new(0.0, height + MORE_GAP));
+            total += MORE_GAP + node.size().height;
+            children.push(node);
+        }
+        layout::Node::with_children(Size::new(width, total), children)
     }
 
     fn draw(
@@ -164,10 +187,25 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Fold<'_, M> {
     ) {
         use iced::advanced::Renderer as _;
 
-        let bounds = layout.bounds();
         let Some(content) = layout.children().next() else {
             return;
         };
+        let more = layout.children().nth(1);
+        let mut bounds = layout.bounds();
+        if let Some(more) = more {
+            bounds.height = more.bounds().y - MORE_GAP - bounds.y;
+        }
+        if let (Some(element), Some(more)) = (&self.more, more) {
+            element.as_widget().draw(
+                &tree.children[1],
+                renderer,
+                theme,
+                style,
+                more,
+                cursor,
+                viewport,
+            );
+        }
         renderer.with_layer(bounds, |renderer| {
             self.content.as_widget().draw(
                 &tree.children[0],
@@ -207,15 +245,78 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Fold<'_, M> {
     }
 
     fn children(&self) -> Vec<Tree> {
-        vec![Tree::new(&self.content)]
+        std::iter::once(&self.content)
+            .chain(&self.more)
+            .map(Tree::new)
+            .collect()
     }
 
     fn diff(&self, tree: &mut Tree) {
-        tree.diff_children(std::slice::from_ref(&self.content));
+        let children: Vec<&Element<'_, M>> =
+            std::iter::once(&self.content).chain(&self.more).collect();
+        tree.diff_children(&children);
     }
 
     fn tag(&self) -> tree::Tag {
         tree::Tag::stateless()
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        if let (Some(more), Some(place)) = (&mut self.more, layout.children().nth(1)) {
+            more.as_widget_mut()
+                .operate(&mut tree.children[1], place, renderer, operation);
+        }
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &iced::Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, M>,
+        viewport: &Rectangle,
+    ) {
+        if let (Some(more), Some(place)) = (&mut self.more, layout.children().nth(1)) {
+            more.as_widget_mut().update(
+                &mut tree.children[1],
+                event,
+                place,
+                cursor,
+                renderer,
+                clipboard,
+                shell,
+                viewport,
+            );
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &iced::Renderer,
+    ) -> mouse::Interaction {
+        match (&self.more, layout.children().nth(1)) {
+            (Some(more), Some(place)) => more.as_widget().mouse_interaction(
+                &tree.children[1],
+                place,
+                cursor,
+                viewport,
+                renderer,
+            ),
+            _ => mouse::Interaction::None,
+        }
     }
 }
 

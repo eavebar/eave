@@ -222,6 +222,23 @@ pub const NOTICE_CLOSE: f32 = 22.0;
 pub const NOTICE_BODY_LINES: f32 = 4.0;
 /// A notification's own picture, beside its summary and body.
 pub const NOTICE_PICTURE: f32 = 40.0;
+/// A notification's wide picture, under its text and as wide as the card: at most this tall,
+/// cropped from the middle beyond that, and its corners' radius.
+pub const NOTICE_IMAGE_MAX: f32 = 180.0;
+pub const NOTICE_IMAGE_RADIUS: f32 = 8.0;
+/// The dot before a critical notification's app name.
+pub const NOTICE_DOT: f32 = 8.0;
+/// A notification asking several questions: a dot for each, the one asked now lit.
+pub const STEP_DOT: f32 = 5.0;
+/// A check box beside an option, when several can be picked: a ring at rest, a white square with
+/// a black check once picked. The ring is the white of the countdown.
+pub const CHECK_SIZE: f32 = 16.0;
+pub const CHECK_RING: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.35);
+/// How many cards the panel of notifications shows at once. The rest wait, under a line that
+/// says how many, which opens their popover (D-85).
+pub const NOTICES_SHOWN: usize = 3;
+/// How many earlier notifications of its thread a card lists under itself, a line each.
+pub const NOTICE_STACK_LINES: usize = 3;
 /// Within a card: below the line it's from, between its text and its picture, and above its
 /// reply field and actions. The summary sits tight on its body.
 pub const NOTICE_GAP: f32 = 8.0;

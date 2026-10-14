@@ -4,10 +4,11 @@
 //! the screen's edge into a panel the same way, while there are any. The dormer, the search
 //! dialog for widgets' actions, drops out of the top of the screen the same way too (D-84).
 
-use std::time::{Duration, Instant};
+use std::collections::HashMap;
+use std::time::{Duration, Instant, SystemTime};
 
 use eave_api::erased::{AnyMessage, ErasedWidget, PopoverRequest};
-use eave_api::ui::{self as ui, Action, Icon, Notice, NoticeParts, Tone};
+use eave_api::ui::{self as ui, Action, Icon, Notice, NoticeParts, Pixels, Tone, Urgency};
 use eave_api::{NudgeRequest, Registry};
 use iced::alignment::Horizontal;
 use iced::widget::{Space, container, row, stack};
@@ -163,6 +164,24 @@ struct Toast {
     leaving: bool,
     /// Its reply field was clicked and has the focus: the bar has the keyboard for it.
     engaged: bool,
+    /// Its body shows in full: "Show all" was clicked.
+    unfolded: bool,
+    /// The question it asked before this one, and since when, while that slides away.
+    previous: Option<(NoticeParts<AnyMessage>, Instant)>,
+}
+
+impl Toast {
+    /// What it stacks by: notices of the same widget, app and thread, and as urgent, that come
+    /// one after another share a card. One without a thread has a card of its own.
+    fn thread(&self) -> Option<(u64, Option<&str>, &str, bool)> {
+        let notice = &self.notice;
+        Some((
+            self.instance,
+            notice.app.as_deref(),
+            notice.thread.as_deref()?,
+            notice.urgency == Urgency::Critical,
+        ))
+    }
 }
 
 /// The right island while it's a panel of notifications. Like a popover, but nobody opens it:
@@ -246,6 +265,14 @@ pub enum Message {
     Frame(FileKey, Option<Frame>),
     /// A cover has been fetched and drawn, or couldn't be.
     Cover(String, Option<Cover>),
+    /// Messages for several widgets at once: closing a card of several notifications.
+    Many(Vec<(u64, AnyMessage)>),
+    /// "Show all" on a notification: its instance and key.
+    Unfold(u64, u64),
+    /// The line under the cards that says how many more wait: opens this instance's popover.
+    MoreNotices(u64),
+    /// A minute went by while notifications show: their times move on.
+    Minute,
 }
 
 impl Bar {
@@ -398,14 +425,25 @@ impl Bar {
             }
         }
         let notices = self.toasts.iter().map(|toast| &toast.notice);
-        wanted.apps.extend(
-            notices
-                .clone()
-                .filter_map(|notice| notice.app_icon.as_ref().or(notice.app.as_ref()).cloned()),
-        );
-        wanted
-            .covers
-            .extend(notices.filter_map(|notice| notice.image.clone()));
+        // An app's icon by its id, or a file it gave for it, drawn like a cover.
+        for app in notices
+            .clone()
+            .filter_map(|notice| notice.app_icon.as_ref().or(notice.app.as_ref()))
+        {
+            if kit::is_file(app) {
+                wanted.covers.push(app.clone());
+            } else {
+                wanted.apps.push(app.clone());
+            }
+        }
+        // A notification's own picture: by URL, or by where its pixels are.
+        let mut pixels: HashMap<String, Pixels> = HashMap::new();
+        for notice in notices {
+            if let Some(picture) = &notice.pixels {
+                pixels.insert(cover::pixels_key(picture), picture.clone());
+            }
+            wanted.covers.extend(cover::key(notice));
+        }
         let mut tasks = Vec::new();
         for file in wanted.files {
             let key = FileKey::of(file);
@@ -433,14 +471,28 @@ impl Bar {
                 .covers
                 .retain(|url, _| wanted.covers.contains(url));
         }
+        // Pixels are held while their picture is kept, so no other picture takes their address.
+        let covers = &self.icons.covers;
+        self.icons.pixels.retain(|key, _| covers.contains_key(key));
         for url in wanted.covers {
             if self.icons.covers.contains_key(&url) || self.fetching.contains(&url) {
                 continue;
             }
             self.fetching.push(url.clone());
-            tasks.push(Task::perform(cover::load(url.clone()), move |cover| {
-                Message::Cover(url.clone(), cover)
-            }));
+            let load = match pixels.remove(&url) {
+                Some(picture) => {
+                    self.icons.pixels.insert(url.clone(), picture.clone());
+                    Task::perform(cover::load_pixels(picture), {
+                        let url = url.clone();
+                        move |cover| Message::Cover(url.clone(), cover)
+                    })
+                }
+                None => Task::perform(cover::load(url.clone()), {
+                    let url = url.clone();
+                    move |cover| Message::Cover(url.clone(), cover)
+                }),
+            };
+            tasks.push(load);
         }
         for app_id in wanted.apps {
             if self.icons.apps.contains_key(&app_id) || self.loading.contains(&app_id) {
@@ -790,6 +842,15 @@ impl Bar {
                         toast.left = expires;
                         toast.deadline = None;
                     }
+                    // On to another question: the one before slides away.
+                    let step = |notice: &NoticeParts<AnyMessage>| {
+                        notice.step.as_ref().map(|step| step.index)
+                    };
+                    if step(&toast.notice) != step(&notice) && step(&notice).is_some() {
+                        let before = std::mem::replace(&mut toast.notice, notice.clone());
+                        toast.previous = Some((before, Instant::now()));
+                        toast.unfolded = false;
+                    }
                     toast.leaving = false;
                     toast.notice = notice;
                 }
@@ -800,6 +861,8 @@ impl Bar {
                     deadline: None,
                     leaving: false,
                     engaged: false,
+                    unfolded: false,
+                    previous: None,
                 }),
             }
         }
@@ -852,6 +915,30 @@ impl Bar {
         }
     }
 
+    /// The panel's cards, in the order they show, each the indices of its notifications in
+    /// [`toasts`](Self::toasts), newest first. Critical ones come first. A notification that
+    /// follows one of the same thread joins its card ([D-85](../../../docs/decisions.md)). Only the
+    /// first [`style::NOTICES_SHOWN`] show; the rest wait. While the panel folds back, the cards
+    /// are the ones it last showed.
+    fn cards(&self) -> Vec<Vec<usize>> {
+        let open = self.notices.as_ref().is_none_or(|panel| panel.open);
+        let mut order: Vec<usize> = (0..self.toasts.len())
+            .filter(|&index| self.toasts[index].leaving != open)
+            .collect();
+        order.sort_by_key(|&index| self.toasts[index].notice.urgency != Urgency::Critical);
+        let mut cards: Vec<Vec<usize>> = Vec::new();
+        for index in order {
+            let thread = self.toasts[index].thread();
+            match cards.last_mut() {
+                Some(card) if thread.is_some() && self.toasts[card[0]].thread() == thread => {
+                    card.push(index);
+                }
+                _ => cards.push(vec![index]),
+            }
+        }
+        cards
+    }
+
     /// Starts and stops each notification's clock: it runs while the panel is on screen and not
     /// pointed at. Then sets the timer for the next one to expire, unless it's already set.
     fn run_clocks(&mut self, now: Instant) -> Task<Message> {
@@ -861,8 +948,16 @@ impl Bar {
                 .notices
                 .as_ref()
                 .is_some_and(|panel| panel.open && panel.rect.is_some() && !panel.hovered);
-        for toast in &mut self.toasts {
-            let running = shown && !toast.leaving;
+        // Only a card's newest notice counts, and only on the cards that show: the earlier ones
+        // go with it, and the cards waiting haven't been seen.
+        let counted: Vec<usize> = self
+            .cards()
+            .iter()
+            .take(style::NOTICES_SHOWN)
+            .map(|card| card[0])
+            .collect();
+        for (index, toast) in self.toasts.iter_mut().enumerate() {
+            let running = shown && !toast.leaving && counted.contains(&index);
             match (running, toast.deadline) {
                 (true, None) => toast.deadline = toast.left.map(|left| now + left),
                 (false, Some(deadline)) => {
@@ -912,11 +1007,19 @@ impl Bar {
     }
 
     /// The notifications whose time is up by `now`: their widgets get the message they asked for.
+    /// The earlier notices of a card go with its newest.
     fn expire(&mut self, now: Instant) -> Hooks {
         self.alarm = None;
         let mut hooks = Hooks::new();
-        for toast in &mut self.toasts {
-            if toast.deadline.is_some_and(|deadline| deadline <= now) {
+        for card in self.cards() {
+            let due = self.toasts[card[0]]
+                .deadline
+                .is_some_and(|deadline| deadline <= now);
+            if !due {
+                continue;
+            }
+            for index in card {
+                let toast = &mut self.toasts[index];
                 toast.deadline = None;
                 toast.left = None;
                 let message = toast
@@ -1072,6 +1175,19 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             bar.icons.covers.insert(url, cover);
             Task::none()
         }
+        Message::Many(hooks) => send(hooks),
+        Message::Unfold(instance, key) => {
+            if let Some(toast) = bar
+                .toasts
+                .iter_mut()
+                .find(|toast| toast.instance == instance && toast.notice.key == key)
+            {
+                toast.unfolded = true;
+            }
+            Task::none()
+        }
+        Message::MoreNotices(id) => send(bar.open_popover(id)),
+        Message::Minute => Task::none(),
         Message::InnerPressed(id) if bar.popover_of(id).is_none() => send(bar.close_popover()),
         // Clicks on our own surfaces are handled where they land.
         Message::BarPressed => send(bar.close_popover()),
@@ -1789,31 +1905,65 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
 }
 
 fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Message> {
+    let now = SystemTime::now();
+    let mut cards = bar.cards();
+    let waiting = cards.split_off(cards.len().min(style::NOTICES_SHOWN));
     // While it folds back, it fades out the last ones it showed.
-    let content = kit::notices(
-        bar.toasts
+    let shown = cards.into_iter().map(|card| {
+        let head = &bar.toasts[card[0]];
+        let instance = head.instance;
+        let key = head.notice.key;
+        let countdown = head.notice.expires.as_ref().map(|(total, _)| Countdown {
+            total: *total,
+            left: head.left.unwrap_or_default(),
+            ends: head.deadline,
+        });
+        // Closing the card closes every notice on it.
+        let dismiss: Vec<_> = card
             .iter()
-            .filter(|toast| toast.leaving != panel.open)
-            .map(|toast| {
-                let instance = toast.instance;
-                let countdown = toast.notice.expires.as_ref().map(|(total, _)| Countdown {
-                    total: *total,
-                    left: toast.left.unwrap_or_default(),
-                    ends: toast.deadline,
-                });
-                let key = toast.notice.key;
-                kit::notice(
-                    toast.notice.clone(),
-                    countdown,
-                    &bar.icons,
-                    move |message| Message::Widget(instance, message),
-                    move |focused| Message::ReplyFocused(instance, key, focused),
-                )
-            }),
-    );
+            .filter_map(|&index| {
+                let toast = &bar.toasts[index];
+                Some((toast.instance, toast.notice.on_dismiss.clone()?))
+            })
+            .collect();
+        let dismiss = (!dismiss.is_empty()).then_some(Message::Many(dismiss));
+        let earlier = card
+            .iter()
+            .skip(1)
+            .take(style::NOTICE_STACK_LINES)
+            .map(|&index| bar.toasts[index].notice.clone())
+            .collect();
+        // The question before, for as long as it may still be sliding away.
+        let previous = head
+            .previous
+            .as_ref()
+            .filter(|(_, since)| since.elapsed() < 2 * style::TAB_FADE)
+            .map(|(notice, _)| notice.clone());
+        let element = kit::notice(
+            kit::Card {
+                notice: head.notice.clone(),
+                earlier,
+                countdown,
+                unfolded: head.unfolded,
+                previous,
+            },
+            &bar.icons,
+            now,
+            move |message| Message::Widget(instance, message),
+            move |focused| Message::ReplyFocused(instance, key, focused),
+            dismiss,
+            Message::Unfold(instance, key),
+        );
+        ((instance, key), element)
+    });
+    // The cards that wait: how many notices they hold, and whose popover lists them.
+    let footer = waiting.first().map(|card| {
+        let count = waiting.iter().map(Vec::len).sum();
+        kit::more_notices(count, Message::MoreNotices(bar.toasts[card[0]].instance))
+    });
     island::Popover {
         key: NOTICES,
-        content,
+        content: kit::notices(shown, footer),
         open: panel.open,
         on_placed: Box::new(Message::NoticesPlaced),
         on_closed: Message::NoticesClosed,
@@ -1843,6 +1993,14 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
     }
     // Always: the dormer's keybind comes this way. Every other event stops in the filter.
     subscriptions.push(Subscription::run(hyprland_events).filter_map(custom));
+    // Notifications say how long ago they came: a minute at a time, while they show.
+    let timed = bar
+        .toasts
+        .iter()
+        .any(|toast| !toast.leaving && toast.notice.time.is_some());
+    if timed && bar.notices.as_ref().is_some_and(|panel| panel.open) {
+        subscriptions.push(iced::time::every(Duration::from_secs(60)).map(|_| Message::Minute));
+    }
     Subscription::batch(subscriptions)
 }
 
@@ -2153,8 +2311,9 @@ mod tests {
     }
 
     /// Shows a notice per key it was told to add, each expiring after 5 s, and a reply field on
-    /// the one being answered.
-    struct Notifying(Vec<u64>, Option<u64>);
+    /// the one being answered. Keys from 100 are in one thread, from 200 critical; and each may
+    /// be on a question of several.
+    struct Notifying(Vec<u64>, Option<u64>, Vec<(u64, usize)>);
 
     #[derive(Debug, Clone, PartialEq)]
     enum Note {
@@ -2164,6 +2323,7 @@ mod tests {
         Answer(u64),
         Typed(String),
         Cancel,
+        Step(u64, usize),
     }
 
     impl Widget for Notifying {
@@ -2171,7 +2331,7 @@ mod tests {
         type Message = Note;
 
         fn new(_: Self::Config) -> (Self, eave_api::Task<Note>) {
-            (Self(Vec::new(), None), eave_api::Task::none())
+            (Self(Vec::new(), None, Vec::new()), eave_api::Task::none())
         }
 
         fn update(&mut self, message: Note) -> Effect<Note> {
@@ -2181,6 +2341,10 @@ mod tests {
                 Note::Answer(key) => self.1 = Some(key),
                 Note::Typed(_) => {}
                 Note::Cancel => self.1 = None,
+                Note::Step(key, step) => {
+                    self.2.retain(|(at, _)| *at != key);
+                    self.2.push((key, step));
+                }
             }
             Effect::none()
         }
@@ -2193,8 +2357,18 @@ mod tests {
             self.0
                 .iter()
                 .map(|&key| {
-                    let notice = Notice::new(key, format!("notice {key}"))
+                    let mut notice = Notice::new(key, format!("notice {key}"))
+                        .app("app")
                         .expires(Duration::from_secs(5), Note::Expired(key));
+                    if (100..200).contains(&key) {
+                        notice = notice.thread("chat");
+                    }
+                    if key >= 200 {
+                        notice = notice.urgency(Urgency::Critical);
+                    }
+                    if let Some((_, step)) = self.2.iter().find(|(at, _)| *at == key) {
+                        notice = notice.step(*step, 3, None);
+                    }
                     match self.1 {
                         Some(answering) if answering == key => notice.reply(
                             eave_api::ui::Reply::new("Reply", "", Note::Typed)
@@ -2302,6 +2476,88 @@ mod tests {
             .collect();
         assert_eq!(expired, [(0, Note::Expired(1))]);
         assert!(bar.expire(later + TOAST_GRACE).is_empty(), "only once");
+    }
+
+    /// The cards, as the keys of their notices.
+    fn cards(bar: &Bar) -> Vec<Vec<u64>> {
+        bar.cards()
+            .into_iter()
+            .map(|card| card.into_iter().map(|i| bar.toasts[i].notice.key).collect())
+            .collect()
+    }
+
+    #[test]
+    fn notices_of_a_thread_that_come_one_after_another_share_a_card() {
+        let mut bar = notifying_bar();
+        for key in [101, 102, 1, 103] {
+            tell(&mut bar, Note::Add(key));
+        }
+        assert_eq!(cards(&bar), [vec![103], vec![1], vec![102, 101]]);
+        tell(&mut bar, Note::Add(104));
+        assert_eq!(cards(&bar), [vec![104, 103], vec![1], vec![102, 101]]);
+    }
+
+    #[test]
+    fn critical_notices_come_first() {
+        let mut bar = notifying_bar();
+        tell(&mut bar, Note::Add(201));
+        tell(&mut bar, Note::Add(1));
+        assert_eq!(cards(&bar), [vec![201], vec![1]]);
+    }
+
+    #[test]
+    fn past_three_cards_the_rest_wait_with_their_clocks_stopped() {
+        let mut bar = notifying_bar();
+        for key in 1..=4 {
+            tell(&mut bar, Note::Add(key));
+        }
+        let start = Instant::now();
+        let _ = handle(&mut bar, Message::NoticesPlaced(placed()));
+        let _ = bar.run_clocks(start);
+        let running: Vec<_> = bar
+            .toasts
+            .iter()
+            .map(|toast| (toast.notice.key, toast.deadline.is_some()))
+            .collect();
+        assert_eq!(running, [(4, true), (3, true), (2, true), (1, false)]);
+
+        // One shown goes: the one waiting comes in, and its clock starts.
+        tell(&mut bar, Note::Drop(4));
+        let _ = bar.run_clocks(start);
+        assert!(bar.toasts.iter().all(|toast| toast.deadline.is_some()));
+    }
+
+    #[test]
+    fn a_card_of_several_expires_together_on_its_newest_s_time() {
+        let mut bar = notifying_bar();
+        tell(&mut bar, Note::Add(101));
+        tell(&mut bar, Note::Add(102));
+        let start = Instant::now();
+        let _ = handle(&mut bar, Message::NoticesPlaced(placed()));
+        let _ = bar.run_clocks(start);
+        assert!(bar.toasts[0].deadline.is_some());
+        assert_eq!(bar.toasts[1].deadline, None, "the earlier one goes with it");
+        let expired: Vec<Note> = bar
+            .expire(start + Duration::from_secs(5))
+            .into_iter()
+            .map(|(_, message)| message.downcast().unwrap())
+            .collect();
+        assert_eq!(expired, [Note::Expired(102), Note::Expired(101)]);
+    }
+
+    #[test]
+    fn moving_on_to_another_question_keeps_the_one_before_to_slide_away() {
+        let mut bar = notifying_bar();
+        tell(&mut bar, Note::Step(1, 0));
+        tell(&mut bar, Note::Add(1));
+        assert!(bar.toasts[0].previous.is_none());
+        tell(&mut bar, Note::Step(1, 1));
+        let (before, _) = bar.toasts[0].previous.as_ref().expect("kept");
+        assert_eq!(before.step.as_ref().map(|step| step.index), Some(0));
+        assert_eq!(
+            bar.toasts[0].notice.step.as_ref().map(|step| step.index),
+            Some(1)
+        );
     }
 
     #[test]
