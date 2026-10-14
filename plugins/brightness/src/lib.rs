@@ -240,10 +240,12 @@ impl Widget for Brightness {
         let sun = |level| ui::icon(Icon::Brightness { level });
         vec![
             ui::action("Brighter", Message::Up)
+                .id("up")
                 .subtitle(format!("{}%", display.percent))
                 .keywords(words.into_iter().chain(["up", "raise"]))
                 .leading(sun(1.0)),
             ui::action("Dimmer", Message::Down)
+                .id("down")
                 .subtitle(format!("{}%", display.percent))
                 .keywords(words.into_iter().chain(["down", "lower", "darker"]))
                 .leading(sun(0.3)),

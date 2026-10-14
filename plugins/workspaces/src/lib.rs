@@ -257,8 +257,12 @@ impl Widget for Workspaces {
                 }),
         );
         actions.extend([
-            ui::action("Previous workspace", Message::Previous).keywords(["left", "back"]),
-            ui::action("Next workspace", Message::Next).keywords(["right", "forward"]),
+            ui::action("Previous workspace", Message::Previous)
+                .id("previous")
+                .keywords(["left", "back"]),
+            ui::action("Next workspace", Message::Next)
+                .id("next")
+                .keywords(["right", "forward"]),
         ]);
         actions
     }

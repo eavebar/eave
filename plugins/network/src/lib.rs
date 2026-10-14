@@ -316,12 +316,14 @@ impl Widget for Network {
         if !station.powered {
             return vec![
                 ui::action("Turn Wi-Fi on", Message::Power(true))
+                    .id("wifi-on")
                     .keywords(words.into_iter().chain(["enable"]))
                     .leading(fan(100)),
             ];
         }
         let mut actions = vec![
             ui::action("Turn Wi-Fi off", Message::Power(false))
+                .id("wifi-off")
                 .keywords(words.into_iter().chain(["disable", "airplane"]))
                 .leading(ui::icon(Icon::Wifi { strength: None })),
         ];

@@ -307,6 +307,7 @@ impl Widget for Media {
         if player.can_play || player.can_pause {
             actions.push(
                 ui::action(title, Message::PlayPause)
+                    .id("play-pause")
                     .subtitle(track(player))
                     .keywords(music.into_iter().chain(["resume", "stop"]))
                     .leading(ui::icon(icon)),
@@ -315,6 +316,7 @@ impl Widget for Media {
         if player.can_go_next {
             actions.push(
                 ui::action("Next track", Message::Next)
+                    .id("next")
                     .subtitle(player.identity.clone())
                     .keywords(music.into_iter().chain(["skip"]))
                     .leading(ui::icon(Icon::Next)),
@@ -323,6 +325,7 @@ impl Widget for Media {
         if player.can_go_previous {
             actions.push(
                 ui::action("Previous track", Message::Previous)
+                    .id("previous")
                     .subtitle(player.identity.clone())
                     .keywords(music.into_iter().chain(["back"]))
                     .leading(ui::icon(Icon::Previous)),

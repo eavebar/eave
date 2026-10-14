@@ -188,6 +188,15 @@ pub const CLICK: &str = "eave-click";
 /// in hyprland.conf, or `eave dormer` from anywhere.
 pub const DORMER: &str = "eave-dormer";
 
+/// The start of the [`Event::Custom`] data that opens or closes a widget's popover:
+/// `eave-popover <widget>`, from `bind = SUPER, C, event, eave-popover claude` or
+/// `eave popover claude`.
+pub const POPOVER: &str = "eave-popover";
+
+/// The start of the [`Event::Custom`] data that runs a widget's action: `eave-action <widget>
+/// <id>`, from `bind = SUPER, M, event, eave-action volume mute` or `eave action volume mute`.
+pub const ACTION: &str = "eave-action";
+
 /// Turns on or off a non-consuming bind on the left mouse button that sends
 /// `Event::Custom(CLICK)` on every click anywhere, which still reaches whatever was clicked.
 /// Calls may overlap: whichever was made last wins.

@@ -68,6 +68,8 @@ pub struct Bar {
     dormer: Option<Session>,
     /// The dormer's last picks, for as long as the bar runs.
     recent: Recent,
+    /// What's been said about the dormer's keys, so it's said once.
+    warned: Vec<String>,
     /// What the dormer's drop last did to the notch or the edge it comes out of, numbered (D-86).
     notch_kick: Option<(u64, zones::Kick)>,
     /// How far the notch's bottom (or the edge's) is drawn from where it rests, on the dormer's
@@ -252,6 +254,10 @@ pub enum Message {
     ToastTimer(u64),
     /// Something happened to the dormer.
     Dormer(dormer::Event),
+    /// `eave popover <widget>`: open that widget's popover, or close it (D-88).
+    TogglePopover(String),
+    /// `eave action <widget> <id>`: run that widget's action (D-88).
+    RunAction(String, String),
     /// A collapsed item's time out is up, if this is still its last reveal.
     Unreveal(u64, u64),
     /// A bar surface opened: it takes the pointer only over its strip.
@@ -302,6 +308,7 @@ impl Bar {
             notch_kick: None,
             notch_sag: zones::Sag::default(),
             recent: Recent::default(),
+            warned: Vec::new(),
             windows: Vec::new(),
             timer: 0,
             alarm: None,
@@ -337,8 +344,14 @@ impl Bar {
         }
 
         for entry in &config.entries {
-            if let Some(position) = old.iter().position(|instance| instance.entry == *entry) {
-                self.instances.push(old.remove(position));
+            // Keys aren't the widget's: a widget whose keys changed keeps running with the new ones.
+            if let Some(position) = old
+                .iter()
+                .position(|instance| instance.entry.same_but_keys(entry))
+            {
+                let mut instance = old.remove(position);
+                instance.entry.keys = entry.keys.clone();
+                self.instances.push(instance);
                 continue;
             }
             let Some(construct) = self.registry.get(config::widget_name(&entry.widget)) else {
@@ -519,6 +532,19 @@ impl Bar {
         self.instances.iter().find(|instance| instance.id == id)
     }
 
+    /// The first widget in config.toml that `name` names, as `eave popover` and `eave action`
+    /// do. Says so when there's none.
+    fn named(&self, name: &str) -> Option<&Instance> {
+        let found = self
+            .instances
+            .iter()
+            .find(|instance| config::widget_name(&instance.entry.widget) == name);
+        if found.is_none() {
+            eprintln!("eave: no widget `{name}` in config.toml");
+        }
+        found
+    }
+
     fn find_mut(&mut self, id: u64) -> Option<&mut Instance> {
         self.instances.iter_mut().find(|instance| instance.id == id)
     }
@@ -609,10 +635,11 @@ impl Bar {
         self.dormer.as_ref().is_some_and(|session| session.open)
     }
 
-    /// Everything the dormer can list: each widget's actions, and its popover if it has one.
-    /// Asked only while the dormer is open.
-    fn dormer_entries(&self) -> Vec<dormer::Entry> {
+    /// Everything the dormer can list: each widget's actions, with their keys, and its popover if
+    /// it has one. Asked only while the dormer is open. Also says which keys were dropped.
+    fn dormer_entries(&self) -> (Vec<dormer::Entry>, Vec<String>) {
         let mut entries = Vec::new();
+        let mut wanted = Vec::new();
         for instance in &self.instances {
             let actions = instance
                 .widget
@@ -620,12 +647,14 @@ impl Bar {
                 .into_iter()
                 .map(Action::into_parts);
             for (index, action) in actions.enumerate() {
+                wanted.push((entries.len(), action.id, action.shortcut, instance));
                 entries.push(dormer::Entry {
                     instance: instance.id,
                     source: Source::Action(index),
                     title: action.title,
                     subtitle: action.subtitle,
                     keywords: action.keywords,
+                    key: None,
                 });
             }
             if instance.has_popover && instance.entry.zone != Zone::Dormer {
@@ -635,10 +664,24 @@ impl Bar {
                     title: capitalized(config::widget_name(&instance.entry.widget)),
                     subtitle: Some("Open".into()),
                     keywords: Vec::new(),
+                    key: None,
                 });
             }
         }
-        entries
+        let candidates: Vec<_> = wanted
+            .iter()
+            .map(|(_, id, default, instance)| shortcut::Candidate {
+                id: id.as_deref(),
+                default: *default,
+                keys: &instance.entry.keys,
+                widget: config::widget_name(&instance.entry.widget),
+            })
+            .collect();
+        let (keys, warnings) = shortcut::resolve_actions(&candidates);
+        for ((at, ..), key) in wanted.iter().zip(keys) {
+            entries[*at].key = key;
+        }
+        (entries, warnings)
     }
 
     /// Asks the widgets again what the open dormer lists.
@@ -646,7 +689,13 @@ impl Bar {
         if !self.dormer_open() {
             return;
         }
-        let entries = self.dormer_entries();
+        let (entries, warnings) = self.dormer_entries();
+        for warning in warnings {
+            if !self.warned.contains(&warning) {
+                eprintln!("eave: keys: {warning}");
+                self.warned.push(warning);
+            }
+        }
         if let Some(session) = &mut self.dormer {
             session.refresh(entries, &self.recent);
         }
@@ -655,13 +704,28 @@ impl Bar {
     /// Picks the dormer's row at `index`: it folds back, and the row's widget gets its message,
     /// or opens its popover.
     fn run_dormer(&mut self, index: usize) -> Task<Message> {
-        let Some(entry) = self
+        let entry = self
             .dormer
             .as_ref()
             .filter(|session| session.open)
             .and_then(|session| session.row(index))
-            .cloned()
-        else {
+            .cloned();
+        self.run_entry(entry)
+    }
+
+    /// Runs the dormer's entry whose key was pressed, as if its row was picked.
+    fn run_dormer_key(&mut self, index: usize) -> Task<Message> {
+        let entry = self
+            .dormer
+            .as_ref()
+            .filter(|session| session.open)
+            .and_then(|session| session.entries.get(index))
+            .cloned();
+        self.run_entry(entry)
+    }
+
+    fn run_entry(&mut self, entry: Option<dormer::Entry>) -> Task<Message> {
+        let Some(entry) = entry else {
             return Task::none();
         };
         self.recent.push(&entry);
@@ -1308,6 +1372,40 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         }
         Message::ToastTimer(timer) if timer == bar.timer => send(bar.expire(Instant::now())),
         Message::Dormer(event) => handle_dormer(bar, event),
+        Message::TogglePopover(name) => {
+            let Some(instance) = bar.named(&name) else {
+                return Task::none();
+            };
+            let id = instance.id;
+            if !instance.has_popover || instance.entry.zone == Zone::Dormer {
+                eprintln!("eave: `{name}` has no popover to open");
+                return Task::none();
+            }
+            if bar.popover_of(id).is_some() {
+                send(bar.close_popover())
+            } else {
+                send(bar.open_popover(id))
+            }
+        }
+        Message::RunAction(name, action) => {
+            let Some(instance) = bar.named(&name) else {
+                return Task::none();
+            };
+            let id = instance.id;
+            let message = instance
+                .widget
+                .actions()
+                .into_iter()
+                .find(|candidate| candidate.id_str() == Some(action.as_str()))
+                .map(|found| found.into_parts().message);
+            match message {
+                Some(message) => handle(bar, Message::Widget(id, message)),
+                None => {
+                    eprintln!("eave: `{name}` has no action `{action}` right now");
+                    Task::none()
+                }
+            }
+        }
         Message::Unreveal(id, reveal) => {
             // Its popover is open: it stays out until that closes, and a while after.
             if bar.popover_of(id).is_some() {
@@ -1429,6 +1527,7 @@ fn handle_dormer(bar: &mut Bar, event: dormer::Event) -> Task<Message> {
             Task::none()
         }
         Event::Run(index) => bar.run_dormer(index),
+        Event::Key(index) => bar.run_dormer_key(index),
         Event::Placed(rect) => {
             let window = bar.toast_window();
             match (&mut bar.dormer, window) {
@@ -1720,6 +1819,12 @@ fn dormer_pictures(bar: &Bar, session: &Session) -> Vec<Option<ui::Node<AnyMessa
 
 fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Message> {
     use dormer::Event;
+    let keys: Vec<(ui::Shortcut, usize)> = session
+        .entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| Some((entry.key?, index)))
+        .collect();
     let field = ui::text_input("Search", session.query.clone(), |query| {
         AnyMessage::new(Event::Query(query))
     })
@@ -1737,6 +1842,10 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
             }
             if let Some(picture) = picture {
                 item = item.leading(picture);
+            }
+            // Already the key that works: the name only matters for config.toml.
+            if let Some(key) = entry.key {
+                item = item.shortcut(entry.title.clone(), key);
             }
             item.selected(row == session.selected)
                 .on_press(AnyMessage::new(Event::Run(row)))
@@ -1764,14 +1873,18 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         drop: Some(dormer_drop(&bar.screen)),
         on_neck: Some(Box::new(|caught| Message::Dormer(Event::Neck(caught)))),
         sag: Some(bar.notch_sag.clone()),
-        on_key: Some(Box::new(|key, _, _| {
+        on_key: Some(Box::new(move |key, modifiers, _| {
             use keyboard::key::Named;
             match key {
                 keyboard::Key::Named(Named::ArrowDown | Named::Tab) => {
                     Some(Message::Dormer(Event::Move(1)))
                 }
                 keyboard::Key::Named(Named::ArrowUp) => Some(Message::Dormer(Event::Move(-1))),
-                _ => None,
+                // Every action's key, shown or not. None of them types (D-88).
+                _ => keys
+                    .iter()
+                    .find(|(shortcut, _)| shortcut::matches(shortcut, key, modifiers))
+                    .map(|&(_, index)| Message::Dormer(Event::Key(index))),
             }
         })),
     }
@@ -1911,18 +2024,22 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
     // A widget can stop offering its popover while it closes: the island morphs back empty.
     let mut width = style::PANEL_WIDTH;
     let mut keys = Vec::new();
-    let content: Element<'_, AnyMessage> =
-        match bar.find(id).and_then(|instance| instance.widget.popover()) {
-            Some(panel) => {
-                if panel.is_wide() {
-                    width = style::PANEL_WIDE_WIDTH;
-                }
-                let node = panel.into_node();
-                shortcut::collect(&node, &mut keys);
-                kit::panel(node, &bar.icons)
+    let content: Element<'_, AnyMessage> = match bar
+        .find(id)
+        .and_then(|instance| Some((instance.widget.popover()?, &instance.entry.keys)))
+    {
+        Some((panel, user_keys)) => {
+            if panel.is_wide() {
+                width = style::PANEL_WIDE_WIDTH;
             }
-            None => Space::new().into(),
-        };
+            let mut node = panel.into_node();
+            // Keys from config.toml first, so the keycaps show the keys that work.
+            shortcut::resolve_panel(&mut node, user_keys);
+            shortcut::collect(&node, &mut keys);
+            kit::panel(node, &bar.icons)
+        }
+        None => Space::new().into(),
+    };
     // The rows' shortcuts press them; one that types gives way to a focused field (D-88).
     let on_key: Option<island::OnKey<'_, Message>> = (!keys.is_empty()).then(|| {
         Box::new(move |key: &keyboard::Key, modifiers, typing| {
@@ -2086,7 +2203,18 @@ fn custom(update: eave_hyprland::Update<()>) -> Option<Message> {
     match data.as_str() {
         eave_hyprland::CLICK => Some(Message::Clicked),
         eave_hyprland::DORMER => Some(Message::Dormer(dormer::Event::Toggle)),
-        _ => None,
+        data => {
+            let mut words = data.split_whitespace();
+            match (words.next()?, words.next(), words.next(), words.next()) {
+                (eave_hyprland::POPOVER, Some(widget), None, _) => {
+                    Some(Message::TogglePopover(widget.into()))
+                }
+                (eave_hyprland::ACTION, Some(widget), Some(id), None) => {
+                    Some(Message::RunAction(widget.into(), id.into()))
+                }
+                _ => None,
+            }
+        }
     }
 }
 
@@ -2105,6 +2233,28 @@ mod tests {
     use eave_api::{Effect, Widget};
 
     use super::*;
+
+    #[test]
+    fn custom_events_name_a_popover_or_an_action() {
+        let event = |data: &str| {
+            custom(eave_hyprland::Update::Event(eave_hyprland::Event::Custom(
+                data.into(),
+            )))
+        };
+        assert!(matches!(
+            event("eave-popover claude"),
+            Some(Message::TogglePopover(name)) if name == "claude"
+        ));
+        assert!(matches!(
+            event("eave-action volume mute"),
+            Some(Message::RunAction(name, id)) if name == "volume" && id == "mute"
+        ));
+        assert!(event("eave-popover").is_none());
+        assert!(event("eave-popover a b").is_none());
+        assert!(event("eave-action volume").is_none());
+        assert!(event("eave-action volume mute now").is_none());
+        assert!(event("someone-else claude").is_none());
+    }
 
     struct Dummy;
 

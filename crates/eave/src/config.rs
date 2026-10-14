@@ -10,6 +10,7 @@
 //! [[right]]
 //! widget = "someone/weather@v0.2"   # a plugin, compiled in by eave-build (D-30)
 //! collapsible = true   # also the host's: hidden while its island is collapsed
+//! keys = { refresh = "ctrl+r", details = false }   # and this: its shortcuts' keys, by name
 //!
 //! [[right]]
 //! divider = true   # a line before the next item
@@ -47,6 +48,8 @@
 //! also in physical pixels. `"auto"`, the default, takes the notch's, then the screen's.
 
 use std::path::{Path, PathBuf};
+
+use crate::shortcut;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Zone {
@@ -86,7 +89,53 @@ pub struct Entry {
     pub live: bool,
     /// The screen edges its island is attached to, set on the marker that starts it.
     pub attach: Edges,
+    /// The keys the user gives its shortcuts, by name (D-88).
+    pub keys: shortcut::Keys,
     pub options: toml::Table,
+}
+
+impl Entry {
+    /// Whether `other` is this entry, but for its keys: new keys need no new widget.
+    pub fn same_but_keys(&self, other: &Entry) -> bool {
+        fn fields(
+            entry: &Entry,
+        ) -> (
+            &Zone,
+            &String,
+            &Option<String>,
+            &usize,
+            &bool,
+            &bool,
+            &bool,
+            &Edges,
+            &toml::Table,
+        ) {
+            let Entry {
+                zone,
+                widget,
+                width_group,
+                island,
+                collapsible,
+                divider,
+                live,
+                attach,
+                keys: _,
+                options,
+            } = entry;
+            (
+                zone,
+                widget,
+                width_group,
+                island,
+                collapsible,
+                divider,
+                live,
+                attach,
+                options,
+            )
+        }
+        fields(self) == fields(other)
+    }
 }
 
 /// The screen edges an island is attached to (D-70): it reaches them, with no gap and no corners
@@ -356,6 +405,10 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
                 }
                 None => false,
             };
+            let keys = match options.remove("keys") {
+                Some(value) => keys(value, &at, &mut config.warnings),
+                None => shortcut::Keys::new(),
+            };
             config.entries.push(Entry {
                 zone,
                 widget,
@@ -365,6 +418,7 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
                 divider: std::mem::take(&mut divider),
                 live,
                 attach,
+                keys,
                 options,
             });
             filled = true;
@@ -405,6 +459,34 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
         .warnings
         .extend(table.keys().map(|key| format!("unknown key `{key}`")));
     Ok(config)
+}
+
+/// `keys = { chat-1 = "alt+1", chat-10 = false }`: a shortcut's name, and its key or none.
+fn keys(value: toml::Value, at: &str, warnings: &mut Vec<String>) -> shortcut::Keys {
+    let toml::Value::Table(table) = value else {
+        warnings.push(format!(
+            "{at}: `keys` must be a table, like `keys = {{ mute = \"ctrl+m\" }}`, ignoring it"
+        ));
+        return shortcut::Keys::new();
+    };
+    let mut keys = shortcut::Keys::new();
+    for (id, value) in table {
+        match value {
+            toml::Value::String(text) => match shortcut::parse(&text) {
+                Ok(key) => {
+                    keys.insert(id, Some(key));
+                }
+                Err(error) => warnings.push(format!("{at}: keys.{id} = \"{text}\": {error}")),
+            },
+            toml::Value::Boolean(false) => {
+                keys.insert(id, None);
+            }
+            _ => warnings.push(format!(
+                "{at}: keys.{id} must be a key like \"ctrl+k\", or false for none"
+            )),
+        }
+    }
+    keys
 }
 
 /// `attach = ["top", "left"]`, or just `attach = "top"`.
@@ -854,6 +936,29 @@ mod tests {
         assert!(!config.entries[0].options.contains_key("width_group"));
         assert_eq!(config.entries[1].width_group, None);
         assert_eq!(config.warnings.len(), 1);
+    }
+
+    #[test]
+    fn keys_are_the_hosts() {
+        let config = parse(
+            r#"
+            [[right]]
+            widget = "claude"
+            keys = { chat-1 = "Alt+1", chat-2 = false, chat-3 = "hyper+3", chat-4 = 4 }
+            [[dormer]]
+            widget = "volume"
+            keys = "ctrl+m"
+            "#,
+        )
+        .unwrap();
+        let keys = &config.entries[0].keys;
+        assert_eq!(keys["chat-1"], Some(eave_api::ui::shortcut('1').alt()));
+        assert_eq!(keys["chat-2"], None);
+        assert_eq!(keys.len(), 2);
+        assert!(!config.entries[0].options.contains_key("keys"));
+        assert!(config.entries[1].keys.is_empty());
+        assert!(!config.entries[1].options.contains_key("keys"));
+        assert_eq!(config.warnings.len(), 3);
     }
 
     fn layout(config: &Config) -> Vec<(&str, usize, bool, bool)> {

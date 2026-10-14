@@ -1309,7 +1309,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 selected,
                 on_press,
                 on_secondary,
-                shortcut,
+                shortcut: shortcut.and_then(|binding| binding.key),
             },
             ctx,
             icons,

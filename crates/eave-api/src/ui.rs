@@ -142,6 +142,15 @@ pub struct Shortcut {
     pub logo: bool,
 }
 
+/// A row's named shortcut: the name config.toml rebinds it by, and the key it has now. The host
+/// replaces the plugin's key with the user's, or none, before drawing and binding it (D-88).
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binding {
+    pub id: String,
+    pub key: Option<Shortcut>,
+}
+
 /// A key to press, for [`list_item`]'s [`shortcut`](Node::shortcut) or to show with [`keys`]:
 /// `shortcut('1')`, `shortcut('k').ctrl()`.
 pub fn shortcut(key: impl Into<Key>) -> Shortcut {
@@ -263,7 +272,7 @@ pub enum Kind<M> {
         selected: bool,
         on_press: Option<M>,
         on_secondary: Option<M>,
-        shortcut: Option<Shortcut>,
+        shortcut: Option<Binding>,
     },
     List(Vec<Node<M>>),
     Section {
@@ -871,12 +880,16 @@ impl<M> Node<M> {
     }
 
     /// For a [`list_item`] with an [`on_press`](Node::on_press): a key that presses it while its
-    /// popover is open. The host shows the keys at the row's end. A key with no Ctrl, Alt or Super
-    /// does nothing while a text field has the focus, so it can be typed. Rows inside [`tabs`] get
-    /// no key. Other nodes ignore it.
-    pub fn shortcut(mut self, key: Shortcut) -> Self {
+    /// popover is open, named `id`. `key` is the default: the user can give the row another key,
+    /// or none, under that name in config.toml (`keys = { chat-1 = "alt+1" }`). The host shows the
+    /// key at the row's end. A key with no Ctrl, Alt or Super does nothing while a text field has
+    /// the focus, so it can be typed. Rows inside [`tabs`] get no key. Other nodes ignore it.
+    pub fn shortcut(mut self, id: impl Into<String>, key: Shortcut) -> Self {
         if let Kind::ListItem { shortcut, .. } = &mut self.0 {
-            *shortcut = Some(key);
+            *shortcut = Some(Binding {
+                id: id.into(),
+                key: Some(key),
+            });
         }
         self
     }
@@ -1283,6 +1296,11 @@ impl<M> Node<M> {
     #[doc(hidden)]
     pub fn kind(&self) -> &Kind<M> {
         &self.0
+    }
+
+    #[doc(hidden)]
+    pub fn kind_mut(&mut self) -> &mut Kind<M> {
+        &mut self.0
     }
 }
 
@@ -1974,6 +1992,8 @@ pub struct NoticeParts<M> {
 /// the host's search dialog. Typing finds it by its title, subtitle and keywords, and picking it
 /// sends `message` to the widget.
 pub struct Action<M> {
+    id: Option<String>,
+    shortcut: Option<Shortcut>,
     title: String,
     subtitle: Option<String>,
     keywords: Vec<String>,
@@ -1984,6 +2004,8 @@ pub struct Action<M> {
 /// An action titled `title` that sends `message` when picked.
 pub fn action<M>(title: impl Into<String>, message: M) -> Action<M> {
     Action {
+        id: None,
+        shortcut: None,
         title: title.into(),
         subtitle: None,
         keywords: Vec::new(),
@@ -1993,6 +2015,23 @@ pub fn action<M>(title: impl Into<String>, message: M) -> Action<M> {
 }
 
 impl<M> Action<M> {
+    /// Its name, for `eave action <widget> <id>` and for `keys` in config.toml. Give one to every
+    /// action that's always there, like `mute`; leave it out on ones that come and go, like a
+    /// window to switch to.
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// A key that runs it while the dormer is open, shown at its row's end. It needs Ctrl, Alt or
+    /// Super, since the dormer's field has the keys that type, and an [`id`](Action::id), which
+    /// the user can give it another key by. When two widgets' actions want the same key, the
+    /// widget earlier in config.toml keeps it.
+    pub fn shortcut(mut self, key: Shortcut) -> Self {
+        self.shortcut = Some(key);
+        self
+    }
+
     /// A line under the title: what it acts on, or what kind of thing it is.
     pub fn subtitle(mut self, text: impl Into<String>) -> Self {
         self.subtitle = Some(text.into());
@@ -2016,6 +2055,8 @@ impl<M> Action<M> {
         M: 'static,
     {
         Action {
+            id: self.id,
+            shortcut: self.shortcut,
             title: self.title,
             subtitle: self.subtitle,
             keywords: self.keywords,
@@ -2029,8 +2070,15 @@ impl<M> Action<M> {
     }
 
     #[doc(hidden)]
+    pub fn id_str(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+
+    #[doc(hidden)]
     pub fn into_parts(self) -> ActionParts<M> {
         ActionParts {
+            id: self.id,
+            shortcut: self.shortcut,
             title: self.title,
             subtitle: self.subtitle,
             keywords: self.keywords,
@@ -2042,6 +2090,8 @@ impl<M> Action<M> {
 
 #[doc(hidden)]
 pub struct ActionParts<M> {
+    pub id: Option<String>,
+    pub shortcut: Option<Shortcut>,
     pub title: String,
     pub subtitle: Option<String>,
     pub keywords: Vec<String>,

@@ -4,6 +4,7 @@
 //! widget with a popover, which it can open. Typing narrows the list down, and picking a row sends
 //! its message to its widget.
 
+use eave_api::ui::Shortcut;
 use iced::Rectangle;
 
 /// How many rows it shows at most: the best matches. Enough to pick from without scrolling.
@@ -24,6 +25,8 @@ pub enum Event {
     Move(i32),
     /// The row with this place in the list was picked.
     Run(usize),
+    /// The key of the entry with this place in `entries` was pressed, shown or not.
+    Key(usize),
     /// Its island placed it.
     Placed(Rectangle),
     /// Its neck let go of it as it came out (false), or caught it as it went back (true).
@@ -49,6 +52,8 @@ pub struct Entry {
     pub title: String,
     pub subtitle: Option<String>,
     pub keywords: Vec<String>,
+    /// What runs it while the dormer is open, from config.toml or its widget (D-88).
+    pub key: Option<Shortcut>,
 }
 
 /// One time the dormer is open, from the keybind until it has folded back.
@@ -223,6 +228,7 @@ mod tests {
             title: title.into(),
             subtitle: None,
             keywords: Vec::new(),
+            key: None,
         }
     }
 
