@@ -3,6 +3,7 @@
 //! ```text
 //! eave-build [--config <config.toml>]          build, then install and restart if it changed
 //! eave-build update [--config <config.toml>]   fetch newer eave and plugins first
+//! eave-build check [--config <config.toml>]    say what `update` would move, and move nothing
 //! eave-build init                              starter config.toml and systemd units
 //! ```
 //!
@@ -35,21 +36,27 @@ const PACKAGED: bool = option_env!("EAVE_PACKAGE").is_some();
 const SERVICE: &str = "eave.service";
 /// In the environment of an eave-build that `update` just installed and handed over to.
 const HANDED_OVER: &str = "EAVE_BUILD_HANDED_OVER";
+/// What moved before a handover, for the new binary's summary (D-97).
+const MOVED_BEFORE: &str = "EAVE_BUILD_MOVED";
 /// One plugin's manifest, beside its Cargo.toml.
 const PLUGIN_FILE: &str = "eave-plugin.toml";
 /// At a repository's root, the directories of the plugins it holds.
 const COLLECTION_FILE: &str = "eave-collection.toml";
 const USAGE: &str = "\
-usage: eave-build [update | init] [--config <config.toml>]
+usage: eave-build [update | check | init] [--config <config.toml>] [--summary]
 
   eave-build           build the plugins config.toml uses; install and restart if it changed
   eave-build update    fetch newer eave and plugins first, then the same
-  eave-build init      write a starter config.toml and the systemd user units";
+  eave-build check     fetch them and say what update would move, moving nothing
+  eave-build init      write a starter config.toml and the systemd user units
+
+  --summary            also write what moved, or why it failed, to ~/.cache/eave/<command>.toml
+                       (the update plugin reads it)";
 
 // What `init` writes. Taken from the repository, so `cargo install --path` or `--git` is needed,
 // or a package built from the repository's tarball: this crate can't be published on its own.
 const STARTER_CONFIG: &str = include_str!("../../../dist/config.toml");
-const UNITS: [(&str, &str); 3] = [
+const UNITS: [(&str, &str); 5] = [
     (
         "eave.service",
         include_str!("../../../dist/systemd/eave.service"),
@@ -61,6 +68,14 @@ const UNITS: [(&str, &str); 3] = [
     (
         "eave-rebuild.service",
         include_str!("../../../dist/systemd/eave-rebuild.service"),
+    ),
+    (
+        "eave-update.service",
+        include_str!("../../../dist/systemd/eave-update.service"),
+    ),
+    (
+        "eave-update-check.service",
+        include_str!("../../../dist/systemd/eave-update-check.service"),
     ),
 ];
 
@@ -136,10 +151,12 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let mut config_path = config_dir()?.join("eave/config.toml");
     let mut command: Option<String> = None;
+    let mut summary = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "update" | "init" if command.is_none() => command = Some(arg),
+            "update" | "check" | "init" if command.is_none() => command = Some(arg),
+            "--summary" => summary = true,
             "--config" => {
                 config_path = args
                     .next()
@@ -153,13 +170,163 @@ fn run() -> Result<()> {
             other => return Err(format!("unknown argument `{other}` (try --help)")),
         }
     }
-    match command.as_deref() {
-        Some("init") => init(&config_path),
-        update => build(&config_path, update.is_some()),
+    if command.as_deref() == Some("init") {
+        return init(&config_path);
+    }
+    let mut sources = Sources {
+        dir: data_dir()?.join("eave/src"),
+        base: config_path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+        update: command.as_deref() == Some("update"),
+        moved: false,
+        moves: std::env::var(MOVED_BEFORE)
+            .map(|moves| Moved::decode(&moves))
+            .unwrap_or_default(),
+    };
+    let result = match command.as_deref() {
+        Some("check") => check(&config_path, &mut sources),
+        _ => build(&config_path, &mut sources, summary),
+    };
+    if summary {
+        let name = command.as_deref().unwrap_or("build");
+        if let Err(error) = write_summary(name, &result, &sources.moves) {
+            eprintln!("eave-build: writing the summary: {error}");
+        }
+    }
+    result
+}
+
+/// One source moved, or that would move, from one commit to another.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+struct Moved {
+    /// `eave`, or the widget it's for.
+    label: String,
+    from: String,
+    to: String,
+    /// How many commits `to` is ahead of `from`, if git could say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commits: Option<u64>,
+}
+
+impl Moved {
+    fn new(dir: &Path, label: &str, from: &str, to: &str) -> Self {
+        let commits = git_output(dir, &["rev-list", "--count", &format!("{from}..{to}")])
+            .ok()
+            .and_then(|count| count.parse().ok());
+        Self {
+            label: label.to_owned(),
+            from: from[..7.min(from.len())].to_owned(),
+            to: to[..7.min(to.len())].to_owned(),
+            commits,
+        }
     }
 }
 
-fn build(config_path: &Path, update: bool) -> Result<()> {
+impl Moved {
+    /// One a line, for [`MOVED_BEFORE`].
+    fn encode(moves: &[Moved]) -> String {
+        moves
+            .iter()
+            .map(|moved| {
+                let commits = moved.commits.map(|c| c.to_string()).unwrap_or_default();
+                format!("{}\t{}\t{}\t{commits}\n", moved.label, moved.from, moved.to)
+            })
+            .collect()
+    }
+
+    fn decode(text: &str) -> Vec<Moved> {
+        text.lines()
+            .filter_map(|line| {
+                let mut fields = line.split('\t');
+                Some(Moved {
+                    label: fields.next()?.to_owned(),
+                    from: fields.next()?.to_owned(),
+                    to: fields.next()?.to_owned(),
+                    commits: fields.next()?.parse().ok(),
+                })
+            })
+            .collect()
+    }
+}
+
+impl std::fmt::Display for Moved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {} → {}", self.label, self.from, self.to)?;
+        match self.commits {
+            Some(1) => write!(f, " (1 new commit)"),
+            Some(commits) => write!(f, " ({commits} new commits)"),
+            None => Ok(()),
+        }
+    }
+}
+
+/// What `--summary` writes: what moved, and whether it all worked (D-96).
+#[derive(serde::Serialize)]
+struct Summary<'a> {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
+    moved: &'a [Moved],
+}
+
+/// Writes `~/.cache/eave/<name>.toml` whole: to a file beside it, then renamed over it, so the
+/// plugin never reads half of one.
+fn write_summary(name: &str, result: &Result<()>, moved: &[Moved]) -> Result<()> {
+    let summary = Summary {
+        ok: result.is_ok(),
+        error: result.as_ref().err().map(String::as_str),
+        moved,
+    };
+    let text = toml::to_string(&summary).map_err(|e| format!("{e}"))?;
+    let dir = cache_dir()?.join("eave");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join(format!("{name}.toml"));
+    let staged = dir.join(format!(".{name}.toml.new"));
+    std::fs::write(&staged, text).map_err(|e| format!("{}: {e}", staged.display()))?;
+    std::fs::rename(&staged, &path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Fetches eave and every git plugin config.toml uses, and says which `update` would move and how
+/// far. Checks nothing out and builds nothing (D-96).
+fn check(config_path: &Path, sources: &mut Sources) -> Result<()> {
+    let text = std::fs::read_to_string(config_path)
+        .map_err(|e| format!("{}: {e}", config_path.display()))?;
+    let (eave, widgets) =
+        read_config(&text).map_err(|e| format!("{}: {e}", config_path.display()))?;
+    let eave = parse_reference(eave.as_deref().unwrap_or(default_eave(PACKAGED)))
+        .map_err(|e| format!("`eave = …`: {e}"))?;
+    let mut references = vec![(eave, "eave".to_owned())];
+    for group in group_references(widgets)? {
+        let first = group.into_iter().next().expect("groups aren't empty");
+        let label = first.widget.clone();
+        references.push((first, label));
+    }
+    for (reference, label) in references {
+        // Built-ins move with eave, and a path is whatever is there.
+        let Location::Git(url) = &reference.location else {
+            continue;
+        };
+        let checkout = sources.dir.join(slug(url));
+        if !checkout.exists() {
+            eprintln!("eave-build: {label}: not fetched yet; eave-build fetches it");
+            continue;
+        }
+        let (old, wanted) = wanted(&checkout, url, reference.rev.as_deref(), true)?;
+        if wanted == old {
+            eprintln!("eave-build: {label}: up to date at {}", &old[..7]);
+        } else {
+            let move_ = Moved::new(&checkout, &label, &old, &wanted);
+            eprintln!("eave-build: {move_}");
+            sources.moves.push(move_);
+        }
+    }
+    match sources.moves.len() {
+        0 => eprintln!("eave-build: everything is up to date"),
+        count => eprintln!("eave-build: {count} to move; eave-build update moves them"),
+    }
+    Ok(())
+}
+
+fn build(config_path: &Path, sources: &mut Sources, summary: bool) -> Result<()> {
     let text = std::fs::read_to_string(config_path).map_err(|e| {
         format!(
             "{}: {e}. `eave-build init` writes a starter one",
@@ -168,13 +335,6 @@ fn build(config_path: &Path, update: bool) -> Result<()> {
     })?;
     let (eave, widgets) =
         read_config(&text).map_err(|e| format!("{}: {e}", config_path.display()))?;
-    let base = config_path.parent().unwrap_or(Path::new("."));
-    let mut sources = Sources {
-        dir: data_dir()?.join("eave/src"),
-        base: base.to_path_buf(),
-        update,
-        moved: false,
-    };
 
     let eave = parse_reference(eave.as_deref().unwrap_or(default_eave(PACKAGED)))
         .map_err(|e| format!("`eave = …`: {e}"))?;
@@ -188,8 +348,8 @@ fn build(config_path: &Path, update: bool) -> Result<()> {
     let eave_moved = sources.moved;
     // Set by the run that just reinstalled this binary and handed over to it.
     let handed_over = std::env::var_os(HANDED_OVER).is_some();
-    if update && !handed_over {
-        update_self(config_path, &eave_dir, eave_moved)?;
+    if sources.update && !handed_over {
+        update_self(config_path, &eave_dir, eave_moved, summary, &sources.moves)?;
     }
     let api_version = package_version(&eave_dir.join("crates/eave-api/Cargo.toml"))?;
     eprintln!(
@@ -259,10 +419,6 @@ fn build(config_path: &Path, update: bool) -> Result<()> {
     // A new eave-build may ship new units. This keeps config.toml and rewrites only the units.
     if eave_moved || handed_over {
         init(config_path)?;
-        // Without systemd (units written but unused) there's nothing to reload.
-        let _ = Command::new("systemctl")
-            .args(["--user", "daemon-reload"])
-            .status();
     }
     Ok(())
 }
@@ -271,7 +427,13 @@ fn build(config_path: &Path, update: bool) -> Result<()> {
 /// eave may need a new build recipe (a patch it vendors), which only the new eave-build knows.
 /// Returns only when there's nothing to install. A marker survives a failed install, so the next
 /// `update` tries again although eave no longer moves.
-fn update_self(config_path: &Path, eave_dir: &Path, eave_moved: bool) -> Result<()> {
+fn update_self(
+    config_path: &Path,
+    eave_dir: &Path,
+    eave_moved: bool,
+    summary: bool,
+    moved: &[Moved],
+) -> Result<()> {
     let marker = data_dir()?.join("eave/eave-build-outdated");
     if !eave_moved && !marker.exists() {
         return Ok(());
@@ -302,7 +464,10 @@ fn update_self(config_path: &Path, eave_dir: &Path, eave_moved: bool) -> Result<
         .arg("update")
         .arg("--config")
         .arg(config_path)
+        .args(summary.then_some("--summary"))
         .env(HANDED_OVER, "1")
+        // eave moved here: the new binary finds it where it should be already.
+        .env(MOVED_BEFORE, Moved::encode(moved))
         .exec();
     Err(format!("running the new eave-build: {error}"))
 }
@@ -422,6 +587,8 @@ struct Sources {
     update: bool,
     /// Whether the last `dir_for` moved a checkout.
     moved: bool,
+    /// Every checkout moved so far.
+    moves: Vec<Moved>,
 }
 
 impl Sources {
@@ -454,45 +621,48 @@ impl Sources {
                 .map_err(|e| format!("{}: {e}", self.dir.display()))?;
             git(None, &["clone", "--quiet", url, &dir.to_string_lossy()])?;
         }
-        let old = git_output(&dir, &["rev-parse", "HEAD"])?;
-        let wanted = match rev {
-            _ if self.update => {
-                git(
-                    Some(&dir),
-                    &["fetch", "--quiet", "--tags", "--force", "origin"],
-                )?;
-                resolve(&dir, rev.unwrap_or("HEAD"))
-            }
-            // A pin just edited in config.toml may name something not fetched yet.
-            Some(rev) => match resolve(&dir, rev) {
-                Some(commit) => Some(commit),
-                None => {
-                    git(
-                        Some(&dir),
-                        &["fetch", "--quiet", "--tags", "--force", "origin"],
-                    )?;
-                    resolve(&dir, rev)
-                }
-            },
-            None => Some(old.clone()),
-        };
-        let wanted =
-            wanted.ok_or_else(|| format!("{url}: no revision `{}`", rev.unwrap_or("HEAD")))?;
+        let (old, wanted) = wanted(&dir, url, rev, self.update)?;
         if wanted != old {
             git(Some(&dir), &["checkout", "--quiet", "--detach", &wanted])?;
             self.moved = true;
-            let ahead = git_output(&dir, &["rev-list", "--count", &format!("{old}..{wanted}")])
-                .unwrap_or_default();
-            eprintln!(
-                "eave-build: {label}: {} → {} ({ahead} new commits)",
-                &old[..7],
-                &wanted[..7]
-            );
+            let moved = Moved::new(&dir, label, &old, &wanted);
+            eprintln!("eave-build: {moved}");
+            self.moves.push(moved);
         } else if self.update {
             eprintln!("eave-build: {label}: up to date at {}", &old[..7]);
         }
         Ok(dir)
     }
+}
+
+/// The commit the checkout in `dir` is at, and the one it should be at. That's where it is unless
+/// `rev` names another commit, or `fetch` (an update or a check) brings the newest commit of `rev`
+/// or the default branch.
+fn wanted(dir: &Path, url: &str, rev: Option<&str>, fetch: bool) -> Result<(String, String)> {
+    let old = git_output(dir, &["rev-parse", "HEAD"])?;
+    let wanted = match rev {
+        _ if fetch => {
+            git(
+                Some(dir),
+                &["fetch", "--quiet", "--tags", "--force", "origin"],
+            )?;
+            resolve(dir, rev.unwrap_or("HEAD"))
+        }
+        // A pin just edited in config.toml may name something not fetched yet.
+        Some(rev) => match resolve(dir, rev) {
+            Some(commit) => Some(commit),
+            None => {
+                git(
+                    Some(dir),
+                    &["fetch", "--quiet", "--tags", "--force", "origin"],
+                )?;
+                resolve(dir, rev)
+            }
+        },
+        None => Some(old.clone()),
+    };
+    let wanted = wanted.ok_or_else(|| format!("{url}: no revision `{}`", rev.unwrap_or("HEAD")))?;
+    Ok((old, wanted))
 }
 
 /// The commit `rev` names in `dir`. A branch name must win over a stale local branch, so the
@@ -550,6 +720,10 @@ fn init(config_path: &Path) -> Result<()> {
         "eave-build: wrote the systemd user units to {}",
         units.display()
     );
+    // So systemd sees new and changed units. Without systemd there's nothing to reload.
+    let _ = Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .status();
     Ok(())
 }
 
@@ -1125,6 +1299,90 @@ mod tests {
 
         let path = customize_unit(UNITS[1].1, Some(Path::new("/c/eave.toml")), exe);
         assert!(path.contains("PathChanged=/c/eave.toml"));
+
+        // The update units keep their command and flag.
+        for (name, unit) in &UNITS[3..] {
+            let unit = customize_unit(unit, None, exe);
+            assert!(
+                unit.contains("ExecStart=\"/home/a b/.cargo/bin/eave-build\" ")
+                    && unit.contains(" --summary\n"),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn moves_survive_a_handover() {
+        let moves = [
+            Moved {
+                label: "eave".into(),
+                from: "abc1234".into(),
+                to: "def5678".into(),
+                commits: Some(12),
+            },
+            Moved {
+                label: "weather".into(),
+                from: "1111111".into(),
+                to: "2222222".into(),
+                commits: None,
+            },
+        ];
+        assert_eq!(Moved::decode(&Moved::encode(&moves)), moves);
+        assert_eq!(Moved::decode(""), []);
+    }
+
+    #[test]
+    fn moves_say_how_far() {
+        let moved = Moved {
+            label: "weather".into(),
+            from: "abc1234".into(),
+            to: "def5678".into(),
+            commits: Some(3),
+        };
+        assert_eq!(
+            moved.to_string(),
+            "weather: abc1234 → def5678 (3 new commits)"
+        );
+        let one = Moved {
+            commits: Some(1),
+            ..moved.clone()
+        };
+        assert_eq!(one.to_string(), "weather: abc1234 → def5678 (1 new commit)");
+        let unknown = Moved {
+            commits: None,
+            ..moved
+        };
+        assert_eq!(unknown.to_string(), "weather: abc1234 → def5678");
+    }
+
+    #[test]
+    fn summaries_say_what_moved_and_what_failed() {
+        let moved = [Moved {
+            label: "eave".into(),
+            from: "abc1234".into(),
+            to: "def5678".into(),
+            commits: Some(12),
+        }];
+        let summary = Summary {
+            ok: false,
+            error: Some("cargo build failed"),
+            moved: &moved,
+        };
+        let table: toml::Table = toml::to_string(&summary).unwrap().parse().unwrap();
+        assert_eq!(table["ok"].as_bool(), Some(false));
+        assert_eq!(table["error"].as_str(), Some("cargo build failed"));
+        let moved = table["moved"].as_array().unwrap();
+        assert_eq!(moved[0]["label"].as_str(), Some("eave"));
+        assert_eq!(moved[0]["commits"].as_integer(), Some(12));
+
+        let fine = Summary {
+            ok: true,
+            error: None,
+            moved: &[],
+        };
+        let table: toml::Table = toml::to_string(&fine).unwrap().parse().unwrap();
+        assert!(table.get("error").is_none());
+        assert_eq!(table["moved"].as_array().map(Vec::len), Some(0));
     }
 
     #[test]

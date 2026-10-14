@@ -1,0 +1,17 @@
+# Started by the update plugin's Check for updates, in the dormer, or by hand. Needs eave-build
+# installed (install.sh does it).
+
+[Unit]
+Description=Check what an eave update would move
+Documentation=https://github.com/eaveshell/eave/blob/main/docs/running.md#update
+
+[Service]
+Type=oneshot
+# git.
+Environment=PATH=%h/.cargo/bin:/usr/local/bin:/usr/bin
+# systemd looks up a bare command name only in /usr/bin and /usr/local/bin, never in PATH.
+# eave-build init writes the path it runs from here. --summary leaves what would move in
+# ~/.cache/eave/check.toml for the plugin to tell.
+ExecStart=%h/.cargo/bin/eave-build check --summary
+Nice=19
+IOSchedulingClass=idle

@@ -1,0 +1,20 @@
+# Started by the update plugin's Update eave, in the dormer, or by hand. Needs eave-build
+# installed (install.sh does it).
+
+[Unit]
+Description=Update eave and its plugins
+Documentation=https://github.com/eaveshell/eave/blob/main/docs/running.md#update
+
+[Service]
+Type=oneshot
+# cargo, git and systemctl.
+Environment=PATH=%h/.cargo/bin:/usr/local/bin:/usr/bin
+# systemd looks up a bare command name only in /usr/bin and /usr/local/bin, never in PATH.
+# eave-build init writes the path it runs from here. --summary leaves what moved, or why it
+# failed, in ~/.cache/eave/update.toml for the plugin to tell: it restarts the bar on the way,
+# which is why this runs here and not as the bar's child.
+ExecStart=%h/.cargo/bin/eave-build update --summary
+# An update must never make the desktop stutter.
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
