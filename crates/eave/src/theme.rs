@@ -149,6 +149,46 @@ pub const SPLAT_WIDEN: f32 = 3.5;
 /// A closing popover splats as it lands, so the splat peaks as the shape arrives: when its bottom
 /// edge will be this close to its island's, in logical pixels, by the time REACT peaks.
 pub const SQUISH_LAND: f32 = 1.0;
+
+// The dormer comes out of the notch (or the top edge) as a drop (D-86): a dot at its middle
+// swells into a ball, falls out of it on a neck of black that pinches off, and unfolds into the
+// panel. Closing runs it back, and the notch flattens as the ball lands in it.
+
+/// How wide the ball is, in logical pixels. It swells half out of where it comes out first.
+pub const DROP_BALL: f32 = 26.0;
+/// How far below where it comes out the ball's top goes before it unfolds into the panel: far
+/// enough that the neck has pinched off by then.
+pub const DROP_FALL: f32 = 36.0;
+/// How far, from 0 to 1, the shape gets to each stop before it heads on to the next. Early, so it
+/// heads on while it's still quick: it never slows down on the way, and moves as one motion.
+pub const DROP_WAYPOINT: f32 = 0.4;
+/// How much the ball is squeezed in from the sides as it sets off to unfold, and taller by the
+/// bulge, in logical pixels.
+pub const DROP_SQUISH: f32 = 4.0;
+/// How far apart the drop and where it comes out still flow together, in logical pixels: the
+/// neck is a wide, smooth bell when the drop is right under it, which narrows as it falls and
+/// pinches off about half this far away.
+pub const NECK_BLEND: f32 = 56.0;
+/// How far each way from the drop's middle the neck can spread along the notch's bottom: short of
+/// its lower corners.
+pub const NECK_SPREAD: f32 = 76.0;
+/// How far a drop lurches as its neck lets go of it or catches it, and as it falls into place,
+/// in logical pixels: a nudge up or down, bigger.
+pub const DROP_BOUNCE: f32 = 3.0;
+/// How long a drop's bounce lasts: a nudge's motion slowed down to this, as a paced nudge is.
+/// Slower than a nudge's own, because a drop is heavier than a workspace mark.
+pub const DROP_BOUNCE_LASTING: Duration = Duration::from_millis(420);
+/// How far the notch pinches in from each side as the drop leaves it, and flattens as it lands back,
+/// in logical pixels. Never past its grown room (D-75): it doesn't shrink smaller than it is.
+pub const NOTCH_PINCH: f32 = 4.0;
+pub const NOTCH_FLATTEN: f32 = 3.0;
+/// Without a notch, the grown top edge (D-81) does it where the drop comes out: pulled down in a
+/// narrow bump as it leaves, dented up in a wide one, no further than its grown room, as it lands.
+/// How deep, and how wide end to end, in logical pixels.
+pub const EDGE_PULL: f32 = 4.0;
+pub const EDGE_PULL_WIDTH: f32 = 48.0;
+pub const EDGE_DENT: f32 = 3.0;
+pub const EDGE_DENT_WIDTH: f32 = 140.0;
 /// How wide a nudge's bump in an island's edge is, end to end.
 pub const NUDGE_BUMP_WIDTH: f32 = 176.0;
 /// The furthest the outline reaches out of the island: it stays inside `EDGE_GAP` above and at

@@ -7,18 +7,21 @@
 //! of the notch. A half whose island there is fused to the notch is right against it, so they read
 //! as one; any other keeps `ISLAND_SPACING` from it (D-73). The notch itself is drawn black, as
 //! big as the bar has it, which may be bigger than it is (D-75). So is the top edge, when the bar
-//! grows it (D-81).
+//! grows it (D-81). The dormer's drop squishes them, within what they're grown by (D-86).
 
 use std::cell::Cell;
+use std::rc::Rc;
+use std::time::Instant;
 
 use iced::advanced::Renderer as _;
 use iced::advanced::graphics::geometry::Renderer as _;
 use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::widget::canvas::{Cache, Path};
-use iced::{Element, Event, Length, Point, Rectangle, Size, Vector};
+use iced::{Element, Event, Length, Point, Rectangle, Size, Vector, window};
 
 use crate::notch::Notch;
+use crate::spring::{MAX_FRAME, REACT, Spring};
 use crate::squircle::{self, CornerShape, squircle_corners};
 use crate::theme;
 
@@ -32,14 +35,60 @@ pub struct Zones<'a, M> {
     /// The top edge the bar grows: how much, and the screen's top left and right corners, which
     /// round what shows below it.
     edge: Option<(f32, [CornerShape; 2])>,
+    /// The latest kick from the dormer's drop, with its number. Only one newer than the zones have
+    /// seen plays.
+    kick: Option<(u64, Kick)>,
+    /// Where the zones say how far the middle of the notch's bottom (or the edge's) is from where
+    /// it rests, as last drawn, if given.
+    sag: Option<Sag>,
 }
+
+/// How far the middle of the bottom of what the dormer's drop comes out of is from where it
+/// rests, as drawn (down is positive). The zones draw it and write it; the drop's neck flows from
+/// there, so the two never come apart while the notch squishes.
+pub type Sag = Rc<Cell<f32>>;
+
+/// What the dormer's drop does to what it comes out of (D-86).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kick {
+    /// It leaves: the notch pinches in from the sides, the edge is pulled down where it leaves.
+    Pinch,
+    /// It lands back: the notch flattens, the edge dents up where it lands.
+    Flatten,
+}
+
+/// What an edge's bump was drawn with: how deep (down is positive) and how wide.
+type Bump = (f32, f32);
+/// What the grown edge was drawn from: how thick, the screen's corners, how wide, its bump.
+type EdgeDrawn = (f32, [CornerShape; 2], f32, Bump);
 
 /// The notch and the grown edge as last drawn, and what they were drawn from.
 struct State {
     cache: Cache,
     drawn: Cell<Option<(Notch, f32)>>,
     edge_cache: Cache,
-    edge_drawn: Cell<Option<(f32, [CornerShape; 2], f32)>>,
+    edge_drawn: Cell<Option<EdgeDrawn>>,
+    /// How many pixels the drop adds to the notch's width and height (negative is narrower or
+    /// shorter).
+    stretch_x: Spring,
+    stretch_y: Spring,
+    /// How deep the edge's bump is, and how wide.
+    dip: Spring,
+    dip_width: f32,
+    /// The newest kick already played, once the zones have had a look.
+    seen: Option<u64>,
+    /// The previous frame, while something moves.
+    last: Option<Instant>,
+}
+
+impl State {
+    fn springs(&mut self) -> [&mut Spring; 3] {
+        [&mut self.stretch_x, &mut self.stretch_y, &mut self.dip]
+    }
+
+    fn at_rest(&mut self) -> bool {
+        self.springs().iter().all(|spring| spring.at_rest())
+    }
 }
 
 impl<'a, M> Zones<'a, M> {
@@ -49,6 +98,8 @@ impl<'a, M> Zones<'a, M> {
             notch: None,
             at: 0.0,
             edge: None,
+            kick: None,
+            sag: None,
         }
     }
 
@@ -74,6 +125,8 @@ impl<'a, M> Zones<'a, M> {
             notch: Some((notch, gaps)),
             at,
             edge: None,
+            kick: None,
+            sag: None,
         }
     }
 
@@ -83,12 +136,79 @@ impl<'a, M> Zones<'a, M> {
         self.edge = (grow > 0.0).then_some((grow, corners));
         self
     }
+
+    /// The latest kick from the dormer's drop, numbered: the notch squishes (or without one, the
+    /// grown edge) when a newer one comes.
+    pub fn kick(mut self, kick: Option<(u64, Kick)>) -> Self {
+        self.kick = kick;
+        self
+    }
+
+    /// Writes where the notch's bottom (or the edge's) is drawn to `sag`, each time it's drawn.
+    pub fn sag(mut self, sag: Option<Sag>) -> Self {
+        self.sag = sag;
+        self
+    }
+
+    /// Sets the notch or the edge off, no further than it's grown: it never gets smaller than it
+    /// is, and with nothing grown, nothing moves.
+    fn play(&self, state: &mut State, kick: Kick) {
+        let react = |peak: f32| REACT.kick(peak * theme::REACT_SIZE);
+        if let Some((notch, _)) = self.notch {
+            match kick {
+                Kick::Pinch => {
+                    let pinch = theme::NOTCH_PINCH.min(notch.grow[0]);
+                    state.stretch_x.velocity = -react(2.0 * pinch);
+                }
+                Kick::Flatten => {
+                    let flatten = theme::NOTCH_FLATTEN.min(notch.grow[1]);
+                    state.stretch_y.velocity = -react(flatten);
+                }
+            }
+        } else if let Some((grow, _)) = self.edge {
+            let (depth, width) = match kick {
+                Kick::Pinch => (theme::EDGE_PULL, theme::EDGE_PULL_WIDTH),
+                Kick::Flatten => (-theme::EDGE_DENT.min(grow), theme::EDGE_DENT_WIDTH),
+            };
+            state.dip.velocity = react(depth);
+            state.dip_width = width;
+        }
+    }
+}
+
+/// `notch` stretched `x` wider and `y` taller (negative is narrower or shorter), each pulling the
+/// other in by the bulge. Never smaller than the hardware's: no narrower than its grown sides
+/// take away, nor shorter than its grown bottom (D-75).
+fn squished(notch: Notch, x: f32, y: f32) -> Notch {
+    if x == 0.0 && y == 0.0 {
+        return notch;
+    }
+    let width = (notch.width + x - theme::BULGE * y).max(notch.width - 2.0 * notch.grow[0]);
+    let height = (notch.height + y - theme::BULGE * x).max(notch.height - notch.grow[1]);
+    Notch {
+        width,
+        height,
+        ..notch
+    }
+}
+
+/// How far below `grow` the band's bottom is at `x`, in a bump `depth` deep and `width` wide end
+/// to end, centered at `center`: eased in and out, flat beyond it. Never above the band's top.
+fn bump_at(x: f32, center: f32, (depth, width): Bump, grow: f32) -> f32 {
+    let along = (x - center) / (width / 2.0);
+    if along.abs() >= 1.0 || width <= 0.0 {
+        return 0.0;
+    }
+    let eased = 0.5 * (1.0 + (std::f32::consts::PI * along).cos());
+    (depth * eased).max(-grow)
 }
 
 /// The grown top edge across `width`, `grow` tall, in a frame its own size: a band whose lower
 /// ends curve down into the sides, the way the screen's top `corners` round what shows below it.
 /// The frame is as tall as the band and the deeper of its curves.
-fn edge_outline(grow: f32, corners: [CornerShape; 2], width: f32) -> (Path, f32) {
+fn edge_outline(grow: f32, corners: [CornerShape; 2], width: f32, bump: Bump) -> (Path, f32) {
+    /// How many straight pieces a bump in the bottom is drawn with.
+    const PIECES: u16 = 24;
     let budget = width / 2.0;
     let [left, right] =
         corners.map(|corner| squircle::Corner::new(corner.radius, corner.smoothing, budget));
@@ -106,6 +226,18 @@ fn edge_outline(grow: f32, corners: [CornerShape; 2], width: f32) -> (Path, f32)
             squircle::LEFT,
             false,
         );
+        // The bump in the middle of the bottom, right to left, clear of the corners.
+        let center = width / 2.0;
+        let half = (bump.1 / 2.0).min(center - left.extent().max(right.extent()));
+        if bump.0 != 0.0 && half > 0.0 {
+            for piece in 0..=PIECES {
+                let x = center + half - 2.0 * half * f32::from(piece) / f32::from(PIECES);
+                builder.line_to(Point::new(
+                    x,
+                    grow + bump_at(x, center, (bump.0, 2.0 * half), grow),
+                ));
+            }
+        }
         squircle::corner_into(
             builder,
             &left,
@@ -116,7 +248,8 @@ fn edge_outline(grow: f32, corners: [CornerShape; 2], width: f32) -> (Path, f32)
         );
         builder.close();
     });
-    (path, grow + left.extent().max(right.extent()))
+    let deepest = bump.0.max(0.0);
+    (path, grow + left.extent().max(right.extent()).max(deepest))
 }
 
 /// The notch starting `y` below where the zones start, in a frame its own size: what's drawn, and
@@ -234,11 +367,17 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
         if let Some((grow, corners)) = self.edge {
             let gap = f32::from(theme::EDGE_GAP);
             let width = bounds.width + 2.0 * gap;
-            let drawn = (grow, corners, width);
+            let bump = (state.dip.value, state.dip_width);
+            if self.notch.is_none()
+                && let Some(sag) = &self.sag
+            {
+                sag.set(bump_at(width / 2.0, width / 2.0, bump, grow));
+            }
+            let drawn = (grow, corners, width, bump);
             if state.edge_drawn.replace(Some(drawn)) != Some(drawn) {
                 state.edge_cache.clear();
             }
-            let (path, height) = edge_outline(grow, corners, width);
+            let (path, height) = edge_outline(grow, corners, width, bump);
             let geometry = state
                 .edge_cache
                 .draw(renderer, Size::new(width, height), |frame| {
@@ -248,7 +387,11 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
             renderer.with_translation(at, |renderer| renderer.draw_geometry(geometry));
         }
         // Under the islands, so what's fused to it covers it.
-        if let Some((notch, _)) = self.notch {
+        if let Some((rest, _)) = self.notch {
+            let notch = squished(rest, state.stretch_x.value, state.stretch_y.value);
+            if let Some(sag) = &self.sag {
+                sag.set(notch.height - rest.height);
+            }
             let drawn = (notch, self.at);
             if state.drawn.replace(Some(drawn)) != Some(drawn) {
                 state.cache.clear();
@@ -281,6 +424,12 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
             drawn: Cell::new(None),
             edge_cache: Cache::new(),
             edge_drawn: Cell::new(None),
+            stretch_x: Spring::new(0.0, REACT),
+            stretch_y: Spring::new(0.0, REACT),
+            dip: Spring::new(0.0, REACT),
+            dip_width: 0.0,
+            seen: None,
+            last: None,
         })
     }
 
@@ -330,6 +479,37 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
             zone.as_widget_mut().update(
                 tree, event, layout, cursor, renderer, clipboard, shell, viewport,
             );
+        }
+        let state = tree.state.downcast_mut::<State>();
+        // New zones only note the kick they're given: it happened before them.
+        let number = self.kick.map_or(0, |(number, _)| number);
+        if let (Some(seen), Some((number, kick))) = (state.seen, self.kick)
+            && number > seen
+        {
+            self.play(state, kick);
+        }
+        state.seen = Some(state.seen.map_or(number, |seen| seen.max(number)));
+        if let Event::Window(window::Event::RedrawRequested(now)) = event
+            && !state.at_rest()
+        {
+            let elapsed = state
+                .last
+                .map_or(std::time::Duration::ZERO, |last| {
+                    now.saturating_duration_since(last)
+                })
+                .min(MAX_FRAME)
+                .as_secs_f32();
+            state.last = Some(*now);
+            for spring in state.springs() {
+                spring.advance(elapsed);
+            }
+            if state.at_rest() {
+                state.springs().into_iter().for_each(Spring::settle);
+                state.last = None;
+            }
+        }
+        if !state.at_rest() {
+            shell.request_redraw();
         }
     }
 
@@ -402,6 +582,39 @@ mod tests {
         assert_eq!(around(1000.0, 200.0, 150.0, [0.0; 2]), (250.0, 600.0));
         // Nothing before it: an empty half, ending where the notch starts.
         assert_eq!(around(1000.0, 200.0, 0.0, [0.0; 2]), (400.0, 600.0));
+    }
+
+    fn notch(grow: [f32; 2]) -> Notch {
+        Notch {
+            width: 200.0,
+            height: 30.0,
+            grow,
+            ..Notch::default()
+        }
+    }
+
+    #[test]
+    fn a_squished_notch_never_gets_smaller_than_it_is() {
+        let grown = notch([3.0, 2.0]);
+        // Pinched hard: no narrower than the hardware's, and a little taller.
+        let pinched = squished(grown, -20.0, 0.0);
+        assert_eq!(pinched.width, 194.0);
+        assert_eq!(pinched.height, 40.0);
+        // Flattened hard: no shorter than the hardware's, and a little wider.
+        let flat = squished(grown, 0.0, -10.0);
+        assert_eq!(flat.height, 28.0);
+        assert_eq!(flat.width, 205.0);
+        // Not grown: there's nowhere to shrink to.
+        let tight = squished(notch([0.0; 2]), -4.0, -4.0);
+        assert!(tight.width >= 200.0 && tight.height >= 30.0, "{tight:?}");
+    }
+
+    #[test]
+    fn a_bump_eases_in_and_out_and_dents_no_higher_than_the_top() {
+        assert_eq!(bump_at(50.0, 50.0, (4.0, 40.0), 3.0), 4.0);
+        assert_eq!(bump_at(70.0, 50.0, (4.0, 40.0), 3.0), 0.0);
+        assert!((bump_at(60.0, 50.0, (4.0, 40.0), 3.0) - 2.0).abs() < 1e-4);
+        assert_eq!(bump_at(50.0, 50.0, (-9.0, 40.0), 3.0), -3.0);
     }
 
     #[test]

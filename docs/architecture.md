@@ -77,7 +77,7 @@ The dormer is the host's search dialog for widgets' actions ([D-84](decisions.md
 
 1. The host asks Hyprland how tall the focused screen is, then opens the dormer a fifth of the way down (`Opened(top)`). Opening it closes any popover, the same way opening a popover closes it.
 2. It asks every widget for `actions()`, and adds a row for each widget with a popover. `dormer.rs` ranks them for what's typed and keeps the best eight. After each of a widget's messages while it's open, the host asks again, and the selection stays on its row.
-3. `view` stacks a host island at the top center over the bar's islands: the notch's width, or a dot. Its popover is the dormer's panel, a `text_input` over a `list`, placed with `Placement::Centered { top }`. Placing, growing the surface, the input region and the morph are a popover's (`Placed`). Arrow keys reach the host through the popover's `on_key`. Every other key stays in the field.
+3. `view` stacks a host island at the top center over the bar's islands: a dot where the dormer comes out of the notch or the top edge, which comes out as a drop (`Popover::drop`, [D-86](decisions.md)). `Zones` squishes the notch or the edge as the drop's neck lets go of it and catches it back (`Neck`). Its popover is the dormer's panel, a `text_input` over a `list`, placed with `Placement::Centered { top }`. Placing, growing the surface, the input region and the morph are a popover's (`Placed`). Arrow keys reach the host through the popover's `on_key`. Every other key stays in the field.
 4. A pick (`Run`) closes the dormer, remembers the pick, and sends the action's message to its widget through the usual `Message::Widget` route, or opens the widget's popover.
 5. It closes like a popover: Esc, a key the field doesn't take, a click elsewhere, or the keybind again. When its island is back, it reports `Closed` and the surface shrinks.
 
@@ -120,13 +120,14 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
   src/cover.rs             covers: a file or https URL → cropped, rounded 32 and 256 px bitmaps, off the UI thread
   src/dormer.rs            the dormer's list: what widgets offer, ranked for what's typed, the selection and recent picks
+  src/neck.rs              the neck the dormer's drop hangs on: the smooth union of the notch's bottom and the drop, row by row
   src/theme.rs             every color, size and font
   src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay, switching popovers mid-morph, the collapse chevron on hover
   src/squish.rs            how squished the items being drawn are, set by their island
   src/label.rs             a label that can squish (outlines while squished)
   src/squircle.rs          the squircle path
   src/jelly.rs             an island's outline as a ring of coupled springs, which nudges poke
-  src/zones.rs             the three zones across the bar: sides at the edges, the center pushed aside when they reach it
+  src/zones.rs             the three zones across the bar: sides at the edges, the center pushed aside when they reach it; the notch and grown edge, squished by the dormer's drop
   src/slot.rs              item wrapper: clicks, scroll steps, and the pointer for alternates
   src/alternate.rs         alternate: one option at a time with fades; hover, and growing (expand)
   src/handover.rs          one thing on screen at a time: fade (and slide) out, then the next in; alternates and tabs

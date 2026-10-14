@@ -29,7 +29,7 @@ use crate::island::{self, Island, Placement, Toggle};
 use crate::notch::{self, Notch, Place, Side};
 use crate::slot::Slot;
 use crate::squircle::CornerShape;
-use crate::zones::Zones;
+use crate::zones::{self, Zones};
 use crate::{icon, kit, theme as style, watch};
 
 pub struct Bar {
@@ -67,6 +67,11 @@ pub struct Bar {
     dormer: Option<Session>,
     /// The dormer's last picks, for as long as the bar runs.
     recent: Recent,
+    /// What the dormer's drop last did to the notch or the edge it comes out of, numbered (D-86).
+    notch_kick: Option<(u64, zones::Kick)>,
+    /// How far the notch's bottom (or the edge's) is drawn from where it rests, on the dormer's
+    /// bar: the drop's neck flows from there.
+    notch_sag: zones::Sag,
     /// Bar surfaces, in the order they opened.
     windows: Vec<window::Id>,
     /// Numbers the expiry timer, so only the one set last counts.
@@ -293,6 +298,8 @@ impl Bar {
             toasts: Vec::new(),
             notices: None,
             dormer: None,
+            notch_kick: None,
+            notch_sag: zones::Sag::default(),
             recent: Recent::default(),
             windows: Vec::new(),
             timer: 0,
@@ -589,6 +596,12 @@ impl Bar {
 
     fn is_open(&self) -> bool {
         self.popovers.iter().any(|popover| popover.open) || self.dormer_open()
+    }
+
+    /// Squishes the notch, or the edge, on the dormer's bar: the drop leaves it or lands in it.
+    fn kick_notch(&mut self, kick: zones::Kick) {
+        let number = self.notch_kick.map_or(1, |(number, _)| number + 1);
+        self.notch_kick = Some((number, kick));
     }
 
     fn dormer_open(&self) -> bool {
@@ -1393,6 +1406,15 @@ fn handle_dormer(bar: &mut Bar, event: dormer::Event) -> Task<Message> {
             bar.refresh_dormer();
             send(hooks)
         }
+        // What it comes out of reacts the moment the drop leaves it or touches it again.
+        Event::Neck(caught) => {
+            bar.kick_notch(if caught {
+                zones::Kick::Flatten
+            } else {
+                zones::Kick::Pinch
+            });
+            Task::none()
+        }
         Event::Query(query) => {
             if let Some(session) = bar.dormer.as_mut().filter(|session| session.open) {
                 session.search(query, &bar.recent);
@@ -1611,7 +1633,12 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     .edge(
         bar.screen.grow,
         [bar.screen.corners[0], bar.screen.corners[1]],
-    );
+    )
+    .kick(
+        bar.notch_kick
+            .filter(|_| bar.toast_window() == Some(window)),
+    )
+    .sag((bar.toast_window() == Some(window)).then(|| bar.notch_sag.clone()));
 
     // No background of its own: the surface is transparent around and between the islands, and
     // below them, where a dragged island has room to move and popovers grow.
@@ -1625,9 +1652,9 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     stack![islands, dormer_view(bar, window)].into()
 }
 
-/// The dormer's island, in the middle at the top: the notch, if there is one, or a dot under the
-/// top edge, which turns into the dormer. Only there while the dormer is, on the bar the
-/// notifications show on.
+/// The dormer's island, in the middle at the top: a dot where it comes out of the notch, or the top
+/// edge, which drops out as a ball and unfolds into the dormer (D-86). Only there while the dormer
+/// is, on the bar the notifications show on.
 fn dormer_view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     let Some(session) = bar
         .dormer
@@ -1636,20 +1663,9 @@ fn dormer_view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     else {
         return Space::new().into();
     };
-    let padding = 2.0 * f32::from(style::ISLAND_PADDING);
-    let width = bar
-        .screen
-        .notch
-        .map_or(0.0, |notch| (notch.width - padding).max(0.0));
-    let top = config::Edges {
-        top: true,
-        ..config::Edges::default()
-    };
-    let island = Island::new([(DORMER, Space::new().width(width).into())])
+    let island = Island::new([(DORMER, Space::new().into())])
         .align(Horizontal::Center)
         .popover(Some(dormer_popover(bar, session)))
-        .bleed(bleed(top))
-        .shows(shows(top))
         .corners(bar.screen.island_corners(Place::default()))
         .height(bar.screen.island_height());
     container(island)
@@ -1659,6 +1675,15 @@ fn dormer_view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             ..Padding::ZERO
         })
         .into()
+}
+
+/// Where the dormer comes out, from the surface's top: the bottom of the notch as the bar draws it,
+/// grown, or the bottom of the grown top edge. Its neck flows out of that.
+fn dormer_drop(screen: &notch::Screen) -> f32 {
+    match screen.notch {
+        Some(notch) => screen.notch_top(notch) + notch.height - screen.inset[0],
+        None => screen.grow,
+    }
 }
 
 /// The pictures before the dormer's rows, in the order they show. Asked of the widgets again,
@@ -1735,6 +1760,9 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         on_hover: None,
         width: style::PANEL_WIDE_WIDTH,
         placement: Placement::Centered { top: session.top },
+        drop: Some(dormer_drop(&bar.screen)),
+        on_neck: Some(Box::new(|caught| Message::Dormer(Event::Neck(caught)))),
+        sag: Some(bar.notch_sag.clone()),
         on_key: Some(Box::new(|key| {
             use keyboard::key::Named;
             match key {
@@ -1901,6 +1929,9 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         width,
         placement: Placement::Below,
         on_key: None,
+        drop: None,
+        on_neck: None,
+        sag: None,
     }
 }
 
@@ -1971,6 +2002,9 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
         width: style::PANEL_WIDTH,
         placement: Placement::Below,
         on_key: None,
+        drop: None,
+        on_neck: None,
+        sag: None,
     }
 }
 
@@ -2864,6 +2898,18 @@ mod tests {
         assert!(bar.dormer.is_some());
         dormer(&mut bar, dormer::Event::Closed);
         assert!(bar.dormer.is_none());
+    }
+
+    #[test]
+    fn the_notch_pinches_as_the_dormer_leaves_and_flattens_as_it_lands() {
+        let (mut bar, _) = acting_bar();
+        dormer(&mut bar, dormer::Event::Opened(200.0));
+        assert_eq!(bar.notch_kick, None, "not before the drop leaves");
+        dormer(&mut bar, dormer::Event::Neck(false));
+        assert_eq!(bar.notch_kick, Some((1, zones::Kick::Pinch)));
+        let _ = update(&mut bar, Message::KeyPressed);
+        dormer(&mut bar, dormer::Event::Neck(true));
+        assert_eq!(bar.notch_kick, Some((2, zones::Kick::Flatten)));
     }
 
     #[test]

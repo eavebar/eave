@@ -26,6 +26,8 @@ pub enum Event {
     Run(usize),
     /// Its island placed it.
     Placed(Rectangle),
+    /// Its neck let go of it as it came out (false), or caught it as it went back (true).
+    Neck(bool),
     /// Its island finished turning back.
     Closed,
 }

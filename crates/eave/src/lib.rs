@@ -24,6 +24,7 @@ mod kit;
 mod label;
 mod markdown;
 mod meter;
+mod neck;
 mod notch;
 mod pip;
 mod slider;
