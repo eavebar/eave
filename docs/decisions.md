@@ -1752,7 +1752,7 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 - **Widgets declare their actions** with `Widget::actions()`, a list of `ui::action(title, message)` with `.subtitle`, `.keywords` and `.leading` (a small picture). Like `notices()`, the method is pure, and the host reads it, not the widget. It reads it only while the dormer is open: once when it opens, then after each of a widget's messages, so titles can follow state ("Mute" while sound plays, "Unmute" while muted). Running an action sends its message to its widget, as a click would, so an action that returns `open_popover()` opens that popover.
 - **Every widget with a popover gets a row of its own**, titled with its name, that opens it. So the dormer is useful before any widget declares an action.
 - **The dialog:** the host matches what's typed against titles, then keywords and subtitles: every character in order, scoring more for a start, a word start or a run, plus a little for recent picks. It shows the best eight, so nothing scrolls. With nothing typed, it lists the recent picks first, then the rest. The picks are kept in memory only, like the notification history.
-- **Its island:** a host island at the top center: the notch's width when there is one, otherwise a dot under the top edge, attached to the top. It is only there while the dormer is. The panel uses the popover machinery, with a new `Placement::Centered { top }`: centered across the surface, its top a fifth of the way down the focused screen (from Hyprland's `monitors`). It moves in the motion language like any popover ([D-83](#d-83-one-motion-language)), with nothing of its own: every edge rides `MORPH`, so the shape glides down whole and never passes where it goes, the opening squish and the landing splat ride `REACT`, and the splat's look-ahead lands it against the top, not on the way up. The surface grows to fit it, and the bar takes the keyboard for it, as it does for a popover. The dormer and popovers take turns: opening either closes the other.
+- **Its island:** a host island at the top center: the notch's width when there is one, otherwise a dot under the top edge, attached to the top. It is only there while the dormer is. The panel uses the popover machinery, with a new `Placement::Centered { top }`: centered across the surface, its top a fifth of the way down the focused screen (from Hyprland's `monitors`). It moves in the motion language like any popover ([D-83](#d-83-one-motion-language)), with nothing of its own: every edge rides `MORPH`, so the shape glides down whole and never passes where it goes, the opening squish and the landing splat ride `REACT`, and the splat's look-ahead lands it against the top, not on the way up. *(Superseded by [D-86](#d-86-the-dormer-comes-out-as-a-drop): its island is a dot where it comes out, and it comes out as a drop.)* The surface grows to fit it, and the bar takes the keyboard for it, as it does for a popover. The dormer and popovers take turns: opening either closes the other.
 - **The keybind** is a Hyprland custom event, `eave-dormer`: `bind = SUPER, SPACE, event, eave-dormer`, or `eave dormer` from anywhere, which dispatches that event. The bar's socket2 reader now runs all the time to catch it. Every other event stops in its filter, before `update`.
 - **`[[dormer]]` in config.toml** holds widgets that are only there for their actions. Their items aren't drawn and their popovers never open. eave-build compiles them in like any other.
 - **The `apps` plugin** is the first of those. It turns each desktop entry into an action that launches it through Hyprland's `exec`, so the app isn't a child of the bar. `Terminal=true` entries need `terminal = "foot"`. It reads the entries off the UI thread, then again whenever an `applications` directory changes (inotify, on a thread of its own).
@@ -1804,3 +1804,35 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 
 **Measured** (CachyOS x86_64, release, the user's config, both renderers built in, run on tiny-skia on a session bus of its own, two alternating runs against main): binary +128 KiB (18.40 → 18.53 MiB); RSS unchanged within noise, ~23.4 MB idle and ~27.7 MB with one notification shown, against ~23.6 and ~27.3 on main. No dependency. The time in a card's corner moves on with a one-minute subscription, only while the panel shows a notice with a time.
 
+---
+
+## D-86: The dormer comes out as a drop
+
+**Status:** accepted (2026-10-14). Supersedes how [D-84](#d-84-the-dormer-actions-widgets-declare-found-by-typing)'s island moves.
+
+**What:** the dormer no longer comes out of the top as a notch-wide shape. It comes out as a drop, and what it comes out of squishes.
+- **Its island is a dot** where it comes out. With a notch, that's the bottom middle of the hardware's notch, without the grown `below` (D-75), which is black whatever the bar draws. Without a notch, it's the bottom of the grown top edge (D-81). `island::Popover::drop` says how far down the surface that is.
+- **Stops on the way:** the shape's edges ride `MORPH` from the dot through two stops: first a ball (`DROP_BALL`) swelling half out of where it comes out, then the same ball fallen `DROP_FALL` below it. After that, they head for the panel. They head on to the next stop once they're `DROP_WAYPOINT` of the way to one, so it's one motion, not three. Closing runs through the same stops backwards. The corners are a circle's while it's a ball, and blend into the panel's as it unfolds. The content waits for the unfolding, as it waits for any popover's morph.
+- **The neck:** while the ball is round and close enough, a bridge of black joins it to a circle (`NECK_ROOT`) hidden in the notch or the edge. It is the classic metaball bridge between two circles (`neck.rs`): the circles' tangent points, joined by cubic curves. It thins as the ball falls, and pinches off past the root's radius plus `NECK_REACH` of the ball's, before the ball unfolds. On the way back it joins up again as the ball rises.
+- **What it comes out of squishes,** within what it's grown by, so it never gets smaller than the hardware's:
+  - As the dormer opens, the notch pinches in from each side (up to `NOTCH_PINCH`, a little taller by `BULGE`).
+  - As the drop lands back, the notch flattens (up to `NOTCH_FLATTEN`, a little wider).
+  - Without a notch, the grown edge bumps down in a narrow bump where the drop leaves (`EDGE_PULL`, `EDGE_PULL_WIDTH`), and dents up in a wide one where it lands (`EDGE_DENT`, `EDGE_DENT_WIDTH`).
+  - With nothing grown, nothing moves.
+
+  Each rides `REACT`. The host numbers each kick (`zones::Kick`), as it numbers nudges. The island says when the drop lands (`on_landed`), at the moment it would have splatted, with the same look-ahead.
+- The ball is squeezed by `DROP_SQUISH` as it sets off to unfold. The island's own splat is left out, since it vanishes as it lands.
+
+**Why:** the notch-wide shape read as a copy of the notch sliding out of it, not as something coming out of it. A drop reads as made of the same black stuff as the notch, which is the point of drawing the notch at all. D-75 and D-81 grew the notch and the edge to have pixels to squish, and nothing squished them until now.
+
+**Alternatives:**
+- a clean ball, without the neck: cheaper, but it pops out instead of pulling away.
+- squishing the notch from the island, drawing a notch of its own while the dormer is there: two shapes in one island, and the notch drawn twice.
+- one waypoint (straight from the dot to a fallen ball): the ball left the notch as it swelled, so the neck never had a ball to hold.
+
+**Cost:** no dependency. Built and drawn only while it moves:
+- the neck: one path a frame, while the ball hangs on it;
+- the notch or edge path: rebuilt each frame while it squishes, cached again at rest;
+- the stops: no allocation.
+
+**Measured** (Asahi aarch64, release, the user's config, the default GPU renderer, both binaries from the same directory, 12 s after start, two alternating runs): binary 18,050,688 bytes before and after. RSS 74.6 and 76.5 MB before, 74.7 and 74.9 MB after: unchanged within noise. Idle CPU unchanged within noise: 130 and 48 ticks over 10 s before, 63 and 47 after (something in the config animates at rest on both). Only aarch64 was built here: no target for x86_64 is installed, and nothing in this change is arch-specific.
