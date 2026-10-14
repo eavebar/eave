@@ -23,6 +23,7 @@ pub use futures_util::Stream;
 pub use zbus;
 
 pub mod portal;
+pub mod systemd;
 
 /// The shared system bus connection, opened on first use.
 pub async fn system() -> zbus::Result<Connection> {

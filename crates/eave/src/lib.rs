@@ -11,6 +11,7 @@ mod countdown;
 mod counter;
 mod cover;
 mod dialog;
+mod doctor;
 mod dormer;
 mod ease;
 mod field;
@@ -96,6 +97,9 @@ With no command, runs the bar.
 
 Commands:
   calibrate   Measure the screen's corners and notch, and save them to config.toml
+  doctor [--report <path>]
+              Check config.toml, its widgets and keys, the screen and the systemd units, and
+              say what's wrong. --report also writes what it found to <path>, as TOML
   dormer      Open the running bar's dormer, or close it. A Hyprland bind can do it directly:
               bind = SUPER, SPACE, event, eave-dormer
   popover <widget>
@@ -119,10 +123,11 @@ fn prepare(config: &config::Config) {
 }
 
 /// Builds the registry from `plugins`, reads `config.toml` (and keeps watching it), and runs the
-/// bar until it exits. `eave calibrate` runs the calibrator instead (D-71).
+/// bar until it exits. `eave calibrate` runs the calibrator instead (D-71), and `eave doctor` the
+/// checks (D-95).
 pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
     match std::env::args().nth(1).as_deref() {
-        None => {}
+        None | Some("doctor") => {}
         Some("calibrate") => return calibrate::run(),
         Some("dormer") => return send(eave_hyprland::DORMER.to_owned()),
         Some(command @ ("popover" | "action")) => {
@@ -163,6 +168,10 @@ pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
             duplicates.join(", ")
         );
         std::process::exit(1);
+    }
+    // Needs the registry: it checks the widgets config.toml names against it.
+    if std::env::args().nth(1).as_deref() == Some("doctor") {
+        doctor::run(&registry);
     }
 
     let config = config::load().unwrap_or_else(|error| {
