@@ -41,6 +41,9 @@ pub struct Zones<'a, M> {
     /// Where the zones say how far the middle of the notch's bottom (or the edge's) is from where
     /// it rests, as last drawn, if given.
     sag: Option<Sag>,
+    /// The edge is the whole bar, down to the islands' bottom (D-89): the notch is under it, so
+    /// what the dormer's drop squishes is its bottom.
+    solid: bool,
 }
 
 /// How far the middle of the bottom of what the dormer's drop comes out of is from where it
@@ -100,6 +103,7 @@ impl<'a, M> Zones<'a, M> {
             edge: None,
             kick: None,
             sag: None,
+            solid: false,
         }
     }
 
@@ -127,6 +131,7 @@ impl<'a, M> Zones<'a, M> {
             edge: None,
             kick: None,
             sag: None,
+            solid: false,
         }
     }
 
@@ -135,6 +140,17 @@ impl<'a, M> Zones<'a, M> {
     pub fn edge(mut self, grow: f32, corners: [CornerShape; 2]) -> Self {
         self.edge = (grow > 0.0).then_some((grow, corners));
         self
+    }
+
+    /// The edge, given as thick as the bar, is the bar (D-89): the notch isn't drawn.
+    pub fn solid(mut self, solid: bool) -> Self {
+        self.solid = solid;
+        self
+    }
+
+    /// The notch the bar draws, if any: none under a solid bar.
+    fn drawn_notch(&self) -> Option<(Notch, [f32; 2])> {
+        self.notch.filter(|_| !self.solid)
     }
 
     /// The latest kick from the dormer's drop, numbered: the notch squishes (or without one, the
@@ -154,7 +170,7 @@ impl<'a, M> Zones<'a, M> {
     /// is, and with nothing grown, nothing moves.
     fn play(&self, state: &mut State, kick: Kick) {
         let react = |peak: f32| REACT.kick(peak * theme::REACT_SIZE);
-        if let Some((notch, _)) = self.notch {
+        if let Some((notch, _)) = self.drawn_notch() {
             match kick {
                 Kick::Pinch => {
                     let pinch = theme::NOTCH_PINCH.min(notch.grow[0]);
@@ -368,7 +384,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
             let gap = f32::from(theme::EDGE_GAP);
             let width = bounds.width + 2.0 * gap;
             let bump = (state.dip.value, state.dip_width);
-            if self.notch.is_none()
+            if self.drawn_notch().is_none()
                 && let Some(sag) = &self.sag
             {
                 sag.set(bump_at(width / 2.0, width / 2.0, bump, grow));
@@ -387,7 +403,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
             renderer.with_translation(at, |renderer| renderer.draw_geometry(geometry));
         }
         // Under the islands, so what's fused to it covers it.
-        if let Some((rest, _)) = self.notch {
+        if let Some((rest, _)) = self.drawn_notch() {
             let notch = squished(rest, state.stretch_x.value, state.stretch_y.value);
             if let Some(sag) = &self.sag {
                 sag.set(notch.height - rest.height);

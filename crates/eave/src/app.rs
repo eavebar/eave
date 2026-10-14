@@ -21,7 +21,7 @@ use iced_layershell::reexport::{KeyboardInteractivity, Layer};
 use iced_layershell::to_layer_message;
 
 use crate::apps::{self, AppIcon, FileIcon, FileKey, Frame, Icons, Wanted};
-use crate::config::{self, Config, Entry, Held, Showing, Zone};
+use crate::config::{self, BarCorners, Config, Entry, Held, Showing, Style, Zone};
 use crate::countdown::Countdown;
 use crate::cover::{self, Cover};
 use crate::dormer::{self, Recent, Session, Source};
@@ -1709,6 +1709,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         .filter(|notch| notch.shoulder > 0.0)
         .map(|notch| CornerShape::new(notch.shoulder, notch.smoothing));
 
+    // A solid bar is black down to the islands' bottom, and they flow out of it (D-89).
+    let band = (bar.config.bar.style == Style::Solid).then(|| band_bottom(&bar.screen));
     // Each island is as wide as its items. One with nothing to show draws nothing, unless it has
     // collapsed items to bring back.
     let island =
@@ -1781,10 +1783,22 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                     .width_groups(groups)
                     .toggle(toggle)
                     .live(instances().any(|instance| instance.entry.live))
-                    .bleed(bleed(attach))
+                    .bleed(match band {
+                        // Up into the bar, so nothing moving ever comes apart from it.
+                        Some(_) => Padding {
+                            top: band_bottom(&bar.screen),
+                            ..bleed(attach)
+                        },
+                        None => bleed(attach),
+                    })
                     .shows(shows(attach))
                     .notch(bar.screen.notch.map(|notch| notch.width))
-                    .shoulders(shoulders)
+                    // Flowing out of a solid bar, as round where it leaves as the island is.
+                    .shoulders(match band {
+                        Some(_) => Some(bar.screen.islands),
+                        None => shoulders,
+                    })
+                    .band(band)
                     .corners(bar.screen.island_corners(Place::default()))
                     .height(bar.screen.island_height()),
                 attach,
@@ -1850,9 +1864,13 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         }
     }
     .edge(
-        bar.screen.grow,
-        [bar.screen.corners[0], bar.screen.corners[1]],
+        band.unwrap_or(bar.screen.grow),
+        match (band, bar.config.bar.corners) {
+            (Some(_), BarCorners::Square) => [CornerShape::SQUARE; 2],
+            _ => [bar.screen.corners[0], bar.screen.corners[1]],
+        },
     )
+    .solid(band.is_some())
     .kick(
         bar.notch_kick
             .filter(|_| bar.toast_window() == Some(window)),
@@ -1896,6 +1914,12 @@ fn dormer_view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             ..Padding::ZERO
         })
         .into()
+}
+
+/// Where a solid bar ends, from the surface's top: the grown edge, the gap and the islands
+/// (D-89). The islands rest flush with it.
+fn band_bottom(screen: &notch::Screen) -> f32 {
+    screen.grow + f32::from(style::EDGE_GAP) + screen.island_height()
 }
 
 /// Where the dormer comes out, from the surface's top: the bottom of the notch as the bar draws it,
@@ -1981,7 +2005,10 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         on_hover: None,
         width: style::PANEL_WIDE_WIDTH,
         placement: Placement::Centered { top: session.top },
-        drop: Some(dormer_drop(&bar.screen)),
+        drop: Some(match bar.config.bar.style {
+            Style::Solid => band_bottom(&bar.screen),
+            Style::Islands => dormer_drop(&bar.screen),
+        }),
         on_neck: Some(Box::new(|caught| Message::Dormer(Event::Neck(caught)))),
         sag: Some(bar.notch_sag.clone()),
         on_key: Some(Box::new(|key| {
@@ -2401,6 +2428,23 @@ mod tests {
         // A leftover message for a removed instance goes nowhere instead of reaching another widget.
         let _ = update(&mut bar, Message::Widget(0, AnyMessage::new(())));
         let _ = update(&mut bar, Message::Widget(2, AnyMessage::new(())));
+    }
+
+    #[test]
+    fn a_solid_bar_ends_where_the_islands_do() {
+        let screen = notch::Screen::default();
+        let bottom = band_bottom(&screen);
+        assert_eq!(
+            bottom,
+            f32::from(style::EDGE_GAP) + style::ISLAND_HEIGHT as f32
+        );
+        // Above what the bar keeps windows clear of: they never go under it.
+        assert!(bottom <= screen.bar_height() as f32);
+        let grown = notch::Screen {
+            grow: 4.0,
+            ..screen
+        };
+        assert_eq!(band_bottom(&grown), bottom + 4.0);
     }
 
     #[test]

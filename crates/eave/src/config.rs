@@ -708,16 +708,14 @@ fn bar(value: toml::Value, warnings: &mut Vec<String>) -> Bar {
             "style" => match name {
                 Some("islands") => bar.style = Style::Islands,
                 Some("solid") => bar.style = Style::Solid,
-                _ => warnings.push(
-                    "`bar.style` must be \"islands\" or \"solid\", using \"islands\"".into(),
-                ),
+                _ => warnings
+                    .push("`bar.style` must be \"islands\" or \"solid\", using \"islands\"".into()),
             },
             "corners" => match name {
                 Some("round") => bar.corners = BarCorners::Round,
                 Some("square") => bar.corners = BarCorners::Square,
-                _ => warnings.push(
-                    "`bar.corners` must be \"round\" or \"square\", using \"round\"".into(),
-                ),
+                _ => warnings
+                    .push("`bar.corners` must be \"round\" or \"square\", using \"round\"".into()),
             },
             _ => warnings.push(format!(
                 "`bar` takes show, fullscreen, peek, style and corners, ignoring `{key}`"
