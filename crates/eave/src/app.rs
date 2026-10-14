@@ -2352,6 +2352,7 @@ fn dialog_popover<'a>(bar: &'a Bar, dialog: &Dialog) -> island::Popover<'a, Mess
             min_top: bar.screen.surface_height() as f32,
         },
         drop: top.then(|| drop_top(bar)),
+        drop_color: drop_color(bar).filter(|_| top),
         on_neck: top.then(|| -> Box<dyn Fn(bool) -> Message> {
             Box::new(|caught| Message::Dialog(Event::Neck(caught)))
         }),
@@ -2367,6 +2368,15 @@ fn drop_top(bar: &Bar) -> f32 {
     match bar.config.bar.style {
         Style::Solid => band_bottom(&bar.screen),
         Style::Islands => dormer_drop(&bar.screen),
+    }
+}
+
+/// The color of what a drop comes out of, when it isn't the islands': the notch's black, or the
+/// top edge's (D-92). A solid bar's band is the islands' color.
+fn drop_color(bar: &Bar) -> Option<Color> {
+    match bar.config.bar.style {
+        Style::Solid => None,
+        Style::Islands => Some(style::BEZEL),
     }
 }
 
@@ -2464,6 +2474,7 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         width: style::PANEL_WIDE_WIDTH,
         placement: Placement::Centered { top: session.top },
         drop: Some(drop_top(bar)),
+        drop_color: drop_color(bar),
         on_neck: Some(Box::new(|caught| Message::Dormer(Event::Neck(caught)))),
         sag: Some(bar.notch_sag.clone()),
         home: None,
@@ -2684,6 +2695,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         placement: Placement::Below,
         on_key,
         drop: None,
+        drop_color: None,
         on_neck: None,
         sag: None,
         home: None,
@@ -2764,6 +2776,7 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
         placement: Placement::Below,
         on_key: None,
         drop: None,
+        drop_color: None,
         on_neck: None,
         sag: None,
         home: None,

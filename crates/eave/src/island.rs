@@ -39,7 +39,7 @@ use crate::neck;
 use crate::spring::{FADE, HAND, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
 use crate::squircle::{self, CornerShape, squircle_corners, warp};
 use crate::squish::{self, Squish};
-use crate::theme::{self, Palette, Scheme};
+use crate::theme::{self, Palette};
 use crate::zones::Sag;
 
 pub struct Island<'a, M> {
@@ -126,6 +126,10 @@ pub struct Popover<'a, M> {
     /// that falls out on a neck, which pinches off, and the ball unfolds into the panel. Closing
     /// runs it back.
     pub drop: Option<f32>,
+    /// The color of what a drop comes out of, if it isn't the island's: the notch's black, in the
+    /// light scheme. The drop starts out that color and turns the island's as it unfolds, and
+    /// back as it folds up again (D-92).
+    pub drop_color: Option<Color>,
     /// Sent as a drop's neck lets go of it (false) or catches it back (true), if given: the moment
     /// it leaves where it comes out of, and touches it again.
     pub on_neck: Option<Box<dyn Fn(bool) -> M + 'a>>,
@@ -305,8 +309,8 @@ struct State {
     /// Where a solid bar's bottom was on the shape it was drawn with, so it's drawn again when
     /// that moves.
     shape_band: Cell<Option<f32>>,
-    /// The scheme `shape` was filled in, so a new theme fills it again.
-    shape_scheme: Cell<Scheme>,
+    /// The color `shape` was filled with, so a new theme, or a drop turning, fills it again.
+    shape_fill: Cell<Color>,
     /// The popover panel's widget state, while there is one.
     panel: Option<Tree>,
     /// Whether the pointer is over the island, which shows the toggle.
@@ -361,6 +365,8 @@ struct Motion {
     stretch_y: Spring,
     /// How far down the surface a popover that comes out as a drop does it ([`Popover::drop`]).
     drop: Option<f32>,
+    /// The color of what it comes out of, if it isn't the island's ([`Popover::drop_color`]).
+    drop_color: Option<Color>,
     /// Another island's shape it rests at instead of its own ([`Popover::home`]).
     home: Option<Shape>,
     /// The island's corners, which a drop rounds off into.
@@ -397,6 +403,7 @@ impl Default for Motion {
             stretch_x: Spring::new(0.0, REACT),
             stretch_y: Spring::new(0.0, REACT),
             drop: None,
+            drop_color: None,
             home: None,
             corner: CornerShape::SQUARE,
             sag: None,
@@ -942,6 +949,22 @@ impl Motion {
             (Some(ball), Some(panel)) => 1.0 - self.edges.progress(ball, panel),
             (Some(_), None) => 1.0,
             (None, _) => 0.0,
+        }
+    }
+
+    /// What the shape is filled with: the island's color, or a drop's, from that of what it comes
+    /// out of while it's a ball to the island's as it unfolds into the panel.
+    fn fill(&self, island: Color) -> Color {
+        let Some(from) = self.drop_color.filter(|_| self.drop.is_some()) else {
+            return island;
+        };
+        let t = 1.0 - self.roundness();
+        let channel = |a: f32, b: f32| a + (b - a) * t;
+        Color {
+            r: channel(from.r, island.r),
+            g: channel(from.g, island.g),
+            b: channel(from.b, island.b),
+            a: channel(from.a, island.a),
         }
     }
 
@@ -1501,8 +1524,8 @@ fn draw_island<M>(
     if state.shape_band.replace(band_at) != band_at {
         state.shape.clear();
     }
-    let palette = Palette::of(theme);
-    if state.shape_scheme.replace(palette.scheme) != palette.scheme {
+    let fill = motion.fill(Palette::of(theme).island_bg);
+    if state.shape_fill.replace(fill) != fill {
         state.shape.clear();
     }
 
@@ -1524,7 +1547,7 @@ fn draw_island<M>(
             moved.y + moved.height + 1.0,
         );
         let mut frame = Frame::new(renderer, far);
-        frame.fill(&path, palette.island_bg);
+        frame.fill(&path, fill);
         renderer.draw_geometry(frame.into_geometry());
     }
     renderer.with_translation(motion.offset(), |renderer| {
@@ -1576,7 +1599,7 @@ fn draw_island<M>(
                     }),
                     None => squircle_corners(outline, corners),
                 };
-                frame.fill(&bend(outline), palette.island_bg);
+                frame.fill(&bend(outline), fill);
             });
             renderer.with_translation(Vector::new(body.x, body.y) - room, |renderer| {
                 renderer.draw_geometry(geometry);
@@ -1721,7 +1744,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             shape_bent: Cell::new(false),
             shape_corners: Cell::new([CornerShape::SQUARE; 4]),
             shape_band: Cell::new(None),
-            shape_scheme: Cell::new(Scheme::Dark),
+            shape_fill: Cell::new(Color::TRANSPARENT),
             panel: None,
             hovered: false,
             toggle_shown: false,
@@ -1983,6 +2006,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         }
         motion.swap(self.popover.as_ref().map(|popover| popover.key));
         motion.drop = self.popover.as_ref().and_then(|popover| popover.drop);
+        motion.drop_color = self.popover.as_ref().and_then(|popover| popover.drop_color);
         motion.home = self
             .popover
             .as_ref()

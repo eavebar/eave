@@ -264,7 +264,7 @@ impl Glyph {
             Icon::Display => pen.display(),
             Icon::Bell { muted } => pen.bell(muted),
             Icon::Brightness { level } => pen.brightness(level),
-            Icon::Appearance { dark: false } => pen.brightness(1.0),
+            Icon::Appearance { dark: false } => pen.sun(),
             Icon::Appearance { dark: true } => pen.moon(),
             Icon::KeyboardLight => pen.keyboard_light(),
             Icon::Media { playing: true } => pen.bars(BARS_PLAYING),
@@ -485,6 +485,17 @@ impl Pen<'_> {
                 Point::new(center.x + cos * 7.0, center.y + sin * 7.0),
             );
             self.line(&ray, self.shade(index < rays));
+        }
+    }
+
+    /// A sun for light mode, apart from brightness's: a ring, with a dot for each ray.
+    fn sun(&mut self) {
+        let center = Point::new(8.0, 8.0);
+        self.line(&Path::circle(center, 3.25), self.on);
+        for index in 0..8u8 {
+            let angle = -0.5 * PI + f32::from(index) * 0.25 * PI;
+            let (sin, cos) = angle.sin_cos();
+            self.dot(center.x + cos * 6.5, center.y + sin * 6.5, 0.95);
         }
     }
 
