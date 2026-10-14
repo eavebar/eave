@@ -42,7 +42,7 @@ screen = { corners = [20, 20, 0, 0], smoothing = 0.6, inset = [0, 0, 0, 0], grow
 - A screen's `grow` draws its top edge that much thicker, in black, rounded into the sides by its top `corners`. Islands, their shoulders and a notch hanging from the top all hang from the grown edge, so the notch keeps its depth and the islands their height ([D-81](decisions.md)). It's `0` by default. `eave calibrate` keeps it, and the notch's `grow`, as they were.
 
 The islands take their corners from these ([D-73](decisions.md)):
-- The top corner of the first island on the left, and of the last on the right, follows the screen's corner at an even distance (its radius less the bar's 6 px gap).
+- The top corner of the first island on the left, and of the last on the right, follows the screen's corner at an even distance (its radius less the bar's 6 px gap): square on a screen whose corners are no rounder than the gap. Against a corner rounder than the island can follow, the island moves in until the gap is whole ([D-95](decisions.md)).
 - A center island next to the notch is rounded like the notch on that side: its top corner like the notch's shoulder, its bottom corner like the notch's lower corner.
 - Every other corner follows `islands`, also in physical pixels:
 
@@ -50,7 +50,7 @@ The islands take their corners from these ([D-73](decisions.md)):
 islands = { radius = "auto", smoothing = "auto" }   # or radius = 24, smoothing = 0.6
 ```
 
-`"auto"`, the default, takes the notch's `radius` and `smoothing`, then the screen's top corners at an even distance. With neither measured, the islands keep the bar's own 14 px squircle corners.
+`"auto"`, the default, takes the notch's `radius` and `smoothing`, then the screen's top corners at an even distance (square if they're no rounder than the gap). Without a `screen` or a measured notch, the islands keep the bar's own 14 px squircle corners.
 
 One config.toml can describe several monitors: a `[monitor."…"]` table gives `notch`, `screen` and `islands` for the monitors it names, and the bar uses the table of the monitor it opens on ([D-94](decisions.md)). `eave calibrate` saves into one of these.
 

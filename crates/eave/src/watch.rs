@@ -317,7 +317,10 @@ mod tests {
         };
         crate::calibrate::save::save(&link, "eDP-1", &shape).unwrap();
         let saved = settle(&mut receiver).expect("no event").unwrap();
-        assert_eq!(saved.screens().screen_for("eDP-1", "").screen, shape.screen);
+        assert_eq!(
+            saved.screens().screen_for("eDP-1", "").screen,
+            Some(shape.screen)
+        );
         assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
 
         // The link is re-pointed, atomically, to a file of another name.

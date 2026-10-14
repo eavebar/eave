@@ -202,7 +202,7 @@ notch = false   # found by eave
         let setting = config
             .screens()
             .screen_for("DP-2", "ViewSonic Corporation XG2431 WEE241700714");
-        assert_eq!(setting.screen, measured().screen);
+        assert_eq!(setting.screen, Some(measured().screen));
     }
 
     #[test]
