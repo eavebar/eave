@@ -1763,6 +1763,7 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         drop: Some(dormer_drop(&bar.screen)),
         on_neck: Some(Box::new(|caught| Message::Dormer(Event::Neck(caught)))),
         sag: Some(bar.notch_sag.clone()),
+        spout: None,
         on_key: Some(Box::new(|key| {
             use keyboard::key::Named;
             match key {
@@ -1932,6 +1933,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         drop: None,
         on_neck: None,
         sag: None,
+        spout: None,
     }
 }
 
@@ -2005,6 +2007,7 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
         drop: None,
         on_neck: None,
         sag: None,
+        spout: None,
     }
 }
 

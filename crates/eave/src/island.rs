@@ -18,6 +18,7 @@
 //! asks, and stops asking once everything is at rest.
 
 use std::cell::Cell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use eave_api::{Nudge, NudgeRequest};
@@ -39,7 +40,7 @@ use crate::spring::{FADE, HAND, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
 use crate::squircle::{self, CornerShape, squircle_corners, warp};
 use crate::squish::{self, Squish};
 use crate::theme;
-use crate::zones::Sag;
+use crate::zones::{Kick, Sag};
 
 pub struct Island<'a, M> {
     /// Each item's key, which follows it when items before it come or go.
@@ -73,7 +74,28 @@ pub struct Island<'a, M> {
     shows: Padding,
     /// How tall it is at rest: the theme's, or down to where the notch ends (D-76).
     height: f32,
+    /// Where it says a drop comes out of it, each time it's drawn, if one does (D-88).
+    spout: Option<Spouts>,
+    /// The latest kick from a drop that comes out of it, with its number. Only one newer than the
+    /// island has seen plays.
+    kick: Option<(u64, Kick)>,
 }
+
+/// Where a drop comes out of an island, as the island was last drawn: the middle of its bottom,
+/// and how far each way along it the neck may spread, short of its rounded corners.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Spout {
+    pub at: Point,
+    pub spread: f32,
+}
+
+/// Written by the island a drop comes out of each time it's drawn, and read by the drop's, so the
+/// neck flows from it while it moves: a popover folding back into its island (D-88).
+pub type Spouts = Rc<Cell<Option<Spout>>>;
+
+/// How many frames a drop waits for what it comes out of to be drawn before it comes out of the
+/// top instead. It's drawn in the frame the drop is asked for, so one is enough.
+const SPOUT_PATIENCE: u8 = 3;
 
 /// The control at one end of an island that shows and hides its collapsible items: there while
 /// the pointer is over the island, or always while they show.
@@ -122,6 +144,9 @@ pub struct Popover<'a, M> {
     /// How far the bottom of what a drop comes out of is from where it rests right now, as drawn
     /// by whatever draws it, if given: its neck flows from there, so they never come apart.
     pub sag: Option<Sag>,
+    /// Comes out of an island instead, if given: where that island says it is, as drawn
+    /// ([`Island::spout`]). The drop waits for it to say.
+    pub spout: Option<Spouts>,
 }
 
 /// Turns a key into a message, or leaves it alone.
@@ -157,7 +182,22 @@ impl<'a, M> Island<'a, M> {
             corners: [CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING); 4],
             shows: Padding::ZERO,
             height: theme::ISLAND_HEIGHT as f32,
+            spout: None,
+            kick: None,
         }
+    }
+
+    /// Writes where a drop comes out of it to `spout`, each time it's drawn.
+    pub fn spout(mut self, spout: Option<Spouts>) -> Self {
+        self.spout = spout;
+        self
+    }
+
+    /// The latest kick from a drop that comes out of it, numbered: it squishes when a newer one
+    /// comes, as the notch does.
+    pub fn kick(mut self, kick: Option<(u64, Kick)>) -> Self {
+        self.kick = kick;
+        self
     }
 
     /// This tall at rest, instead of the theme's.
@@ -327,6 +367,12 @@ struct Motion {
     corner: CornerShape,
     /// How far what a drop comes out of has moved its bottom ([`Popover::sag`]).
     sag: Option<Sag>,
+    /// Where the island a drop comes out of is drawn ([`Popover::spout`]).
+    spout: Option<Spouts>,
+    /// How many frames a drop has waited to hear where it comes out.
+    waited: u8,
+    /// The newest kick already played, once the island has had a look.
+    kicked: Option<u64>,
     /// The newest nudge already played, once the island has been laid out.
     seen: Option<u64>,
     /// The fastest the island has slid as a whole in the push going on, signed (negative is
@@ -359,6 +405,9 @@ impl Default for Motion {
             drop: None,
             corner: CornerShape::SQUARE,
             sag: None,
+            spout: None,
+            waited: 0,
+            kicked: None,
             seen: None,
             pushed: 0.0,
             pushing: 0.0,
@@ -664,6 +713,10 @@ impl Motion {
         items: impl Iterator<Item = (u64, f32)>,
         popover: Option<bool>,
     ) {
+        // A drop out of an island waits until it's heard where that is.
+        if self.island.is_none() && self.awaits_spout() {
+            return;
+        }
         // A new island grows out of a sliver at its center. A drop starts as a dot.
         if self.island.is_none() {
             let sliver = match self.drop {
@@ -851,21 +904,52 @@ impl Motion {
     /// Where the shape rests: the island, or for a drop, a dot where it comes out, wherever that's
     /// drawn right now.
     fn home(&self, island: Rectangle) -> Rectangle {
-        match self.drop {
-            Some(y) => Rectangle::new(Point::new(island.center_x(), y + self.sag()), Size::ZERO),
+        match self.source(island) {
+            Some(source) => Rectangle::new(source.at, Size::ZERO),
             None => island,
         }
+    }
+
+    /// Where a drop comes out right now, and how far its neck may spread there: the island it
+    /// comes out of, as drawn, or the middle of the notch's bottom (or the edge's) under the
+    /// island. None for anything else.
+    fn source(&self, island: Rectangle) -> Option<Spout> {
+        let y = self.drop?;
+        if let Some(spout) = self.spout.as_ref().and_then(|spout| spout.get()) {
+            return Some(spout);
+        }
+        Some(Spout {
+            at: Point::new(island.center_x(), y + self.sag()),
+            spread: theme::NECK_SPREAD,
+        })
+    }
+
+    /// Where a drop comes out when nothing squishes it: the island's bottom as drawn, or the
+    /// notch's at rest.
+    fn outlet(&self, island: Rectangle) -> Option<Point> {
+        let y = self.drop?;
+        match self.spout.as_ref().and_then(|spout| spout.get()) {
+            Some(spout) => Some(spout.at),
+            None => Some(Point::new(island.center_x(), y)),
+        }
+    }
+
+    /// Whether a drop out of an island still waits to hear where that is.
+    fn awaits_spout(&self) -> bool {
+        self.drop.is_some()
+            && self.waited < SPOUT_PATIENCE
+            && self.spout.as_ref().is_some_and(|spout| spout.get().is_none())
     }
 
     /// Where a drop goes by between home and the panel, in the order it goes out (`out`) or back:
     /// swelling into a ball at where it comes out, half in it, then that ball fallen out of it.
     /// None for anything else.
     fn stops(&self, island: Rectangle, out: bool) -> Option<[Rectangle; 2]> {
-        let (Some(y), Some(ball)) = (self.drop, self.ball(island)) else {
+        let (Some(outlet), Some(ball)) = (self.outlet(island), self.ball(island)) else {
             return None;
         };
         let swell = Rectangle {
-            y: y - ball.height / 2.0,
+            y: outlet.y - ball.height / 2.0,
             ..ball
         };
         Some(if out { [swell, ball] } else { [ball, swell] })
@@ -879,9 +963,9 @@ impl Motion {
     /// The ball a drop goes by, on its way out and back: under where it comes out.
     fn ball(&self, island: Rectangle) -> Option<Rectangle> {
         let size = theme::DROP_BALL;
-        self.drop.map(|y| {
+        self.outlet(island).map(|outlet| {
             Rectangle::new(
-                Point::new(island.center_x() - size / 2.0, y + theme::DROP_FALL),
+                Point::new(outlet.x - size / 2.0, outlet.y + theme::DROP_FALL),
                 Size::new(size, size),
             )
         })
@@ -915,14 +999,12 @@ impl Motion {
     /// they're close enough to flow together. It blends less while the drop is smaller than its
     /// ball, so a dot coming out or going in has hardly any.
     fn neck(&self, shape: Rectangle) -> Option<neck::Neck> {
-        let (Some(y), Some(island)) = (self.drop, self.island) else {
-            return None;
-        };
+        let source = self.source(self.island?)?;
         let size = (shape.width.min(shape.height) / theme::DROP_BALL).min(1.0);
         let root = neck::Root {
-            y: y + self.sag(),
-            x: island.center_x(),
-            spread: theme::NECK_SPREAD,
+            y: source.at.y,
+            x: source.at.x,
+            spread: source.spread,
             blend: theme::NECK_BLEND * size,
         };
         neck::Neck::new(root, shape, self.drop_corner(shape).radius)
@@ -970,6 +1052,22 @@ impl Motion {
             popover.touched = Some(true);
             self.bounce(-1.0);
         }
+    }
+
+    /// Plays the kick from a drop that comes out of the island, if it's one it hasn't seen: it
+    /// pinches in from the sides as the drop leaves, and flattens as it lands back, like the
+    /// notch. A new island only notes it: it happened before it.
+    fn kick_from_drop(&mut self, kick: Option<(u64, Kick)>) {
+        let number = kick.map_or(0, |(number, _)| number);
+        if let (Some(seen), Some((number, kick))) = (self.kicked, kick)
+            && number > seen
+        {
+            match kick {
+                Kick::Pinch => self.stretch_x.velocity = -react(2.0 * theme::NOTCH_PINCH),
+                Kick::Flatten => self.stretch_y.velocity = -react(theme::NOTCH_FLATTEN),
+            }
+        }
+        self.kicked = Some(self.kicked.map_or(number, |seen| seen.max(number)));
     }
 
     /// Takes in where the popover's panel goes, and whether the surface is tall enough for it.
@@ -1067,6 +1165,10 @@ impl Motion {
 
     /// Advances to `now`. Returns whether another frame is needed.
     fn step(&mut self, now: Instant) -> bool {
+        if self.island.is_none() && self.awaits_spout() {
+            self.waited += 1;
+            return true;
+        }
         self.aim();
         if self.at_rest() {
             self.let_go_of_grab();
@@ -1389,6 +1491,7 @@ fn draw_island<M>(
     bleed: Padding,
     shoulders: Option<CornerShape>,
     own_corners: [CornerShape; 4],
+    spout: Option<&Spouts>,
     renderer: &mut iced::Renderer,
     theme: &iced::Theme,
     style: &renderer::Style,
@@ -1443,12 +1546,21 @@ fn draw_island<M>(
     // The neck, under the drop, flowing from what's above while they're close. Where the drop is
     // drawn, moved, but not from where it flows: that stays put.
     let moved = shape + motion.offset();
-    if let Some(path) = motion.neck(moved).and_then(|neck| neck.path()) {
-        // From the surface's origin, as far as the neck can reach.
-        let far = Size::new(
-            moved.center_x() + theme::NECK_SPREAD + 1.0,
-            moved.y + moved.height + 1.0,
-        );
+    if let Some(spout) = spout {
+        // Short of the bottom corners, where it rounds off: a little way, on a round one.
+        let corner = own_corners[2].radius * (1.0 + own_corners[2].smoothing);
+        let corner = corner.max(own_corners[3].radius * (1.0 + own_corners[3].smoothing));
+        let half = moved.width / 2.0;
+        spout.set(Some(Spout {
+            at: Point::new(moved.center_x(), moved.y + moved.height + bleed.bottom),
+            spread: (half - corner).max(half / 2.0).min(theme::NECK_SPREAD),
+        }));
+    }
+    if let Some(neck) = motion.neck(moved)
+        && let (Some(path), Some((_, right))) = (neck.path(), neck.across())
+    {
+        // From the surface's origin, as far as the neck reaches.
+        let far = Size::new(right + 1.0, moved.y + moved.height + 1.0);
         let mut frame = Frame::new(renderer, far);
         frame.fill(&path, theme::ISLAND_BG);
         renderer.draw_geometry(frame.into_geometry());
@@ -1778,6 +1890,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             self.bleed,
             self.shoulders,
             self.corners,
+            self.spout.as_ref(),
             renderer,
             theme,
             style,
@@ -1898,6 +2011,11 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             .popover
             .as_ref()
             .and_then(|popover| popover.sag.clone());
+        motion.spout = self
+            .popover
+            .as_ref()
+            .and_then(|popover| popover.spout.clone());
+        motion.kick_from_drop(self.kick);
         // A hidden toggle isn't arranged, so it isn't drawn, and fades in when it shows.
         let positions = self
             .keys
@@ -1958,7 +2076,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
                 shell.publish(popover.on_closed.clone());
             }
         }
-        if !motion.at_rest() {
+        if !motion.at_rest() || motion.awaits_spout() {
             shell.request_redraw();
         }
     }
@@ -2096,6 +2214,7 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             island.bleed,
             island.shoulders,
             island.corners,
+            island.spout.as_ref(),
             renderer,
             theme,
             style,
@@ -2424,6 +2543,103 @@ mod tests {
         assert_eq!(motion.home(rect(100.0, 120.0)).y, 37.0);
         let ball = Rectangle::new(Point::new(147.0, 38.0), Size::new(26.0, 26.0));
         assert!(motion.neck(ball).is_some_and(|neck| neck.joined()));
+    }
+
+    #[test]
+    fn a_drop_out_of_an_island_waits_to_hear_where_it_is_then_leans_out_of_it_and_back() {
+        let spout = Spouts::default();
+        let mut motion = Motion {
+            drop: Some(40.0),
+            spout: Some(spout.clone()),
+            ..Motion::default()
+        };
+        // Nothing heard yet: it isn't placed, and asks for frames until it is.
+        motion.arrange(rect(400.0, 120.0), [(1, 410.0)].into_iter(), None);
+        assert!(motion.island.is_none());
+        assert!(motion.step(Instant::now()));
+        // An island off to the left says where its bottom is drawn.
+        let out = Point::new(80.0, 38.0);
+        spout.set(Some(Spout {
+            at: out,
+            spread: 30.0,
+        }));
+        motion.arrange(rect(400.0, 120.0), [(1, 410.0)].into_iter(), None);
+        assert_eq!(
+            motion.edges.rect(),
+            Rectangle::new(out, Size::ZERO),
+            "a dot under it"
+        );
+
+        let panel = Rectangle::new(Point::new(300.0, 200.0), Size::new(300.0, 200.0));
+        popover(&mut motion, true, panel, true);
+        let (mut joined, mut let_go, mut wide) = (false, false, false);
+        run(&mut motion, Instant::now(), |motion| {
+            let neck = motion.neck(motion.shape() + motion.offset());
+            let now = neck.as_ref().is_some_and(|neck| neck.joined());
+            let_go |= joined && !now;
+            joined |= now;
+            wide |= neck
+                .and_then(|neck| neck.across())
+                .is_some_and(|(left, right)| left < 50.0 - 0.01 || right > 110.0 + 0.01);
+        });
+        assert!(joined && let_go, "it falls out of the island on a neck");
+        assert!(!wide, "the neck keeps to the island's bottom");
+        assert_eq!(motion.edges.rect(), panel);
+
+        // The island moved meanwhile, a popover folding up into it: the drop goes back there.
+        let back = Point::new(90.0, 30.0);
+        spout.set(Some(Spout {
+            at: back,
+            spread: 30.0,
+        }));
+        popover(&mut motion, false, panel, true);
+        let mut caught = false;
+        run(&mut motion, Instant::now(), |motion| {
+            caught |= motion.popover.joined;
+        });
+        assert!(caught, "the neck catches it again");
+        assert_eq!(motion.edges.rect(), Rectangle::new(back, Size::ZERO));
+    }
+
+    #[test]
+    fn a_drop_out_of_an_island_that_never_says_comes_out_of_the_top() {
+        let mut motion = Motion {
+            drop: Some(40.0),
+            spout: Some(Spouts::default()),
+            ..Motion::default()
+        };
+        let mut now = Instant::now();
+        for _ in 0..=SPOUT_PATIENCE {
+            motion.arrange(rect(100.0, 120.0), [(1, 110.0)].into_iter(), None);
+            motion.step(now);
+            now += FRAME;
+        }
+        motion.arrange(rect(100.0, 120.0), [(1, 110.0)].into_iter(), None);
+        assert_eq!(motion.edges.rect().position(), Point::new(160.0, 40.0));
+    }
+
+    #[test]
+    fn an_island_a_drop_leaves_pinches_and_one_it_lands_in_flattens() {
+        let island = rect(100.0, 120.0);
+        let mut motion = settled(island, &[1]);
+        // A new island only notes the kick it's given.
+        motion.kick_from_drop(Some((1, Kick::Pinch)));
+        assert!(!motion.step(Instant::now()));
+        motion.kick_from_drop(Some((2, Kick::Pinch)));
+        let mut narrowest = island.width;
+        run(&mut motion, Instant::now(), |motion| {
+            narrowest = narrowest.min(motion.shape().width);
+        });
+        assert!(narrowest < island.width - 2.0, "{narrowest}");
+        motion.kick_from_drop(Some((3, Kick::Flatten)));
+        let mut lowest = island.height;
+        run(&mut motion, Instant::now(), |motion| {
+            lowest = lowest.min(motion.shape().height);
+        });
+        assert!(lowest < island.height - 1.0, "{lowest}");
+        // Played once.
+        motion.kick_from_drop(Some((3, Kick::Flatten)));
+        assert!(!motion.step(Instant::now()));
     }
 
     #[test]
