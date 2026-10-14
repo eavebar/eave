@@ -329,10 +329,13 @@ impl Widget for Network {
             let path = network.path.as_str();
             if network.connected {
                 actions.push(
-                    ui::action(format!("Disconnect from {}", network.name), Message::Disconnect)
-                        .subtitle("Wi-Fi")
-                        .keywords(words.into_iter().chain(["leave"]))
-                        .leading(fan(network.strength)),
+                    ui::action(
+                        format!("Disconnect from {}", network.name),
+                        Message::Disconnect,
+                    )
+                    .subtitle("Wi-Fi")
+                    .keywords(words.into_iter().chain(["leave"]))
+                    .leading(fan(network.strength)),
                 );
             } else if self.joining.as_deref() != Some(path)
                 && (network.known.is_some() || network.security == Security::Open)

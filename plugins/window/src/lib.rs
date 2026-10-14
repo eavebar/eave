@@ -1,6 +1,7 @@
-//! The focused window's title. Hidden when nothing has focus.
+//! The focused window's title. Hidden when nothing has focus. In the dormer, it closes the
+//! focused window, or toggles it fullscreen or floating.
 
-use eave_api::ui::{self, Item};
+use eave_api::ui::{self, Action, Item};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
 use eave_hyprland::types::Window as Focused;
 use eave_hyprland::{Event, Update};
@@ -32,6 +33,30 @@ pub struct Window {
 #[derive(Debug, Clone)]
 pub enum Message {
     Hyprland(Update<Focused>),
+    /// Does this to the focused window.
+    Do(Command),
+}
+
+/// Something to do to the focused window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    Close,
+    Fullscreen,
+    Float,
+}
+
+impl Command {
+    /// The dispatcher, for a Lua config and an older one.
+    fn dispatcher(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Close => ("hl.dsp.window.close()", "killactive"),
+            Self::Fullscreen => ("hl.dsp.window.fullscreen()", "fullscreen"),
+            Self::Float => (
+                "hl.dsp.window.float({ action = \"toggle\" })",
+                "togglefloating",
+            ),
+        }
+    }
 }
 
 impl Widget for Window {
@@ -51,6 +76,7 @@ impl Widget for Window {
             Message::Hyprland(Update::Snapshot(focused)) => focused.title,
             Message::Hyprland(Update::Event(Event::ActiveWindow { title, .. })) => title,
             Message::Hyprland(Update::Event(_)) => return Effect::none(),
+            Message::Do(command) => return run(command),
         };
         self.title = shorten(title.trim(), self.max_chars);
         Effect::none()
@@ -67,6 +93,35 @@ impl Widget for Window {
             Item::new(ui::label(self.title.clone()))
         }
     }
+
+    fn actions(&self) -> Vec<Action<Message>> {
+        if self.title.is_empty() {
+            return Vec::new();
+        }
+        [
+            ("Close window", Command::Close, &["quit", "kill"][..]),
+            ("Toggle fullscreen", Command::Fullscreen, &["maximize"][..]),
+            ("Toggle floating", Command::Float, &["float", "tile"][..]),
+        ]
+        .into_iter()
+        .map(|(title, command, words)| {
+            ui::action(title, Message::Do(command))
+                .subtitle(self.title.clone())
+                .keywords(words.iter().copied().chain(["window"]))
+        })
+        .collect()
+    }
+}
+
+fn run(command: Command) -> Effect<Message> {
+    Task::future(async move {
+        let (lua, legacy) = command.dispatcher();
+        if let Err(error) = eave_hyprland::dispatch(lua, legacy).await {
+            eprintln!("eave-window: {error}");
+        }
+    })
+    .discard()
+    .into()
 }
 
 async fn snapshot() -> std::io::Result<Focused> {
@@ -110,5 +165,24 @@ mod tests {
             title: String::new(),
         })));
         assert!(window.item().into_parts().content.is_none());
+    }
+
+    #[test]
+    fn actions_only_while_a_window_has_focus() {
+        let (mut window, _) = Window::new(Config::default());
+        assert!(window.actions().is_empty());
+        window.update(Message::Hyprland(Update::Event(Event::ActiveWindow {
+            class: "kitty".into(),
+            title: "fish".into(),
+        })));
+        let titles: Vec<_> = window
+            .actions()
+            .iter()
+            .map(|action| action.title().to_string())
+            .collect();
+        assert_eq!(
+            titles,
+            ["Close window", "Toggle fullscreen", "Toggle floating"]
+        );
     }
 }

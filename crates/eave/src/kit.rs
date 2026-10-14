@@ -276,7 +276,10 @@ fn source<'a, M: Clone + 'a>(
             .height(theme::ICON_SIZE)
             .into()
     };
-    let app = match (notice.icon, notice.app_icon.as_deref().or(notice.app.as_deref())) {
+    let app = match (
+        notice.icon,
+        notice.app_icon.as_deref().or(notice.app.as_deref()),
+    ) {
         (Some(icon), _) => symbol(icon),
         (None, None) => bell(),
         // A file the app gave for its icon is drawn like a cover, at icon size.
