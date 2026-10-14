@@ -6,10 +6,13 @@
 //! forgets them through iwd ([D-42](https://github.com/eaveshell/eave/blob/main/docs/decisions.md)),
 //! asking for a password when a network needs one. Each network has a details page. Without iwd
 //! it shows what the kernel knows: the connection, its address and gateway.
+//!
+//! In the dormer it turns Wi-Fi on and off, leaves the network it's on, and joins saved and open
+//! networks in range. For those it reads iwd once at start and after each, without watching it.
 
 use std::fmt;
 
-use eave_api::ui::{self, Icon, Item, Node, Panel, Tone};
+use eave_api::ui::{self, Action, Icon, Item, Node, Panel, Tone};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
 use eave_iwd::{Access, Diagnostics, Network as Wlan, Security, Station, Wifi};
 use eave_net::{Connection, Kind, Network as Status, State};
@@ -111,7 +114,8 @@ impl Widget for Network {
             scan_when_ready: false,
             diagnostics: None,
         };
-        (network, Task::none())
+        // What Wi-Fi there is, for the dormer's actions, without watching iwd.
+        (network, read())
     }
 
     fn update(&mut self, message: Message) -> Effect<Message> {
@@ -193,6 +197,9 @@ impl Widget for Network {
                     }
                     self.failed = Some((path, why));
                 }
+                if !self.open {
+                    return read().into();
+                }
             }
             Message::Details(path) => {
                 self.page = Page::Details(path.clone());
@@ -230,6 +237,8 @@ impl Widget for Network {
                 };
                 return command(async move { eave_iwd::set_autoconnect(&known, on).await });
             }
+            // Picked from the dormer: the popover isn't watching iwd, so read what changed.
+            Message::Done if !self.open => return read().into(),
             Message::Done => {}
         }
         Effect::none()
@@ -290,6 +299,64 @@ impl Widget for Network {
             .on_open(Message::Opened)
             .on_close(Message::Closed);
         Some(panel)
+    }
+
+    /// Wi-Fi on or off, leaving the network it's on, and joining the ones in range it can join
+    /// without asking for a password: saved ones, and open ones.
+    fn actions(&self) -> Vec<Action<Message>> {
+        let Some(station) = self.ready() else {
+            return Vec::new();
+        };
+        let words = ["wifi", "wi-fi", "wireless", "network", "internet"];
+        let fan = |strength: u8| {
+            ui::icon(Icon::Wifi {
+                strength: Some(f32::from(strength) / 100.0),
+            })
+        };
+        if !station.powered {
+            return vec![
+                ui::action("Turn Wi-Fi on", Message::Power(true))
+                    .keywords(words.into_iter().chain(["enable"]))
+                    .leading(fan(100)),
+            ];
+        }
+        let mut actions = vec![
+            ui::action("Turn Wi-Fi off", Message::Power(false))
+                .keywords(words.into_iter().chain(["disable", "airplane"]))
+                .leading(ui::icon(Icon::Wifi { strength: None })),
+        ];
+        for network in &station.networks {
+            let path = network.path.as_str();
+            if network.connected {
+                actions.push(
+                    ui::action(
+                        format!("Disconnect from {}", network.name),
+                        Message::Disconnect,
+                    )
+                    .subtitle("Wi-Fi")
+                    .keywords(words.into_iter().chain(["leave"]))
+                    .leading(fan(network.strength)),
+                );
+            } else if self.joining.as_deref() != Some(path)
+                && (network.known.is_some() || network.security == Security::Open)
+            {
+                let subtitle = if network.known.is_some() {
+                    "Saved Wi-Fi network"
+                } else {
+                    "Open Wi-Fi network"
+                };
+                actions.push(
+                    ui::action(
+                        format!("Join {}", network.name),
+                        Message::Join(path.to_string()),
+                    )
+                    .subtitle(subtitle)
+                    .keywords(words.into_iter().chain(["connect"]))
+                    .leading(fan(network.strength)),
+                );
+            }
+        }
+        actions
     }
 }
 
@@ -649,6 +716,11 @@ fn reason(result: eave_iwd::zbus::Result<()>) -> Result<(), String> {
     })
 }
 
+/// What iwd says now, once.
+fn read() -> Task<Message> {
+    Task::future(eave_iwd::read()).and_then(|wifi| Task::done(Message::Wifi(wifi)))
+}
+
 fn command(
     work: impl Future<Output = eave_iwd::zbus::Result<()>> + Send + 'static,
 ) -> Effect<Message> {
@@ -730,6 +802,74 @@ mod tests {
         assert_eq!(network.password, Secret::default());
         assert_eq!(network.page, Page::List);
         assert!(!network.open);
+    }
+
+    fn path(path: &str) -> eave_iwd::zbus::zvariant::OwnedObjectPath {
+        eave_iwd::zbus::zvariant::OwnedObjectPath::try_from(path).unwrap()
+    }
+
+    fn wlan(name: &str, security: Security, known: bool, connected: bool) -> Wlan {
+        Wlan {
+            path: path(&format!("/net/{name}")),
+            name: name.into(),
+            security,
+            strength: 60,
+            signal: -60,
+            known: known.then(|| eave_iwd::Known {
+                path: path(&format!("/known/{name}")),
+                autoconnect: true,
+            }),
+            connected,
+        }
+    }
+
+    fn titles(network: &Network) -> Vec<String> {
+        network
+            .actions()
+            .into_iter()
+            .map(|action| action.title().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn actions_join_only_what_needs_no_password() {
+        let mut network = network(State::Online, Some(wifi()));
+        assert!(titles(&network).is_empty(), "nothing known about Wi-Fi yet");
+        let station = Station {
+            device: path("/dev"),
+            interface: "wlan0".into(),
+            address: String::new(),
+            powered: true,
+            state: "connected".into(),
+            scanning: false,
+            networks: vec![
+                wlan("home", Security::Psk, true, true),
+                wlan("office", Security::Psk, true, false),
+                wlan("cafe", Security::Open, false, false),
+                wlan("neighbour", Security::Psk, false, false),
+            ],
+        };
+        network.update(Message::Wifi(Wifi {
+            access: Access::Ready,
+            station: Some(station.clone()),
+        }));
+        assert_eq!(
+            titles(&network),
+            [
+                "Turn Wi-Fi off",
+                "Disconnect from home",
+                "Join office",
+                "Join cafe"
+            ]
+        );
+        network.update(Message::Wifi(Wifi {
+            access: Access::Ready,
+            station: Some(Station {
+                powered: false,
+                ..station
+            }),
+        }));
+        assert_eq!(titles(&network), ["Turn Wi-Fi on"]);
     }
 
     #[test]

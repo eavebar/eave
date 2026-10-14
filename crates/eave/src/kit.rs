@@ -266,22 +266,35 @@ fn source<'a, M: Clone + 'a>(
             .color(theme::tone(tone))
             .wrapping(text::Wrapping::None)
     };
-    let app = notice
-        .app_icon
-        .as_deref()
-        .or(notice.app.as_deref())
-        .map(|app_id| {
-            // A file the app gave for its icon is drawn like a cover, at icon size.
-            let icon = match icons.covers.get(app_id) {
-                Some(Some(cover)) if is_file(app_id) => cover.view(false, 1.0),
-                _ if is_file(app_id) => Space::new()
-                    .width(theme::ICON_SIZE)
-                    .height(theme::ICON_SIZE)
-                    .into(),
-                _ => app_icon(app_id, Tone::Normal, icons).map(wrap),
-            };
-            container(icon).center(theme::ICON_SIZE)
-        });
+    // Every notification has an icon: its symbol, else its app's, else a bell. One still loading
+    // keeps its place empty, so nothing moves when it arrives.
+    let symbol = |symbol| icon::view(symbol, theme::tone(Tone::Normal));
+    let bell = || symbol(eave_api::ui::Icon::Bell { muted: false });
+    let blank = || -> Element<'a, M> {
+        Space::new()
+            .width(theme::ICON_SIZE)
+            .height(theme::ICON_SIZE)
+            .into()
+    };
+    let app = match (
+        notice.icon,
+        notice.app_icon.as_deref().or(notice.app.as_deref()),
+    ) {
+        (Some(icon), _) => symbol(icon),
+        (None, None) => bell(),
+        // A file the app gave for its icon is drawn like a cover, at icon size.
+        (None, Some(app_id)) if is_file(app_id) => match icons.covers.get(app_id) {
+            Some(Some(cover)) => cover.view(false, 1.0),
+            Some(None) => bell(),
+            None => blank(),
+        },
+        (None, Some(app_id)) => match icons.apps.get(app_id) {
+            Some(Some(_)) => app_icon(app_id, Tone::Normal, icons).map(wrap),
+            Some(None) => bell(),
+            None => blank(),
+        },
+    };
+    let app = container(app).center(theme::ICON_SIZE);
     let dot = critical.then(|| {
         text("●")
             .size(theme::NOTICE_DOT)

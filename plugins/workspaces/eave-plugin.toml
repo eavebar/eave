@@ -1,5 +1,5 @@
 # Plugin manifest, beside the crate's Cargo.toml.
 [plugin]
 name = "workspaces"
-description = "Hyprland workspaces, with the icons of the apps on each"
+description = "Hyprland workspaces, optionally with the icons of the apps on each"
 api = "0.1"

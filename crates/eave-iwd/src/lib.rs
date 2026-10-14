@@ -120,6 +120,12 @@ pub struct Diagnostics {
     pub rx_rate: Option<f32>,
 }
 
+/// Wi-Fi now, once: for a widget that wants to know what there is without watching it.
+pub async fn read() -> Option<Wifi> {
+    use futures_util::StreamExt;
+    std::pin::pin!(watch()).next().await
+}
+
 /// Wi-Fi now, then again after every change iwd signals. Meant to be watched only while
 /// something shows it, like an open popover: iwd is chatty while it scans.
 pub fn watch() -> impl Stream<Item = Wifi> {

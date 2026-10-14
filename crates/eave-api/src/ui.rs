@@ -1361,6 +1361,7 @@ pub struct Notice<M> {
     summary: String,
     app: Option<String>,
     app_icon: Option<String>,
+    icon: Option<Icon>,
     image: Option<String>,
     pixels: Option<Pixels>,
     body: Option<String>,
@@ -1631,6 +1632,7 @@ impl<M> Notice<M> {
             summary: summary.into(),
             app: None,
             app_icon: None,
+            icon: None,
             image: None,
             pixels: None,
             body: None,
@@ -1659,6 +1661,14 @@ impl<M> Notice<M> {
     /// The app's icon, by app id, like [`app_icon`], or a `file://` URL to a picture of it.
     pub fn app_icon(mut self, app_id: impl Into<String>) -> Self {
         self.app_icon = Some(app_id.into());
+        self
+    }
+
+    /// A symbol as its icon, drawn in the text's tone, for what's about the device rather than
+    /// an app: a battery running low, a network that dropped. It wins over
+    /// [`app_icon`](Self::app_icon).
+    pub fn icon(mut self, icon: Icon) -> Self {
+        self.icon = Some(icon);
         self
     }
 
@@ -1777,6 +1787,7 @@ impl<M> Notice<M> {
             summary: self.summary,
             app: self.app,
             app_icon: self.app_icon,
+            icon: self.icon,
             image: self.image,
             pixels: self.pixels,
             body: self.body,
@@ -1815,6 +1826,7 @@ impl<M> Notice<M> {
             summary: self.summary,
             app: self.app,
             app_icon: self.app_icon,
+            icon: self.icon,
             image: self.image,
             pixels: self.pixels,
             body: self.body,
@@ -1842,6 +1854,7 @@ pub struct NoticeParts<M> {
     pub summary: String,
     pub app: Option<String>,
     pub app_icon: Option<String>,
+    pub icon: Option<Icon>,
     pub image: Option<String>,
     pub pixels: Option<Pixels>,
     pub body: Option<String>,
