@@ -33,6 +33,8 @@ const DEFAULT_EAVE: &str = "eaveshell/eave";
 /// then defaults to the eave release the package is, and the package manager updates eave-build.
 const PACKAGED: bool = option_env!("EAVE_PACKAGE").is_some();
 const SERVICE: &str = "eave.service";
+/// In the environment of an eave-build that `update` just installed and handed over to.
+const HANDED_OVER: &str = "EAVE_BUILD_HANDED_OVER";
 /// One plugin's manifest, beside its Cargo.toml.
 const PLUGIN_FILE: &str = "eave-plugin.toml";
 /// At a repository's root, the directories of the plugins it holds.
@@ -184,6 +186,11 @@ fn build(config_path: &Path, update: bool) -> Result<()> {
     }
     let eave_dir = sources.dir_for(&eave, "eave")?;
     let eave_moved = sources.moved;
+    // Set by the run that just reinstalled this binary and handed over to it.
+    let handed_over = std::env::var_os(HANDED_OVER).is_some();
+    if update && !handed_over {
+        update_self(config_path, &eave_dir, eave_moved)?;
+    }
     let api_version = package_version(&eave_dir.join("crates/eave-api/Cargo.toml"))?;
     eprintln!(
         "eave-build: eave {} (plugin API {api_version})",
@@ -249,40 +256,55 @@ fn build(config_path: &Path, update: bool) -> Result<()> {
         eprintln!("eave-build: {} is up to date", target.display());
     }
 
-    // After the bar, so a failure here never leaves it half-updated.
-    if eave_moved {
-        // Before the install replaces this binary: Linux then reports its path as "… (deleted)".
-        let exe = std::env::current_exe().map_err(|e| format!("finding eave-build itself: {e}"))?;
-        if PACKAGED || !exe.starts_with(cargo_bin()?) {
-            // A package manager owns it: a cargo copy would shadow it (D-54).
-            eprintln!("eave-build: eave-build itself is updated by your package manager");
-        } else {
-            let status = Command::new("cargo")
-                .args(["install", "--locked", "--quiet", "--path"])
-                .arg(eave_dir.join("crates/eave-build"))
-                .status()
-                .map_err(|e| format!("running cargo: {e}"))?;
-            if !status.success() {
-                return Err("updating eave-build itself failed".into());
-            }
-            eprintln!("eave-build: updated eave-build");
-        }
-        // The new eave-build may ship new units. It keeps config.toml and rewrites only the units.
-        let status = Command::new(exe)
-            .arg("init")
-            .arg("--config")
-            .arg(config_path)
-            .status()
-            .map_err(|e| format!("running the new eave-build: {e}"))?;
-        if !status.success() {
-            return Err("writing the new systemd units failed".into());
-        }
+    // A new eave-build may ship new units. This keeps config.toml and rewrites only the units.
+    if eave_moved || handed_over {
+        init(config_path)?;
         // Without systemd (units written but unused) there's nothing to reload.
         let _ = Command::new("systemctl")
             .args(["--user", "daemon-reload"])
             .status();
     }
     Ok(())
+}
+
+/// When eave moved, reinstalls eave-build from it and lets the new binary finish the update: a new
+/// eave may need a new build recipe (a patch it vendors), which only the new eave-build knows.
+/// Returns only when there's nothing to install. A marker survives a failed install, so the next
+/// `update` tries again although eave no longer moves.
+fn update_self(config_path: &Path, eave_dir: &Path, eave_moved: bool) -> Result<()> {
+    let marker = data_dir()?.join("eave/eave-build-outdated");
+    if !eave_moved && !marker.exists() {
+        return Ok(());
+    }
+    // Before the install replaces this binary: Linux then reports its path as "… (deleted)".
+    let exe = std::env::current_exe().map_err(|e| format!("finding eave-build itself: {e}"))?;
+    if PACKAGED || !exe.starts_with(cargo_bin()?) {
+        // A package manager owns it: a cargo copy would shadow it (D-54).
+        eprintln!("eave-build: eave-build itself is updated by your package manager");
+        return Ok(());
+    }
+    std::fs::write(&marker, "").map_err(|e| format!("{}: {e}", marker.display()))?;
+    let status = Command::new("cargo")
+        .args(["install", "--locked", "--quiet", "--path"])
+        .arg(eave_dir.join("crates/eave-build"))
+        .status()
+        .map_err(|e| format!("running cargo: {e}"))?;
+    if !status.success() {
+        return Err(
+            "updating eave-build itself failed. The bar is untouched; `eave-build update` tries again"
+                .into(),
+        );
+    }
+    let _ = std::fs::remove_file(&marker);
+    eprintln!("eave-build: updated eave-build, continuing with it");
+    use std::os::unix::process::CommandExt;
+    let error = Command::new(exe)
+        .arg("update")
+        .arg("--config")
+        .arg(config_path)
+        .env(HANDED_OVER, "1")
+        .exec();
+    Err(format!("running the new eave-build: {error}"))
 }
 
 /// `eave = "…"` and every `widget = "…"`, in bar order, then the dormer's. Malformed entries are

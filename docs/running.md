@@ -52,7 +52,7 @@ Running it again repairs an install and never updates one. `EAVE_REPO=<git URL o
 eave-build update
 ```
 
-Nothing changes version until you run this ([D-31](decisions.md)). It fetches eave and every plugin, moves each to the newest commit of its `@rev` (or its default branch), prints what moved, and rebuilds as above. When eave itself moved, it also reinstalls `eave-build` from the new checkout and runs its `init`, which rewrites the systemd units (config.toml is kept) and reloads systemd. To stay on a version, pin it: `eave = "eaveshell/eave@<tag>"`, `widget = "someone/weather@v0.2"`.
+Nothing changes version until you run this ([D-31](decisions.md)). It fetches eave and every plugin, moves each to the newest commit of its `@rev` (or its default branch), prints what moved, and rebuilds as above. When eave itself moved, it first reinstalls `eave-build` from the new checkout and lets the new one do the rest, so the bar is always built by the matching `eave-build`. It also runs `init`, which rewrites the systemd units (config.toml is kept), and reloads systemd ([D-93](decisions.md)). To stay on a version, pin it: `eave = "eaveshell/eave@<tag>"`, `widget = "someone/weather@v0.2"`.
 
 With the AUR package, eave itself is pinned to the package's release: a config.toml without `eave = …` builds `eaveshell/eave@v<version>`. `paru -Syu` moves eave and `eave-build` together, and the next `eave-build` moves the bar to the new release. Run `eave-build init` after an upgrade to refresh the units. `eave-build update` still updates your plugins, and never reinstalls `eave-build` over the package ([D-54](decisions.md)).
 
