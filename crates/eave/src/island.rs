@@ -66,6 +66,9 @@ pub struct Island<'a, M> {
     notch: Option<f32>,
     /// How it's rounded outwards where it meets the top edge, if it's attached there (D-72).
     shoulders: Option<CornerShape>,
+    /// The bottom of a solid bar it's in, in surface coordinates (D-89): its shoulders are there,
+    /// and it flows out of it.
+    band: Option<f32>,
     /// Its corners: top left, top right, bottom right, bottom left (D-73).
     corners: [CornerShape; 4],
     /// How far past its layout it can be seen each way, less where it can't: its items are
@@ -154,6 +157,7 @@ impl<'a, M> Island<'a, M> {
             bleed: Padding::ZERO,
             notch: None,
             shoulders: None,
+            band: None,
             corners: [CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING); 4],
             shows: Padding::ZERO,
             height: theme::ISLAND_HEIGHT as f32,
@@ -183,6 +187,14 @@ impl<'a, M> Island<'a, M> {
     /// reach on past it, if it's attached to the top: it hangs from the edge as the notch does.
     pub fn shoulders(mut self, shoulders: Option<CornerShape>) -> Self {
         self.shoulders = shoulders;
+        self
+    }
+
+    /// In a solid bar whose bottom is at `band`, from the surface's top (D-89): its shoulders sit
+    /// there instead of at the top, and whatever of it reaches below flows out of the bar, the
+    /// shoulders growing with it from nothing.
+    pub fn band(mut self, band: Option<f32>) -> Self {
+        self.band = band;
         self
     }
 
@@ -269,6 +281,9 @@ struct State {
     shape_bent: Cell<bool>,
     /// The corners `shape` was last built with: a drop's round off as it unfolds.
     shape_corners: Cell<[CornerShape; 4]>,
+    /// Where a solid bar's bottom was on the shape it was drawn with, so it's drawn again when
+    /// that moves.
+    shape_band: Cell<Option<f32>>,
     /// The popover panel's widget state, while there is one.
     panel: Option<Tree>,
     /// Whether the pointer is over the island, which shows the toggle.
@@ -1388,6 +1403,7 @@ fn draw_island<M>(
     panel: Option<(&Element<'_, M>, &Tree, Layout<'_>)>,
     bleed: Padding,
     shoulders: Option<CornerShape>,
+    band: Option<f32>,
     own_corners: [CornerShape; 4],
     renderer: &mut iced::Renderer,
     theme: &iced::Theme,
@@ -1413,9 +1429,13 @@ fn draw_island<M>(
         * Transformation::scale(scale)
         * Transformation::translate(-center.x, -center.y);
 
-    // The frame clips to its size: it has room all round for the jelly and the stretch.
+    // The frame clips to its size: it has room all round for the jelly and the stretch, and for
+    // the shoulders flowing out of a solid bar, which are as round as the island.
+    let flare = band
+        .and(shoulders)
+        .map_or(0.0, |shoulder| shoulder.radius * (1.0 + shoulder.smoothing));
     let room = Vector::new(
-        theme::NUDGE_BUMP_ROOM + theme::DRAG_LIMIT_X,
+        (theme::NUDGE_BUMP_ROOM + theme::DRAG_LIMIT_X).max(flare.ceil()),
         theme::NUDGE_BUMP_ROOM + theme::DRAG_LIMIT_Y,
     );
     let pulled = motion.pulled();
@@ -1429,6 +1449,11 @@ fn draw_island<M>(
         None => own_corners,
     };
     if state.shape_corners.replace(corners) != corners {
+        state.shape.clear();
+    }
+    // Where the bar's bottom is on the shape moves as the shape does: a popover's grows down.
+    let band_at = band.map(|band| band - shape.y);
+    if state.shape_band.replace(band_at) != band_at {
         state.shape.clear();
     }
 
@@ -1483,17 +1508,22 @@ fn draw_island<M>(
                 };
                 // Hanging from the top edge, where the surface starts, if it's attached there and
                 // has shoulders: on the sides that don't reach on, and no further than the frame.
+                // In a solid bar, flowing out of its bottom instead (D-89).
                 let hanging = shoulders.filter(|_| bleed.top > 0.0).map(|shoulder| {
                     let most = room.x / (1.0 + shoulder.smoothing);
                     let shoulder = CornerShape::new(shoulder.radius.min(most), shoulder.smoothing);
                     let sides = [bleed.left <= 0.0, bleed.right <= 0.0];
-                    (room.y - body.y, shoulder, sides)
+                    (room.y + band.unwrap_or(0.0) - body.y, shoulder, sides)
                 });
                 // Black on black, with no border: what touches the notch or the bezel reads as
                 // one shape with it (D-74).
                 let outline = match hanging {
                     Some((edge, shoulder, sides)) => Path::new(|builder| {
-                        squircle::hanging(builder, outline, corners, edge, shoulder, sides);
+                        if band.is_some() {
+                            squircle::flowing(builder, outline, corners, edge, shoulder, sides);
+                        } else {
+                            squircle::hanging(builder, outline, corners, edge, shoulder, sides);
+                        }
                     }),
                     None => squircle_corners(outline, corners),
                 };
@@ -1635,6 +1665,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             shape: Cache::new(),
             shape_bent: Cell::new(false),
             shape_corners: Cell::new([CornerShape::SQUARE; 4]),
+            shape_band: Cell::new(None),
             panel: None,
             hovered: false,
             toggle_shown: false,
@@ -1777,6 +1808,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             None,
             self.bleed,
             self.shoulders,
+            self.band,
             self.corners,
             renderer,
             theme,
@@ -2095,6 +2127,7 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             Some((&popover.content, panel, content)),
             island.bleed,
             island.shoulders,
+            island.band,
             island.corners,
             renderer,
             theme,

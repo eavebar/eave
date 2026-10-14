@@ -96,17 +96,78 @@ pub fn hanging(
     shoulder: CornerShape,
     sides: [bool; 2],
 ) {
+    hang(sink, bounds, corners, edge, shoulder, sides, false);
+}
+
+/// Like [`hanging`], but flowing out of the edge however little reaches below it (D-89): the
+/// side below the edge is shared between the shoulder and the lower corner in proportion, so
+/// both grow together from nothing, instead of the lower corner taking what it wants first. A
+/// shape that ends at the edge is all hidden above it.
+pub fn flowing(
+    sink: &mut impl Sink,
+    bounds: Rectangle,
+    corners: [CornerShape; 4],
+    edge: f32,
+    shoulder: CornerShape,
+    sides: [bool; 2],
+) {
+    hang(sink, bounds, corners, edge, shoulder, sides, true);
+}
+
+/// A side's lower corner and shoulder, sharing the `depth` it reaches below the edge, `width`
+/// across: shared in proportion, or the lower corner first.
+fn shoulder_and_corner(
+    lower: CornerShape,
+    shoulder: CornerShape,
+    depth: f32,
+    width: f32,
+    budget: f32,
+    share: bool,
+) -> (Corner, Corner) {
+    let corner = Corner::new(lower.radius, lower.smoothing, budget);
+    if !share {
+        let room = (depth - corner.extent).min(width / 2.0);
+        return (
+            corner,
+            Corner::new(shoulder.radius, shoulder.smoothing, room),
+        );
+    }
+    let wanted = Corner::new(shoulder.radius, shoulder.smoothing, width / 2.0).extent;
+    let scale = (depth.max(0.0) / (corner.extent + wanted)).min(1.0);
+    (
+        Corner::new(lower.radius, lower.smoothing, corner.extent * scale),
+        Corner::new(shoulder.radius, shoulder.smoothing, wanted * scale),
+    )
+}
+
+fn hang(
+    sink: &mut impl Sink,
+    bounds: Rectangle,
+    corners: [CornerShape; 4],
+    edge: f32,
+    shoulder: CornerShape,
+    sides: [bool; 2],
+    share: bool,
+) {
     let (left, top) = (bounds.x, bounds.y);
     let (right, bottom) = (left + bounds.width, top + bounds.height);
     let budget = bounds.width.min(bounds.height) / 2.0;
-    let [top_left, top_right, bottom_right, bottom_left] =
+    let [top_left, top_right, _, _] =
         corners.map(|shape| Corner::new(shape.radius, shape.smoothing, budget));
-    // Each shoulder shares its side below the edge with the lower corner there.
-    let flare = |lower: &Corner| {
-        let room = (bottom - edge - lower.extent).min(bounds.width / 2.0);
-        Corner::new(shoulder.radius, shoulder.smoothing, room)
+    // Each shoulder shares its side below the edge with the lower corner there. Only one with a
+    // shoulder makes room for it.
+    let side = |lower: CornerShape, on: bool| {
+        shoulder_and_corner(
+            lower,
+            shoulder,
+            bottom - edge,
+            bounds.width,
+            budget,
+            share && on && edge > top,
+        )
     };
-    let (flare_left, flare_right) = (flare(&bottom_left), flare(&bottom_right));
+    let (bottom_left, flare_left) = side(corners[3], sides[0]);
+    let (bottom_right, flare_right) = side(corners[2], sides[1]);
     let on = |side: bool, flare: &Corner| side && flare.extent > 0.0 && edge > top;
     let (on_left, on_right) = (on(sides[0], &flare_left), on(sides[1], &flare_right));
 
@@ -328,6 +389,34 @@ impl Corner {
 mod tests {
     use super::*;
     use iced::Size;
+
+    #[test]
+    fn flowing_shoulders_grow_from_nothing_with_the_corner_below_them() {
+        let lower = CornerShape::new(14.0, 0.6);
+        let shoulder = CornerShape::new(14.0, 0.6);
+        let at = |depth| shoulder_and_corner(lower, shoulder, depth, 200.0, 30.0, true);
+        let (corner, flare) = at(0.0);
+        assert_eq!((corner.extent, flare.extent), (0.0, 0.0));
+        let mut last = 0.0;
+        for depth in [2.0, 8.0, 20.0, 40.0] {
+            let (corner, flare) = at(depth);
+            assert!(flare.extent > last, "{depth}: grows");
+            assert!(
+                corner.extent + flare.extent <= depth + 0.01,
+                "{depth}: fits"
+            );
+            last = flare.extent;
+        }
+        // Deep enough, each is what it wants.
+        let (corner, flare) = at(100.0);
+        assert!((corner.extent - 14.0 * 1.6).abs() < 0.01);
+        assert!((flare.extent - 14.0 * 1.6).abs() < 0.01);
+
+        // Hanging, the corner takes its share first, as before.
+        let (corner, flare) = shoulder_and_corner(lower, shoulder, 20.0, 200.0, 30.0, false);
+        assert!((corner.extent - 14.0 * 1.6).abs() < 0.01);
+        assert_eq!(flare.extent, 0.0);
+    }
 
     #[test]
     fn corners_never_reach_past_the_middle() {

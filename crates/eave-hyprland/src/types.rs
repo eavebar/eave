@@ -34,6 +34,15 @@ pub struct Client {
     /// 0 for the focused window, then counting back through earlier focus.
     #[serde(rename = "focusHistoryID")]
     pub focus_history_id: Option<i64>,
+    /// Hyprland's fullscreen mode, as bits: 1 maximized, 2 fullscreen.
+    pub fullscreen: u8,
+}
+
+impl Client {
+    /// Fullscreen for real: covering the bar, not just maximized in the space it leaves.
+    pub fn covers(&self) -> bool {
+        self.fullscreen & 2 != 0
+    }
 }
 
 /// A window's workspace, as `clients` names it.
@@ -80,6 +89,8 @@ pub struct Monitor {
     /// 0 is upright; the rest rotate or flip it, like `wl_output`'s.
     pub transform: u32,
     pub focused: bool,
+    #[serde(rename = "activeWorkspace")]
+    pub active_workspace: WorkspaceRef,
 }
 
 impl Devices {
@@ -105,17 +116,22 @@ mod tests {
         assert_eq!((workspaces[0].id, workspaces[0].windows), (1, 2));
 
         let clients: Vec<Client> = serde_json::from_str(
-            r#"[{"address":"0x5d1f2a0","mapped":true,"workspace":{"id":3,"name":"3"},"class":"kitty"}]"#,
+            r#"[{"address":"0x5d1f2a0","mapped":true,"workspace":{"id":3,"name":"3"},"class":"kitty"},
+                {"address":"0x1","workspace":{"id":1,"name":"1"},"fullscreen":2,"fullscreenClient":2},
+                {"address":"0x2","workspace":{"id":1,"name":"1"},"fullscreen":1,"fullscreenClient":1}]"#,
         )
         .unwrap();
         assert_eq!(
             (clients[0].address.as_str(), clients[0].workspace.id),
             ("0x5d1f2a0", 3)
         );
+        let covering: Vec<_> = clients.iter().map(Client::covers).collect();
+        assert_eq!(covering, [false, true, false]);
 
         let monitors: Vec<Monitor> = serde_json::from_str(
             r#"[{"id":0,"name":"eDP-1","width":3024,"height":1964,"refreshRate":120.0,"x":0,"y":0,
-                 "reserved":[0,84,0,0],"scale":2.00,"transform":0,"focused":true}]"#,
+                 "reserved":[0,84,0,0],"scale":2.00,"transform":0,"focused":true,
+                 "activeWorkspace":{"id":4,"name":"4"}}]"#,
         )
         .unwrap();
         let monitor = &monitors[0];
@@ -125,6 +141,7 @@ mod tests {
         );
         assert_eq!((monitor.scale, monitor.transform), (2.0, 0));
         assert!(monitor.focused);
+        assert_eq!(monitor.active_workspace.id, 4);
 
         let none: Window = serde_json::from_str("{}").unwrap();
         assert!(none.title.is_empty());

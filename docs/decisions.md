@@ -1864,3 +1864,76 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 - a `-symbolic` lookup tinted like `symbol`: still depends on the theme having it.
 - the battery plugin sending an `x-eave-*` hint: other apps' device notifications (a volume OSD, a VPN) would still show letters.
 
+
+---
+
+## D-88: The bar shows on hover or hides over fullscreen windows, and notifications wait
+
+**Status:** accepted (2026-10-14). Amends roadmap step 0 (the bar always on the `top` layer, always keeping its exclusive zone) and [D-47](#d-47-notices-plugins-list-notifications-the-right-island-turns-into-them) (notices show as soon as they come).
+
+**What:**
+- Two new tables in config.toml, one per thing they're about, in the style of `notch`, `screen` and `islands`:
+
+  ```toml
+  bar = { show = "always", fullscreen = "hide", peek = true }
+  notifications = { fullscreen = "critical" }
+  ```
+
+  - `bar.show`, outside fullscreen, is `"always"` or `"hover"`.
+  - `bar.fullscreen` is `"hide"`, `"hover"` or `"show"`.
+  - `bar.peek` brings a bar shown on hover out for `REVEAL_SHOWN` on a workspace switch.
+  - `notifications.fullscreen` is `"show"`, `"critical"` or `"hold"`.
+- **Fullscreen** means a client on the focused monitor's active workspace whose Hyprland fullscreen mode has bit 2. Bit 1 is maximized, which respects the exclusive zone. Hyprland's `fullscreen>>` event fires for both and only for the focused workspace, so the host doesn't trust it on its own. On that event, a workspace or monitor change, and a window opening, closing or moving, it queries `monitors` and `clients` once (`Message::CheckFullscreen`). eave-hyprland gains `Event::Fullscreen`, `Client::fullscreen` with `Client::covers()`, and `Monitor::active_workspace`.
+- **Out or hidden.** The bar is out when its mode is `show`, or `hover` and the pointer is on it, or while it peeks, or while a popover, the notification panel or the dormer is on it, until they have folded back.
+  - Hidden, the islands are drawn lifted off the screen by a `Lift` widget on `MORPH`. The layout doesn't move.
+  - The input region becomes a `REVEAL_EDGE` (2 px) strip on hover, else nothing.
+  - On hover, the pointer gate (`popover_event`) stays open, so `CursorEntered` and `CursorLeft` arrive. Leaving hides it after `HIDE_AFTER` (400 ms).
+- **Exclusive zone.** It is 0 when `bar.show = "hover"`, even while the bar is out, so windows never move as it comes and goes. In fullscreen it doesn't matter.
+- **Layer.** The surfaces go on `overlay` over a fullscreen window while the bar is out, or while `bar.fullscreen = "hover"` waits for the pointer. Otherwise they stay on `top`.
+  - Going back to `top` waits for the slide away (`lift::slide_time`, the time `MORPH` takes to settle from a step).
+  - Hidden on purpose in fullscreen, the bar is under the window, not just transparent above it.
+- **Peeks** come from a workspace switch (with `peek = true`) and from any nudge, and only for a bar shown on hover. With `fullscreen = "hide"`, the bar stays hidden for those, and comes out only for a notification or the dormer.
+- **Held notifications.** In fullscreen, `Bar::held` keeps them out of `cards()`. A panel opens only for those that aren't held. A held notice keeps its place in `toasts`, its clock stopped, since only shown cards run. When fullscreen ends, it shows with its whole time left. Going fullscreen with uncritical ones on screen folds them away until it ends.
+
+**Why:** the bar was on the `top` layer, which Hyprland draws under fullscreen windows. Playing a video fullscreen hid the bar, and every notification with it, since they grow out of the bar's own surface (D-28, D-47). They even ran out there, unseen. Putting notifications on `overlay` all the time would have drawn every one over a film. So it's a setting, and the default lets only critical ones through and keeps the rest for later, the way phones do. The bar's own visibility was the same problem from the other side: once there's a mode that hides it over fullscreen, hiding it on hover elsewhere is the same machinery.
+
+The settings are grouped by the thing they're about, not by situation, because each key then reads on its own (`bar.fullscreen = "hover"`). The vision rules out a config language, and this needs no conditions. Timings stay in `theme.rs`, like every other motion.
+
+**Alternatives:**
+- **Always `overlay` when fullscreen.** A transparent overlay surface over a fullscreen video can keep Hyprland from scanning the video out directly, which costs power for nothing while the bar is hidden.
+- **A separate surface for notifications.** Rejected in D-28 for popovers; the panel is the right island's morph.
+- **Trusting `fullscreen>>1` alone.** That flags maximized windows, which don't cover the bar.
+- **Polling `activeworkspace.hasfullscreen`.** There's an event, so no polling (AGENTS.md). `hasfullscreen` is also true for maximized windows.
+- **Changing the exclusive zone as the bar comes and goes on hover.** Windows would jump every time the pointer touched the top.
+- **Settings grouped by situation** (`fullscreen = { bar = "hover", notifications = "critical" }`): one table would mix two subjects, and the normal case would need a table of its own.
+
+**Cost:** no dependency. While the bar is shown on hover, every pointer event on the bar's surface runs the subscription's filter, which returns nothing except for enter and leave. One `clients` and one `monitors` query per window or workspace event.
+
+**Measured** (Asahi aarch64, release, the user's config with every plugin, the default GPU renderer, each alone on a session bus of its own, 12 s after start, two alternating runs): binary 19,427,344 bytes before and after (stripped, page-aligned). RSS 77.8 and 77.8 MB on main, 77.6 and 77.5 MB on this branch, 77.7 and 77.7 MB with `bar.show = "hover"`: unchanged within noise. Idle CPU 1, 1, 1, 1, 1 and 0 ticks over 10 s. Only aarch64 was built: nothing here is arch-specific.
+
+---
+
+## D-89: A solid bar, with islands that flow out of it
+
+**Status:** accepted (2026-10-14). Amends [D-24](#d-24-floating-islands-on-one-transparent-surface): a full-width strip is optional again. Builds on [D-81](#d-81-the-top-edge-can-be-grown-too) and [D-72](#d-72-the-bar-keeps-off-what-the-bezel-hides-and-hangs-from-the-top-like-the-notch).
+
+**What:**
+- **Settings.** `bar.style = "solid"` draws the whole bar black. `"islands"`, the default, keeps the floating islands. `bar.corners` is `"round"` (the default) or `"square"`: whether a solid bar's lower ends curve into the screen's sides like its top corners, or meet them square.
+- **The bar is the grown edge, made thicker.** `Zones::edge` takes `grow + EDGE_GAP + island_height` (`band_bottom`), which reaches the islands' bottom, so the islands rest flush with the bar's bottom. `edge_outline` already rounds the band's lower ends by the screen's corners, or leaves them square. `Zones::solid` stops drawing the notch, which is under the bar now. The dormer's kick then always dips and bumps the bar's bottom, as it does the edge without a notch.
+- **Islands stay islands.** They are the bar's black, so a resting one can't be seen, but its items, hover, morphs, popovers, nudges and drags are untouched. Each gets `Island::band(Some(band_bottom))`, the islands' own corner shape as its shoulders, and a top bleed up into the bar. A dragged or jellied island then never comes apart from it.
+- **Flowing out.** `squircle::flowing` is `hanging` with the shoulders at the bar's bottom instead of the surface's top, and with one change. `hanging` gives the lower corner its share of the side below the edge first, and the shoulder gets what's left. `flowing` shares that side between them in proportion. So as a popover starts to grow below the bar, the shoulder and the corner under it grow together from nothing, and the outline is an S from the first pixel, never a corner meeting the bar's flat bottom at a cusp. Once deep enough, each is what it wants. The frame has room for a shoulder as round as the island: `room.x` grows to its reach. The shape is drawn again when the bar's bottom moves on it (`shape_band`).
+- **The dormer** drops out of the bar's bottom (`band_bottom`), not the notch's.
+- **What shows differently.** A nudge's or a drag's downward bump bulges the bar's bottom. An upward one, and the workspace push sideways, happen in black and can't be seen.
+- **The rounded ends hang below the bar**, by the screen corners' reach (about 64 px on a MacBook). The surface is made tall enough to draw them whole (`Bar::surface_height`). Only the bar's strip takes the pointer, so they lie over the windows below like the drag room does (D-45). Square ends need no more room.
+- **The exclusive zone** is unchanged: the bar ends above `RESERVED_ROOM`. A solid bar hidden on hover (D-88) slides away whole, since `Lift` lifts the zones, edge included.
+
+**Why:** the user wanted a classic full-width bar without giving up the islands' behavior. The pieces were already there: D-81's grown edge is a full-width black band that rounds into the screen's corners, and D-72's `hanging` draws concave shoulders at any height. Keeping the islands as the things that morph means a popover is still the island growing, now out of the bar instead of out of nothing.
+
+**Alternatives:**
+- **A separate full-width rectangle under the islands, with no shoulders.** A popover would meet the bar's bottom at a square inner corner, which is what the user asked to avoid.
+- **Shoulders from `hanging` as it is.** The lower corner takes its share first, so for the first 20-odd pixels of a growing popover there is a cusp where the corner meets the bar, and only then does the shoulder start.
+- **The neck from D-86** (a smooth union, row by row). Made for a ball leaving a point, and capped in width. A popover is a box as wide as it likes.
+
+**Cost:** no dependency. The bar is the edge's cached path, so it's drawn once until it changes. An island's shape is rebuilt when the bar's bottom moves on it, which is while it morphs, as it already was.
+
+**Measured** (Asahi aarch64, release, the user's config with every plugin, the default GPU renderer, each alone on a session bus of its own, 12 s after start, two alternating runs): binary 19,427,344 bytes before and after. RSS 77.6 and 77.5 MB before, 77.7 and 77.6 MB after with islands, 77.5 and 77.7 MB solid: unchanged within noise. Idle CPU 9 and 8 ticks over 10 s before, 7 and 9 after, 8 and 10 solid. Something in the config animates at rest during these runs (a playing track), for all three alike.

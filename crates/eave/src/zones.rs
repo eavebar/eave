@@ -41,6 +41,9 @@ pub struct Zones<'a, M> {
     /// Where the zones say how far the middle of the notch's bottom (or the edge's) is from where
     /// it rests, as last drawn, if given.
     sag: Option<Sag>,
+    /// How far below the grown edge a solid bar reaches, down to the islands' bottom (D-89). The
+    /// notch is under it, so what the dormer's drop squishes is its bottom.
+    solid: Option<f32>,
 }
 
 /// How far the middle of the bottom of what the dormer's drop comes out of is from where it
@@ -100,6 +103,7 @@ impl<'a, M> Zones<'a, M> {
             edge: None,
             kick: None,
             sag: None,
+            solid: None,
         }
     }
 
@@ -127,14 +131,35 @@ impl<'a, M> Zones<'a, M> {
             edge: None,
             kick: None,
             sag: None,
+            solid: None,
         }
     }
 
     /// With the screen's top edge drawn `grow` thicker than it is, above the gap over the zones,
     /// and rounded into the sides by the screen's top `corners` (D-81). Nothing if it isn't grown.
     pub fn edge(mut self, grow: f32, corners: [CornerShape; 2]) -> Self {
-        self.edge = (grow > 0.0).then_some((grow, corners));
+        self.edge = Some((grow, corners));
         self
+    }
+
+    /// A solid bar: the edge reaches on `depth` below where it's grown to, and is the bar
+    /// (D-89). The notch isn't drawn.
+    pub fn solid(mut self, depth: Option<f32>) -> Self {
+        self.solid = depth;
+        self
+    }
+
+    /// The notch the bar draws, if any: none under a solid bar.
+    fn drawn_notch(&self) -> Option<(Notch, [f32; 2])> {
+        self.notch.filter(|_| self.solid.is_none())
+    }
+
+    /// The band drawn from the surface's top: how far down the grown edge is, how thick the band
+    /// is, and the corners rounding its lower ends. None when there's nothing to draw.
+    fn band(&self) -> Option<(f32, f32, [CornerShape; 2])> {
+        let (grow, corners) = self.edge?;
+        let thick = grow + self.solid.unwrap_or(0.0);
+        (thick > 0.0).then_some((grow, thick, corners))
     }
 
     /// The latest kick from the dormer's drop, numbered: the notch squishes (or without one, the
@@ -154,7 +179,7 @@ impl<'a, M> Zones<'a, M> {
     /// is, and with nothing grown, nothing moves.
     fn play(&self, state: &mut State, kick: Kick) {
         let react = |peak: f32| REACT.kick(peak * theme::REACT_SIZE);
-        if let Some((notch, _)) = self.notch {
+        if let Some((notch, _)) = self.drawn_notch() {
             match kick {
                 Kick::Pinch => {
                     let pinch = theme::NOTCH_PINCH.min(notch.grow[0]);
@@ -165,7 +190,7 @@ impl<'a, M> Zones<'a, M> {
                     state.stretch_y.velocity = -react(flatten);
                 }
             }
-        } else if let Some((grow, _)) = self.edge {
+        } else if let Some((_, grow, _)) = self.band() {
             let (depth, width) = match kick {
                 Kick::Pinch => (theme::EDGE_PULL, theme::EDGE_PULL_WIDTH),
                 Kick::Flatten => (-theme::EDGE_DENT.min(grow), theme::EDGE_DENT_WIDTH),
@@ -364,11 +389,11 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
         let state = tree.state.downcast_ref::<State>();
         let bounds = layout.bounds();
         // Across the whole surface, gaps included, from its top.
-        if let Some((grow, corners)) = self.edge {
+        if let Some((top, grow, corners)) = self.band() {
             let gap = f32::from(theme::EDGE_GAP);
             let width = bounds.width + 2.0 * gap;
             let bump = (state.dip.value, state.dip_width);
-            if self.notch.is_none()
+            if self.drawn_notch().is_none()
                 && let Some(sag) = &self.sag
             {
                 sag.set(bump_at(width / 2.0, width / 2.0, bump, grow));
@@ -383,11 +408,13 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
                 .draw(renderer, Size::new(width, height), |frame| {
                     frame.fill(&path, theme::ISLAND_BG);
                 });
-            let at = Vector::new(bounds.x - gap, bounds.y - gap - grow);
+            // From the surface's top, which is where the zones start less the gap and the grown
+            // edge: a solid band is thicker than that, and reaches on below.
+            let at = Vector::new(bounds.x - gap, bounds.y - gap - top);
             renderer.with_translation(at, |renderer| renderer.draw_geometry(geometry));
         }
         // Under the islands, so what's fused to it covers it.
-        if let Some((rest, _)) = self.notch {
+        if let Some((rest, _)) = self.drawn_notch() {
             let notch = squished(rest, state.stretch_x.value, state.stretch_y.value);
             if let Some(sag) = &self.sag {
                 sag.set(notch.height - rest.height);

@@ -4,7 +4,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 
 ## Done
 
-- [x] **0. Skeleton.** Layer-shell surface anchored top, 32px exclusive zone, no keyboard focus. Three-part layout (left / center / right). Clock and date on a 1 s tick. CPU renderer by default, `gpu` feature optional. Baseline measured.
+- [x] **0. Skeleton.** Layer-shell surface anchored top, 32px exclusive zone, no keyboard focus (the layer and the zone now follow `bar`, [D-88](decisions.md)). Three-part layout (left / center / right). Clock and date on a 1 s tick. CPU renderer by default, `gpu` feature optional. Baseline measured.
 - [x] **0.6 Reload and restart.** `config.toml` hot reload through inotify, keeping unchanged widgets' state. `eave-build --restart`. systemd user units for the bar and for rebuilding when `plugins.toml` changes ([D-20–D-22](decisions.md), [running.md](running.md)).
 - [x] **0.5 Plugin foundation.** Workspace split into `eave-api` (SDK), `eave` (host) and `eave-build`. Closed UI vocabulary, type-erased widget registry, `config.toml` zones (empty bar without it), the clock rewritten as a plugin with a calendar popover, host-owned popover layer surfaces in daemon mode, and third-party plugins compiled in from git ([D-11–D-15](decisions.md)).
 
@@ -28,6 +28,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 
 - [x] **6. Media.** `plugins/media` on `crates/eave-mpris`: any MPRIS player over the session bus. The track's cover in the bar, title and artist, right click to play or pause, scroll to skip; cover, seek bar, controls and players in the popover ([D-56](decisions.md)). Covers through a new `ui::cover`, from files or https ([D-57](decisions.md)).
 - [x] **6.6 The dormer.** A keybind drops a search dialog out of the top center: widgets' actions and popovers, found by typing. Installed apps come through the new `apps` plugin, and the built-in widgets list what they can do ([D-84](decisions.md)).
+- [x] **6.7 Showing and hiding.** The bar can show on hover, and hide, show or show on hover over fullscreen windows. A hidden bar peeks on a workspace switch or a nudge. In fullscreen, notifications other than critical ones wait for it to end ([D-88](decisions.md)).
 - [x] **6.5 Style.** Black and white, with color only as a signal or from the content. A soft white fill marks what's current, the slider is a line that thickens under the pointer, and a media popover takes its cover's color ([D-61](decisions.md), [design.md](design.md)).
 
 ## Next

@@ -64,6 +64,7 @@ How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs
 | Island height | 30 px; with a notch, ending where the notch does ([D-76](decisions.md)) | | |
 | Notch | drawn black by the bar, `grow` px bigger than it is if asked ([D-75](decisions.md)); pinches in as the dormer leaves it and flattens as it lands, within its `grow` ([D-86](decisions.md)) | | |
 | Top edge | drawn black by the bar, `grow` px thicker than it is if asked; what hangs from the top hangs from there ([D-81](decisions.md)); without a notch, bumps down where the dormer leaves and dents up where it lands ([D-86](decisions.md)) | | |
+| Solid bar | the top edge down to the islands' bottom, black, its lower ends rounded like the screen's top corners or square; the islands are black in it, and what grows out of one (a popover, the notifications) flows out of the bar's bottom, the shoulders growing with it from nothing; the dormer drops out of its middle ([D-89](decisions.md)) | | |
 | Notification card | where it's from in small dim type, the time at its end; what it says; buttons sharing its width, the first filled; a wide picture full width under the text | a critical one's source in red with a dot; a stack's earlier notices a dim line each | the time turns into the close button ([D-85](decisions.md)) |
 | Option (on a notification) | a row: its label, what it means dim under it, a "Recommended" badge | picked: lit like the row in use; with several to pick, a white check box | 8 % fill |
 | Code block, diff | 7 % fill, monospace, colored for the language; four lines or more are numbered | a diff's added and removed lines on faint green and red, its header counting them | |
@@ -76,6 +77,7 @@ All motion is driven by the compositor's frame callbacks, and stops asking for f
 |---|---|---|
 | Morph | an island's shape and items, a popover opening, the dormer dropping into the middle | `MORPH`, close to critical: settles without wobbling |
 | Drop | the dormer coming out of the notch or the edge, and back | `MORPH` through its stops: a ball swelling where it comes out, the ball fallen out on a neck that pinches off, then the panel (`DROP_*`, `NECK_*`); it bounces on `REACT` like a nudge as the neck lets go, as it lands, and as the neck catches it back (`DROP_BOUNCE`); the notch or edge squishes on `REACT` (`NOTCH_*`, `EDGE_*`) |
+| Lift | the bar sliding off the top and back, when it shows on hover or hides over a fullscreen window | `MORPH`: drawn up by the surface's height. It stays out `HIDE_AFTER` after the pointer leaves, and a peek keeps it out `REVEAL_SHOWN`. A hidden bar is brought out by a `REVEAL_EDGE` strip at the top ([D-88](decisions.md)) |
 | Press, drag | an island under the hand | `HAND`: overshoots a little when let go |
 | Squish, splat | a popover setting off, landing back | `REACT`, on top of the morph: `SQUISH_OPEN`, `SPLAT_*` |
 | Nudge, push, jelly | a volume change, a workspace switch, a pushed neighbor | `REACT`: `NUDGE_*`, `PUSH_*`, `JELLY_*`; the outline is jelly, poked and settling |

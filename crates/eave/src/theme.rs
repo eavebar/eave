@@ -123,6 +123,11 @@ pub const NUDGE_KICK_SQUISH: f32 = 0.03;
 pub const COLLAPSE_SQUASH: Duration = Duration::from_millis(450);
 /// How long a collapsed item stays out after its widget nudges, from the last nudge.
 pub const REVEAL_SHOWN: Duration = Duration::from_millis(2000);
+/// A bar that shows on hover (D-88): how tall the strip at the top edge is that brings it out,
+/// and how long it stays once the pointer has left it. A peek, on a workspace switch or a
+/// nudge, keeps it out for [`REVEAL_SHOWN`].
+pub const REVEAL_EDGE: u32 = 2;
+pub const HIDE_AFTER: Duration = Duration::from_millis(400);
 /// How far a nudge pokes the jelly out, in logical pixels. The bump: the edge over the nudged
 /// item, going up or down. The lean: the end (or edge) the island is going toward swells and the
 /// one it's leaving flattens, each way.

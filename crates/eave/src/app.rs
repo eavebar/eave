@@ -17,15 +17,16 @@ use iced::{
     theme, window,
 };
 use iced_layershell::actions::ActionCallback;
-use iced_layershell::reexport::KeyboardInteractivity;
+use iced_layershell::reexport::{KeyboardInteractivity, Layer};
 use iced_layershell::to_layer_message;
 
 use crate::apps::{self, AppIcon, FileIcon, FileKey, Frame, Icons, Wanted};
-use crate::config::{self, Config, Entry, Zone};
+use crate::config::{self, BarCorners, Config, Entry, Held, Showing, Style, Zone};
 use crate::countdown::Countdown;
 use crate::cover::{self, Cover};
 use crate::dormer::{self, Recent, Session, Source};
 use crate::island::{self, Island, Placement, Toggle};
+use crate::lift::{self, Lift};
 use crate::notch::{self, Notch, Place, Side};
 use crate::slot::Slot;
 use crate::squircle::CornerShape;
@@ -92,6 +93,26 @@ pub struct Bar {
     /// The `notch`, `screen` and `islands` settings being, or last, looked into. `None` before
     /// the first.
     screen_setting: Option<(config::Notch, config::Screen, config::Islands)>,
+    /// Whether a window covers the bar's screen, fullscreen (D-88).
+    fullscreen: bool,
+    /// Numbers the looks into whether one does, so only the last one's answer counts.
+    checks: u64,
+    /// Whether the pointer is on a bar that shows on hover, or left it less than
+    /// [`style::HIDE_AFTER`] ago.
+    hovered: bool,
+    /// Numbers the times the pointer left the bar, so only the last one's timer hides it.
+    leaves: u64,
+    /// While a hidden bar is out for a moment: which peek, numbered by [`Bar::peeks`].
+    peek: Option<u64>,
+    peeks: u64,
+    /// Whether the bar was out when the surfaces were last fitted to it.
+    shown: bool,
+    /// The layer the surfaces are on: `Overlay` while the bar shows over a fullscreen window.
+    layer: Layer,
+    /// While the bar slides away before going back under a fullscreen window: which time,
+    /// numbered by [`Bar::sinks`].
+    sinking: Option<u64>,
+    sinks: u64,
 }
 
 /// One island: its zone, and which of the zone's islands it is, counted in bar order.
@@ -253,6 +274,18 @@ pub enum Message {
     Dormer(dormer::Event),
     /// A collapsed item's time out is up, if this is still its last reveal.
     Unreveal(u64, u64),
+    /// Hyprland's windows or workspaces changed: whether one covers the screen may have too.
+    CheckFullscreen,
+    /// Whether a window covers the screen, as of the check with this number.
+    Fullscreen(u64, bool),
+    /// The focused workspace changed.
+    WorkspaceChanged,
+    /// The pointer left a bar that shows on hover this long ago, if it hasn't come back since.
+    Unhover(u64),
+    /// A peek's moment is up, if it's still the last one.
+    Unpeek(u64),
+    /// The bar has slid away, and can go back under the fullscreen window, if it still should.
+    Sink(u64),
     /// A bar surface opened: it takes the pointer only over its strip.
     WindowOpened(window::Id),
     WindowClosed(window::Id),
@@ -309,6 +342,16 @@ impl Bar {
             panel_wanted: None,
             screen: notch::Screen::default(),
             screen_setting: None,
+            fullscreen: false,
+            checks: 0,
+            hovered: false,
+            leaves: 0,
+            peek: None,
+            peeks: 0,
+            shown: true,
+            layer: Layer::Top,
+            sinking: None,
+            sinks: 0,
         };
         let task = bar.apply(config);
         (bar, task)
@@ -378,9 +421,6 @@ impl Bar {
         for id in ids {
             self.sync_notices(id);
         }
-        if let Some(window) = self.toast_window() {
-            tasks.push(self.fit(window));
-        }
 
         // An island that no longer has collapsible items starts collapsed if it gets some again.
         let instances = &self.instances;
@@ -398,6 +438,8 @@ impl Bar {
         tasks.extend(gone.iter().map(|popover| self.fit(popover.window)));
         self.refresh_dormer();
         self.config = config;
+        // Fitted to the new config: how the bar shows and how it's drawn size the surfaces.
+        tasks.extend(self.windows.iter().map(|window| self.fit(*window)));
         Task::batch(tasks)
     }
 
@@ -739,13 +781,22 @@ impl Bar {
         let height = rects
             .iter()
             .map(|rect| (rect.y + rect.height).ceil() as u32 + u32::from(style::EDGE_GAP))
-            .fold(self.screen.surface_height(), u32::max);
-        let bar_height = self.screen.bar_height();
+            .fold(self.surface_height(), u32::max);
+        // A hidden bar takes the pointer only at the top edge, if hovering brings it out (D-88).
+        let strip = if self.out() {
+            self.screen.bar_height()
+        } else if self.showing() == Showing::Hover {
+            style::REVEAL_EDGE
+        } else {
+            0
+        };
         let callback = ActionCallback::new(move |region| {
             // iced_layershell reuses one region and only clears the surface's current size, which
             // may be the old one: clear all of it, so no earlier popover's rect is left behind.
             region.subtract(0, 0, i32::MAX, i32::MAX);
-            region.add(0, 0, i32::MAX, bar_height as i32);
+            if strip > 0 {
+                region.add(0, 0, i32::MAX, strip as i32);
+            }
             for rect in &rects {
                 region.add(
                     rect.x.floor() as i32,
@@ -771,8 +822,13 @@ impl Bar {
 
     /// Moves a bar surface off what the bezel hides (D-71): its margins are the insets, so the bar
     /// lays itself out on the screen that shows, and the windows are kept clear of it all, and of
-    /// islands as tall as they are (D-76).
+    /// islands as tall as they are (D-76). A bar that shows on hover keeps them clear of nothing,
+    /// even while it's out, so they never move (D-88).
     fn inset(&self, window: window::Id) -> Task<Message> {
+        let zone = match self.config.bar.show {
+            Showing::Hover => 0,
+            Showing::Always | Showing::Never => self.screen.bar_height() as i32,
+        };
         let [top, right, _, left] = self.screen.inset.map(|inset| inset.round() as i32);
         Task::batch([
             Task::done(Message::MarginChange {
@@ -781,9 +837,115 @@ impl Bar {
             }),
             Task::done(Message::ExclusiveZoneChange {
                 id: window,
-                zone_size: self.screen.bar_height() as i32,
+                zone_size: zone,
             }),
         ])
+    }
+
+    /// The bar surface at rest: the screen's, or down to where a solid bar's rounded ends end,
+    /// so they're drawn whole (D-89). Only the bar's strip takes the pointer.
+    fn surface_height(&self) -> u32 {
+        let surface = self.screen.surface_height();
+        if self.config.bar.style != Style::Solid || self.config.bar.corners != BarCorners::Round {
+            return surface;
+        }
+        let reach = self.screen.corners[..2]
+            .iter()
+            .map(|corner| corner.radius * (1.0 + corner.smoothing))
+            .fold(0.0, f32::max);
+        surface.max((band_bottom(&self.screen) + reach).ceil() as u32)
+    }
+
+    /// How the bar shows right now: outside fullscreen, or over a fullscreen window (D-88).
+    fn showing(&self) -> Showing {
+        if self.fullscreen {
+            self.config.bar.fullscreen
+        } else {
+            self.config.bar.show
+        }
+    }
+
+    /// Whether the bar is out: always, or while it's hovered, peeking, or has something to show
+    /// that grows out of it, until that has folded back.
+    fn out(&self) -> bool {
+        match self.showing() {
+            Showing::Always => true,
+            Showing::Hover if self.hovered => true,
+            Showing::Hover | Showing::Never => {
+                self.peek.is_some()
+                    || !self.popovers.is_empty()
+                    || self.notices.is_some()
+                    || self.dormer.is_some()
+            }
+        }
+    }
+
+    /// Whether a notification waits for fullscreen to end (D-88). It doesn't show, and its time
+    /// doesn't run.
+    fn held(&self, toast: &Toast) -> bool {
+        self.fullscreen
+            && match self.config.notifications.fullscreen {
+                Held::None => false,
+                Held::Uncritical => toast.notice.urgency != Urgency::Critical,
+                Held::All => true,
+            }
+    }
+
+    /// Brings a hidden bar that shows on hover out for [`style::REVEAL_SHOWN`], or keeps it out
+    /// that long again. One that's out anyway stays as it is, and one that's hidden on purpose
+    /// stays hidden.
+    fn peek(&mut self) -> Task<Message> {
+        if self.showing() != Showing::Hover || (self.out() && self.peek.is_none()) {
+            return Task::none();
+        }
+        self.peeks += 1;
+        let peek = self.peeks;
+        self.peek = Some(peek);
+        let sleep = async { tokio::time::sleep(style::REVEAL_SHOWN).await };
+        Task::perform(sleep, move |_| Message::Unpeek(peek))
+    }
+
+    /// Tells the surfaces what changed about the bar showing: the pointer it takes, and the
+    /// layer it's on. Over a fullscreen window it goes on the overlay layer while it shows or
+    /// waits for the pointer, and back under once it's hidden on purpose and has slid away, so
+    /// the window can have the screen to itself (D-88).
+    fn sync_shown(&mut self) -> Task<Message> {
+        let mut tasks = Vec::new();
+        let out = self.out();
+        if out != self.shown {
+            self.shown = out;
+            tasks.extend(self.windows.iter().map(|window| self.fit(*window)));
+        }
+        let layer = if self.fullscreen && (out || self.showing() != Showing::Never) {
+            Layer::Overlay
+        } else {
+            Layer::Top
+        };
+        if layer == self.layer {
+            self.sinking = None;
+        } else if layer == Layer::Top && self.fullscreen {
+            if self.sinking.is_none() {
+                self.sinks += 1;
+                let sink = self.sinks;
+                self.sinking = Some(sink);
+                let sleep = async { tokio::time::sleep(lift::slide_time()).await };
+                tasks.push(Task::perform(sleep, move |_| Message::Sink(sink)));
+            }
+        } else {
+            self.sinking = None;
+            tasks.push(self.move_to(layer));
+        }
+        Task::batch(tasks)
+    }
+
+    /// Puts every bar surface on `layer`.
+    fn move_to(&mut self, layer: Layer) -> Task<Message> {
+        self.layer = layer;
+        Task::batch(
+            self.windows
+                .iter()
+                .map(|&id| Task::done(Message::LayerChange { id, layer })),
+        )
     }
 
     /// The bar whose right island shows the notifications: the focused monitor's. The bar only opens on the
@@ -895,7 +1057,11 @@ impl Bar {
         if self.toasts_held() {
             refit |= self.notices.take().is_some();
             self.toasts.retain(|toast| !toast.leaving);
-        } else if self.toasts.iter().any(|toast| !toast.leaving) {
+        } else if self
+            .toasts
+            .iter()
+            .any(|toast| !toast.leaving && !self.held(toast))
+        {
             let panel = self.notices.get_or_insert(NoticePanel {
                 open: true,
                 rect: None,
@@ -919,7 +1085,8 @@ impl Bar {
             panel.open = false;
             panel.hovered = false;
         } else {
-            self.toasts.clear();
+            // Those waiting for fullscreen to end stay.
+            self.toasts.retain(|toast| !toast.leaving);
         }
         if refit {
             self.fit(window)
@@ -936,7 +1103,7 @@ impl Bar {
     fn cards(&self) -> Vec<Vec<usize>> {
         let open = self.notices.as_ref().is_none_or(|panel| panel.open);
         let mut order: Vec<usize> = (0..self.toasts.len())
-            .filter(|&index| self.toasts[index].leaving != open)
+            .filter(|&index| self.toasts[index].leaving != open && !self.held(&self.toasts[index]))
             .collect();
         order.sort_by_key(|&index| self.toasts[index].notice.urgency != Urgency::Critical);
         let mut cards: Vec<Vec<usize>> = Vec::new();
@@ -1065,6 +1232,7 @@ pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
         tasks.push(report.discard());
     }
     tasks.push(bar.sync_panel());
+    tasks.push(bar.sync_shown());
     tasks.extend(hand_keyboard(bar));
     tasks.extend(bar.load_icons(changed));
     tasks.push(bar.run_clocks(Instant::now()));
@@ -1126,8 +1294,9 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
                 if let Some(instance) = bar.find_mut(id) {
                     instance.nudge = Some((generation, nudge));
                 }
-                // Something happened worth showing: a collapsed item comes out for a while.
-                reveal = bar.reveal(id);
+                // Something happened worth showing: a collapsed item comes out for a while, and
+                // a hidden bar with it.
+                reveal = Task::batch([bar.reveal(id), bar.peek()]);
             }
 
             let popover = match request {
@@ -1221,11 +1390,66 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         Message::Clicked if !bar.pointer_inside => send(bar.close_popover()),
         Message::PointerEntered => {
             bar.pointer_inside = true;
+            if bar.showing() == Showing::Hover {
+                bar.hovered = true;
+                // Back before it hid: it stays.
+                bar.leaves += 1;
+            }
             Task::none()
         }
         Message::PointerLeft => {
             bar.pointer_inside = false;
+            if !bar.hovered {
+                return Task::none();
+            }
+            bar.leaves += 1;
+            let leave = bar.leaves;
+            let sleep = async { tokio::time::sleep(style::HIDE_AFTER).await };
+            Task::perform(sleep, move |_| Message::Unhover(leave))
+        }
+        Message::Unhover(leave) => {
+            if leave == bar.leaves {
+                bar.hovered = false;
+            }
             Task::none()
+        }
+        Message::Unpeek(peek) => {
+            if bar.peek == Some(peek) {
+                bar.peek = None;
+            }
+            Task::none()
+        }
+        Message::Sink(sink) => {
+            if bar.sinking != Some(sink) {
+                return Task::none();
+            }
+            bar.sinking = None;
+            bar.move_to(Layer::Top)
+        }
+        Message::CheckFullscreen => {
+            bar.checks += 1;
+            let check = bar.checks;
+            Task::perform(covered(), move |covered| {
+                Message::Fullscreen(check, covered)
+            })
+        }
+        Message::Fullscreen(check, covered) => {
+            if check != bar.checks || covered == bar.fullscreen {
+                return Task::none();
+            }
+            bar.fullscreen = covered;
+            // Wherever the pointer is, the bar starts over from how it shows now.
+            bar.hovered = false;
+            bar.peek = None;
+            Task::none()
+        }
+        Message::WorkspaceChanged => {
+            let peek = if bar.config.bar.peek {
+                bar.peek()
+            } else {
+                Task::none()
+            };
+            Task::batch([handle(bar, Message::CheckFullscreen), peek])
         }
         // Esc while answering a notification cancels the answer, and lets go of the field.
         Message::KeyPressed if bar.typing() => {
@@ -1364,7 +1588,15 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
                 if config.renderer != bar.config.renderer {
                     eprintln!("eave: config: the new `renderer` is used once the bar restarts");
                 }
-                bar.apply(config)
+                let show = bar.config.bar.show;
+                let applied = bar.apply(config);
+                // Hovering or not, it keeps windows clear of it or doesn't.
+                if bar.config.bar.show == show {
+                    return applied;
+                }
+                bar.hovered = false;
+                let insets = bar.windows.iter().map(|window| bar.inset(*window));
+                Task::batch(std::iter::once(applied).chain(insets))
             }
             Err(error) => {
                 eprintln!("eave: config: {error}; keeping the current bar");
@@ -1490,6 +1722,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         .filter(|notch| notch.shoulder > 0.0)
         .map(|notch| CornerShape::new(notch.shoulder, notch.smoothing));
 
+    // A solid bar is black down to the islands' bottom, and they flow out of it (D-89).
+    let band = (bar.config.bar.style == Style::Solid).then(|| band_bottom(&bar.screen));
     // Each island is as wide as its items. One with nothing to show draws nothing, unless it has
     // collapsed items to bring back.
     let island =
@@ -1562,10 +1796,22 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                     .width_groups(groups)
                     .toggle(toggle)
                     .live(instances().any(|instance| instance.entry.live))
-                    .bleed(bleed(attach))
+                    .bleed(match band {
+                        // Up into the bar, so nothing moving ever comes apart from it.
+                        Some(_) => Padding {
+                            top: band_bottom(&bar.screen),
+                            ..bleed(attach)
+                        },
+                        None => bleed(attach),
+                    })
                     .shows(shows(attach))
                     .notch(bar.screen.notch.map(|notch| notch.width))
-                    .shoulders(shoulders)
+                    // Flowing out of a solid bar, as round where it leaves as the island is.
+                    .shoulders(match band {
+                        Some(_) => Some(bar.screen.islands),
+                        None => shoulders,
+                    })
+                    .band(band)
                     .corners(bar.screen.island_corners(Place::default()))
                     .height(bar.screen.island_height()),
                 attach,
@@ -1632,8 +1878,12 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     }
     .edge(
         bar.screen.grow,
-        [bar.screen.corners[0], bar.screen.corners[1]],
+        match (band, bar.config.bar.corners) {
+            (Some(_), BarCorners::Square) => [CornerShape::SQUARE; 2],
+            _ => [bar.screen.corners[0], bar.screen.corners[1]],
+        },
     )
+    .solid(band.map(|bottom| bottom - bar.screen.grow))
     .kick(
         bar.notch_kick
             .filter(|_| bar.toast_window() == Some(window)),
@@ -1648,6 +1898,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         bottom: style::DRAG_ROOM.into(),
         left: style::EDGE_GAP.into(),
     });
+    // Lifted off the screen while the bar hides, far enough to clear it (D-88).
+    let islands = Lift::new(islands, bar.out(), bar.surface_height() as f32);
     // Always a stack, so the islands' state stays put when the dormer comes and goes.
     stack![islands, dormer_view(bar, window)].into()
 }
@@ -1675,6 +1927,12 @@ fn dormer_view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             ..Padding::ZERO
         })
         .into()
+}
+
+/// Where a solid bar ends, from the surface's top: the grown edge, the gap and the islands
+/// (D-89). The islands rest flush with it.
+fn band_bottom(screen: &notch::Screen) -> f32 {
+    screen.grow + f32::from(style::EDGE_GAP) + screen.island_height()
 }
 
 /// Where the dormer comes out, from the surface's top: the bottom of the notch as the bar draws it,
@@ -1760,7 +2018,10 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         on_hover: None,
         width: style::PANEL_WIDE_WIDTH,
         placement: Placement::Centered { top: session.top },
-        drop: Some(dormer_drop(&bar.screen)),
+        drop: Some(match bar.config.bar.style {
+            Style::Solid => band_bottom(&bar.screen),
+            Style::Islands => dormer_drop(&bar.screen),
+        }),
         on_neck: Some(Box::new(|caught| Message::Dormer(Event::Neck(caught)))),
         sag: Some(bar.notch_sag.clone()),
         on_key: Some(Box::new(|key| {
@@ -2020,13 +2281,14 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
     subscriptions.push(window::open_events().map(Message::WindowOpened));
     subscriptions.push(window::close_events().map(Message::WindowClosed));
     subscriptions.push(watch::config_changes().map(Message::ConfigChanged));
-    // Pointer, click and key tracking only while a popover is open: otherwise every hover over the
-    // bar would wake us.
-    if bar.is_open() || bar.typing() {
+    // Pointer, click and key tracking only while a popover is open, or the bar shows on hover:
+    // otherwise every hover over the bar would wake us.
+    if bar.is_open() || bar.typing() || bar.showing() == Showing::Hover {
         subscriptions.push(iced::event::listen_with(popover_event));
     }
-    // Always: the dormer's keybind comes this way. Every other event stops in the filter.
-    subscriptions.push(Subscription::run(hyprland_events).filter_map(custom));
+    // Always: the dormer's keybind comes this way, and what may change whether a window covers
+    // the screen. Every other event stops in the filter.
+    subscriptions.push(Subscription::run(hyprland_events).filter_map(hyprland));
     // Notifications say how long ago they came: a minute at a time, while they show.
     let timed = bar
         .toasts
@@ -2065,15 +2327,48 @@ fn hyprland_events() -> impl eave_hyprland::Stream<Item = eave_hyprland::Update<
 }
 
 /// Our own events: the clicks Hyprland reports while a popover is open, and the dormer's keybind.
-fn custom(update: eave_hyprland::Update<()>) -> Option<Message> {
-    let eave_hyprland::Update::Event(eave_hyprland::Event::Custom(data)) = update else {
-        return None;
+/// And the ones that may change whether a window covers the screen: a check on the way in, and
+/// whenever windows come, go or move.
+fn hyprland(update: eave_hyprland::Update<()>) -> Option<Message> {
+    use eave_hyprland::Event;
+    let event = match update {
+        eave_hyprland::Update::Snapshot(()) => return Some(Message::CheckFullscreen),
+        eave_hyprland::Update::Event(event) => event,
     };
-    match data.as_str() {
-        eave_hyprland::CLICK => Some(Message::Clicked),
-        eave_hyprland::DORMER => Some(Message::Dormer(dormer::Event::Toggle)),
+    match event {
+        Event::Custom(data) => match data.as_str() {
+            eave_hyprland::CLICK => Some(Message::Clicked),
+            eave_hyprland::DORMER => Some(Message::Dormer(dormer::Event::Toggle)),
+            _ => None,
+        },
+        Event::Workspace { .. } | Event::FocusedMonitor { .. } => Some(Message::WorkspaceChanged),
+        Event::Fullscreen(_)
+        | Event::OpenWindow { .. }
+        | Event::CloseWindow { .. }
+        | Event::MoveWindow { .. } => Some(Message::CheckFullscreen),
         _ => None,
     }
+}
+
+/// Whether a window covers the focused screen, fullscreen: one on its workspace, and not just
+/// maximized, which keeps clear of the bar. The bar opens on the focused screen (one surface for
+/// now).
+async fn covered() -> bool {
+    use eave_hyprland::types::Client;
+    let Some(monitor) = notch::focused().await else {
+        return false;
+    };
+    let clients = match eave_hyprland::query::<Vec<Client>>("clients").await {
+        Ok(clients) => clients,
+        Err(error) => {
+            eprintln!("eave: can't tell whether a window is fullscreen: {error}");
+            return false;
+        }
+    };
+    let workspace = monitor.active_workspace.id;
+    clients
+        .iter()
+        .any(|client| client.workspace.id == workspace && client.covers())
 }
 
 /// Surfaces are transparent: the islands draw their own backgrounds, so they can have rounded
@@ -2146,6 +2441,23 @@ mod tests {
         // A leftover message for a removed instance goes nowhere instead of reaching another widget.
         let _ = update(&mut bar, Message::Widget(0, AnyMessage::new(())));
         let _ = update(&mut bar, Message::Widget(2, AnyMessage::new(())));
+    }
+
+    #[test]
+    fn a_solid_bar_ends_where_the_islands_do() {
+        let screen = notch::Screen::default();
+        let bottom = band_bottom(&screen);
+        assert_eq!(
+            bottom,
+            f32::from(style::EDGE_GAP) + style::ISLAND_HEIGHT as f32
+        );
+        // Above what the bar keeps windows clear of: they never go under it.
+        assert!(bottom <= screen.bar_height() as f32);
+        let grown = notch::Screen {
+            grow: 4.0,
+            ..screen
+        };
+        assert_eq!(band_bottom(&grown), bottom + 4.0);
     }
 
     #[test]
@@ -2441,6 +2753,160 @@ mod tests {
 
     fn panel(bar: &Bar) -> Option<bool> {
         bar.notices.as_ref().map(|panel| panel.open)
+    }
+
+    /// `notifying_bar`, with `extra` settings.
+    fn notifying_bar_with(extra: &str) -> Bar {
+        let mut registry = Registry::new();
+        registry.widget::<Notifying>("n");
+        registry.widget::<WithPopover>("p");
+        let (mut bar, _) = Bar::new(
+            registry,
+            config(&format!(
+                "{extra}\n[[right]]\nwidget = \"n\"\n[[right]]\nwidget = \"p\""
+            )),
+        );
+        let _ = update(&mut bar, Message::WindowOpened(window::Id::unique()));
+        bar
+    }
+
+    fn fullscreen(bar: &mut Bar, covered: bool) {
+        let _ = update(bar, Message::Fullscreen(bar.checks, covered));
+    }
+
+    #[test]
+    fn in_fullscreen_only_critical_notices_show_and_the_rest_wait_for_it_to_end() {
+        let mut bar = notifying_bar_with("");
+        fullscreen(&mut bar, true);
+        tell(&mut bar, Note::Add(1));
+        assert_eq!(panel(&bar), None, "nothing to show yet");
+        tell(&mut bar, Note::Add(200));
+        assert_eq!(panel(&bar), Some(true));
+        assert_eq!(cards(&bar), [vec![200]]);
+
+        // Placed and shown: only the critical one's time runs.
+        let start = Instant::now();
+        let _ = handle(&mut bar, Message::NoticesPlaced(placed()));
+        let _ = bar.run_clocks(start);
+        let deadlines: Vec<_> = bar.toasts.iter().map(|toast| toast.deadline).collect();
+        assert_eq!(deadlines, [Some(start + Duration::from_secs(5)), None]);
+
+        // The critical one goes: the panel folds back, and the other one still waits.
+        tell(&mut bar, Note::Drop(200));
+        let _ = update(&mut bar, Message::NoticesClosed);
+        assert_eq!(panel(&bar), None);
+        assert_eq!(keys(&bar), [(1, false)]);
+
+        fullscreen(&mut bar, false);
+        assert_eq!(panel(&bar), Some(true));
+        assert_eq!(cards(&bar), [vec![1]]);
+        assert_eq!(
+            bar.toasts[0].left,
+            Some(Duration::from_secs(5)),
+            "all its time left"
+        );
+    }
+
+    #[test]
+    fn notices_can_all_show_or_all_wait_in_fullscreen() {
+        let mut bar = notifying_bar_with("notifications = { fullscreen = \"show\" }");
+        fullscreen(&mut bar, true);
+        tell(&mut bar, Note::Add(1));
+        assert_eq!(panel(&bar), Some(true));
+
+        let mut bar = notifying_bar_with("notifications = { fullscreen = \"hold\" }");
+        fullscreen(&mut bar, true);
+        tell(&mut bar, Note::Add(200));
+        assert_eq!(panel(&bar), None);
+        // Going fullscreen with one on screen: it folds back, and comes back after.
+        fullscreen(&mut bar, false);
+        assert_eq!(panel(&bar), Some(true));
+        fullscreen(&mut bar, true);
+        assert_eq!(panel(&bar), Some(false));
+    }
+
+    #[test]
+    fn a_bar_on_hover_comes_out_while_pointed_at_and_hides_a_moment_after() {
+        let mut bar = notifying_bar_with("bar = { show = \"hover\" }");
+        assert!(!bar.out());
+        let _ = update(&mut bar, Message::PointerEntered);
+        assert!(bar.out());
+        let _ = update(&mut bar, Message::PointerLeft);
+        assert!(bar.out(), "not right away");
+        // Back before the timer: that timer counts for nothing.
+        let left = bar.leaves;
+        let _ = update(&mut bar, Message::PointerEntered);
+        let _ = update(&mut bar, Message::Unhover(left));
+        assert!(bar.out());
+        let _ = update(&mut bar, Message::PointerLeft);
+        let left = bar.leaves;
+        let _ = update(&mut bar, Message::Unhover(left));
+        assert!(!bar.out());
+        assert_eq!(
+            bar.layer,
+            Layer::Top,
+            "on top of windows, not fullscreen ones"
+        );
+    }
+
+    #[test]
+    fn a_hidden_bar_peeks_on_a_workspace_switch_and_a_nudge_but_only_on_hover() {
+        let mut bar = notifying_bar_with("bar = { show = \"hover\" }");
+        let _ = update(&mut bar, Message::WorkspaceChanged);
+        assert!(bar.out());
+        let peek = bar.peek.unwrap();
+        // Another one keeps it out longer: the first one's time is up for nothing.
+        let _ = update(&mut bar, Message::WorkspaceChanged);
+        let _ = update(&mut bar, Message::Unpeek(peek));
+        assert!(bar.out());
+        let peek = bar.peek.unwrap();
+        let _ = update(&mut bar, Message::Unpeek(peek));
+        assert!(!bar.out());
+
+        let mut bar = notifying_bar_with("bar = { show = \"hover\", peek = false }");
+        let _ = update(&mut bar, Message::WorkspaceChanged);
+        assert!(!bar.out());
+
+        // Hidden on purpose over a fullscreen window: no peeking.
+        let mut bar = notifying_bar_with("");
+        fullscreen(&mut bar, true);
+        let _ = update(&mut bar, Message::WorkspaceChanged);
+        assert!(!bar.out());
+    }
+
+    #[test]
+    fn over_a_fullscreen_window_the_bar_goes_on_the_overlay_only_while_it_shows() {
+        let mut bar = notifying_bar_with("");
+        assert!(bar.out());
+        fullscreen(&mut bar, true);
+        assert!(!bar.out());
+        assert_eq!(bar.layer, Layer::Top);
+
+        // A critical notice brings it out, over the window.
+        tell(&mut bar, Note::Add(200));
+        assert!(bar.out());
+        assert_eq!(bar.layer, Layer::Overlay);
+
+        // Gone and folded back: it slides away, then goes back under.
+        tell(&mut bar, Note::Drop(200));
+        let _ = update(&mut bar, Message::NoticesClosed);
+        assert!(!bar.out());
+        assert_eq!(bar.layer, Layer::Overlay, "still sliding away");
+        let sink = bar.sinking.unwrap();
+        let _ = update(&mut bar, Message::Sink(sink));
+        assert_eq!(bar.layer, Layer::Top);
+
+        // Shown on hover over it, it stays on the overlay to be hovered.
+        let mut bar = notifying_bar_with("bar = { fullscreen = \"hover\" }");
+        fullscreen(&mut bar, true);
+        assert!(!bar.out());
+        assert_eq!(bar.layer, Layer::Overlay);
+        let mut bar = notifying_bar_with("bar = { fullscreen = \"show\" }");
+        fullscreen(&mut bar, true);
+        assert!(bar.out());
+        assert_eq!(bar.layer, Layer::Overlay);
+        fullscreen(&mut bar, false);
+        assert_eq!(bar.layer, Layer::Top);
     }
 
     #[test]
