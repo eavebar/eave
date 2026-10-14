@@ -1,6 +1,6 @@
 [package]
 name = "eave-hyprland"
-version = "0.1.0"
+version = "0.2.0"
 description = "Hyprland IPC for eave plugins: one shared event stream, plus queries and dispatches"
 edition.workspace = true
 license.workspace = true
