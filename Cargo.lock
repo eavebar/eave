@@ -766,6 +766,7 @@ dependencies = [
  "eave-brightness",
  "eave-clock",
  "eave-dbus",
+ "eave-essential",
  "eave-hyprland",
  "eave-keyboard",
  "eave-media",
@@ -876,6 +877,19 @@ dependencies = [
  "futures-util",
  "tokio",
  "zbus",
+]
+
+[[package]]
+name = "eave-essential"
+version = "0.1.0"
+dependencies = [
+ "eave-api",
+ "eave-dbus",
+ "eave-hyprland",
+ "rustix 1.1.5",
+ "serde",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

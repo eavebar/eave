@@ -50,6 +50,7 @@ eave-apps = { workspace = true, optional = true }
 eave-battery = { workspace = true, optional = true }
 eave-brightness = { workspace = true, optional = true }
 eave-clock = { workspace = true, optional = true }
+eave-essential = { workspace = true, optional = true }
 eave-keyboard = { workspace = true, optional = true }
 eave-media = { workspace = true, optional = true }
 eave-network = { workspace = true, optional = true }
@@ -65,6 +66,7 @@ builtin = [
     "dep:eave-battery",
     "dep:eave-brightness",
     "dep:eave-clock",
+    "dep:eave-essential",
     "dep:eave-keyboard",
     "dep:eave-media",
     "dep:eave-network",

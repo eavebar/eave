@@ -9,6 +9,7 @@ plugins = [
     "plugins/battery",
     "plugins/brightness",
     "plugins/clock",
+    "plugins/essential",
     "plugins/keyboard",
     "plugins/media",
     "plugins/network",
