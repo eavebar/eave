@@ -139,7 +139,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/squircle.rs          the squircle path
   src/jelly.rs             an island's outline as a ring of coupled springs, which nudges poke
   src/lift.rs              the bar sliding up off the screen and back, drawn lifted on a spring
-  src/zones.rs             the three zones across the bar: sides at the edges, the center pushed aside when they reach it; the notch and grown edge, squished by the dormer's drop
+  src/zones.rs             the three zones across the bar: sides at the edges, the center pushed aside when they reach it; the notch and grown edge (the whole bar when it's solid), squished by the dormer's drop
   src/slot.rs              item wrapper: clicks, scroll steps, and the pointer for alternates
   src/alternate.rs         alternate: one option at a time with fades; hover, and growing (expand)
   src/handover.rs          one thing on screen at a time: fade (and slide) out, then the next in; alternates and tabs

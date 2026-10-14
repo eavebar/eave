@@ -62,6 +62,8 @@ notifications = { fullscreen = "critical" }
 | `bar.show` | `"always"`, `"hover"` | `"always"` | `hover`: the bar hides above the screen and slides out when the pointer touches the top edge. It keeps no room for itself, so windows reach the top. |
 | `bar.fullscreen` | `"hide"`, `"hover"`, `"show"` | `"hide"` | On a workspace with a fullscreen window (a maximized one doesn't count). `show` and `hover` put the bar over the window. |
 | `bar.peek` | `true`, `false` | `true` | A bar shown on hover slides out for two seconds when you switch workspace. |
+| `bar.style` | `"islands"`, `"solid"` | `"islands"` | `solid` draws the whole bar black, down to the islands' bottom. The islands still work as islands inside it. A popover, the notifications and the dormer flow out of the bar's bottom, with shoulders as round as the islands' corners ([D-89](decisions.md)). |
+| `bar.corners` | `"round"`, `"square"` | `"round"` | Where a solid bar's bottom meets the screen's sides: curving into them like the screen's top corners, or square. |
 | `notifications.fullscreen` | `"show"`, `"critical"`, `"hold"` | `"critical"` | In fullscreen, `critical` shows only critical notifications and `hold` none. The others wait, without running out, and show when fullscreen ends. |
 
 Whatever these say, a notification that shows brings the bar out with it, until it's gone. So does the dormer. A widget's nudge (a volume change, say) peeks a bar shown on hover, the way it brings out a collapsed item. A bar hidden over a fullscreen window stays hidden for those.

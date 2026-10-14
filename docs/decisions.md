@@ -1910,3 +1910,29 @@ The settings are grouped by the thing they're about, not by situation, because e
 **Cost:** no dependency. While the bar is shown on hover, every pointer event on the bar's surface runs the subscription's filter, which returns nothing except for enter and leave. One `clients` and one `monitors` query per window or workspace event.
 
 **Measured** (Asahi aarch64, release, the user's config with every plugin, the default GPU renderer, each alone on a session bus of its own, 12 s after start, two alternating runs): binary 19,427,344 bytes before and after (stripped, page-aligned). RSS 77.8 and 77.8 MB on main, 77.6 and 77.5 MB on this branch, 77.7 and 77.7 MB with `bar.show = "hover"`: unchanged within noise. Idle CPU 1, 1, 1, 1, 1 and 0 ticks over 10 s. Only aarch64 was built: nothing here is arch-specific.
+
+---
+
+## D-89: A solid bar, with islands that flow out of it
+
+**Status:** accepted (2026-10-14). Amends [D-24](#d-24-floating-islands-on-one-transparent-surface): a full-width strip is optional again. Builds on [D-81](#d-81-the-top-edge-can-be-grown-too) and [D-72](#d-72-the-bar-keeps-off-what-the-bezel-hides-and-hangs-from-the-top-like-the-notch).
+
+**What:**
+- **Settings.** `bar.style = "solid"` draws the whole bar black. `"islands"`, the default, keeps the floating islands. `bar.corners` is `"round"` (the default) or `"square"`: whether a solid bar's lower ends curve into the screen's sides like its top corners, or meet them square.
+- **The bar is the grown edge, made thicker.** `Zones::edge` takes `grow + EDGE_GAP + island_height` (`band_bottom`), which reaches the islands' bottom, so the islands rest flush with the bar's bottom. `edge_outline` already rounds the band's lower ends by the screen's corners, or leaves them square. `Zones::solid` stops drawing the notch, which is under the bar now. The dormer's kick then always dips and bumps the bar's bottom, as it does the edge without a notch.
+- **Islands stay islands.** They are the bar's black, so a resting one can't be seen, but its items, hover, morphs, popovers, nudges and drags are untouched. Each gets `Island::band(Some(band_bottom))`, the islands' own corner shape as its shoulders, and a top bleed up into the bar. A dragged or jellied island then never comes apart from it.
+- **Flowing out.** `squircle::flowing` is `hanging` with the shoulders at the bar's bottom instead of the surface's top, and with one change. `hanging` gives the lower corner its share of the side below the edge first, and the shoulder gets what's left. `flowing` shares that side between them in proportion. So as a popover starts to grow below the bar, the shoulder and the corner under it grow together from nothing, and the outline is an S from the first pixel, never a corner meeting the bar's flat bottom at a cusp. Once deep enough, each is what it wants. The frame has room for a shoulder as round as the island: `room.x` grows to its reach. The shape is drawn again when the bar's bottom moves on it (`shape_band`).
+- **The dormer** drops out of the bar's bottom (`band_bottom`), not the notch's.
+- **What shows differently.** A nudge's or a drag's downward bump bulges the bar's bottom. An upward one, and the workspace push sideways, happen in black and can't be seen.
+- **Exclusive zone and surface** are unchanged: the bar ends above `RESERVED_ROOM`. A solid bar hidden on hover (D-88) slides away whole, since `Lift` lifts the zones, edge included.
+
+**Why:** the user wanted a classic full-width bar without giving up the islands' behavior. The pieces were already there: D-81's grown edge is a full-width black band that rounds into the screen's corners, and D-72's `hanging` draws concave shoulders at any height. Keeping the islands as the things that morph means a popover is still the island growing, now out of the bar instead of out of nothing.
+
+**Alternatives:**
+- **A separate full-width rectangle under the islands, with no shoulders.** A popover would meet the bar's bottom at a square inner corner, which is what the user asked to avoid.
+- **Shoulders from `hanging` as it is.** The lower corner takes its share first, so for the first 20-odd pixels of a growing popover there is a cusp where the corner meets the bar, and only then does the shoulder start.
+- **The neck from D-86** (a smooth union, row by row). Made for a ball leaving a point, and capped in width. A popover is a box as wide as it likes.
+
+**Cost:** no dependency. The bar is the edge's cached path, so it's drawn once until it changes. An island's shape is rebuilt when the bar's bottom moves on it, which is while it morphs, as it already was.
+
+**Measured** (Asahi aarch64, release, the user's config with every plugin, the default GPU renderer, each alone on a session bus of its own, 12 s after start, two alternating runs): binary 19,427,344 bytes before and after. RSS 77.6 and 77.5 MB before, 77.7 and 77.6 MB after with islands, 77.5 and 77.7 MB solid: unchanged within noise. Idle CPU 9 and 8 ticks over 10 s before, 7 and 9 after, 8 and 10 solid. Something in the config animates at rest during these runs (a playing track), for all three alike.
