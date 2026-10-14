@@ -196,13 +196,17 @@ impl Screen {
     }
 
     /// A corner one edge gap in from the screen's corner `index`, so the gap between them is the
-    /// same all the way round: square if the screen's is no rounder than the gap. None if the
-    /// screen isn't measured.
+    /// same all the way round. Never less round than the theme's least, which a screen no rounder
+    /// than the gap gets. None if the screen isn't measured.
     fn concentric(&self, index: usize) -> Option<CornerShape> {
         let corner = self.corners[index];
-        let radius = (corner.radius - f32::from(theme::EDGE_GAP)).max(0.0);
-        self.measured
-            .then(|| CornerShape::new(radius, corner.smoothing))
+        let radius = corner.radius - f32::from(theme::EDGE_GAP);
+        let shape = if radius < theme::MIN_ISLAND_RADIUS {
+            CornerShape::new(theme::MIN_ISLAND_RADIUS, theme::ISLAND_SMOOTHING)
+        } else {
+            CornerShape::new(radius, corner.smoothing)
+        };
+        self.measured.then_some(shape)
     }
 
     /// How far in the island at the screen's corner on `side` has to move for the gap to it to
@@ -590,14 +594,19 @@ mod tests {
     }
 
     #[test]
-    fn a_measured_square_screen_has_square_islands() {
+    fn a_measured_square_screen_has_barely_round_islands() {
         let screen = measured(1.0, 0.65);
         let place = Place {
             screen_corner: Some(Side::Left),
             ..Place::default()
         };
-        let square = CornerShape::new(0.0, 0.65);
-        assert_eq!(screen.island_corners(place), [square; 4]);
+        let least = CornerShape::new(theme::MIN_ISLAND_RADIUS, theme::ISLAND_SMOOTHING);
+        assert_eq!(screen.island_corners(place), [least; 4]);
+        // A little rounder, and they follow it again.
+        assert_eq!(
+            measured(12.0, 0.65).island_corners(place),
+            [CornerShape::new(6.0, 0.65); 4]
+        );
         assert_eq!(screen.corner_shift(Side::Left), 0.0);
         // Unless config.toml rounds them.
         let mut screen = measured(1.0, 0.65);
@@ -608,7 +617,10 @@ mod tests {
             },
             1.0,
         );
-        assert_eq!(screen.islands, CornerShape::new(8.0, 0.65));
+        assert_eq!(
+            screen.islands,
+            CornerShape::new(8.0, theme::ISLAND_SMOOTHING)
+        );
     }
 
     #[test]
@@ -712,15 +724,13 @@ mod tests {
             screen.island_corners(after_notch),
             [shoulder, free, free, notch]
         );
-        // A screen corner no rounder than the gap makes the island's square.
+        // A screen corner no rounder than the gap leaves the island's barely round.
         let square = Screen {
             corners: [CornerShape::new(4.0, 0.0); 4],
             ..screen
         };
-        assert_eq!(
-            square.island_corners(left),
-            [CornerShape::SQUARE, free, free, free]
-        );
+        let least = CornerShape::new(theme::MIN_ISLAND_RADIUS, theme::ISLAND_SMOOTHING);
+        assert_eq!(square.island_corners(left), [least, free, free, free]);
     }
 
     #[test]
