@@ -82,6 +82,10 @@ pub struct Keyboard {
 pub struct Monitor {
     /// The connector, like `eDP-1`.
     pub name: String,
+    /// Make, model and serial, like `ViewSonic Corporation XG2431 WEE241700714`.
+    pub description: String,
+    pub make: String,
+    pub model: String,
     /// The mode, in physical pixels, before the transform.
     pub width: u32,
     pub height: u32,

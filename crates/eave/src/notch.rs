@@ -211,26 +211,33 @@ impl Screen {
     }
 }
 
-/// The screen as config.toml has it, in the output's logical pixels; its notch found, given, or
-/// none; and the islands' corners.
-pub async fn resolve(
-    notch: config::Notch,
-    screen: config::Screen,
-    islands: config::Islands,
-) -> Screen {
-    // Only what's measured needs the scale: physical pixels to logical.
-    let measured = matches!(notch, config::Notch::Fixed(_))
-        || screen != config::Screen::default()
-        || islands.radius.is_some();
-    let scale = if measured {
-        focused().await.map_or(1.0, |monitor| monitor.scale)
-    } else {
-        1.0
+/// The screen as config.toml has it for `output` (the focused one, without one), in its logical
+/// pixels; its notch found, given, or none; and the islands' corners. And the output's name.
+pub async fn resolve(screens: config::Screens, output: Option<String>) -> (Option<String>, Screen) {
+    let monitor = match &output {
+        Some(name) => match by_name(name).await {
+            Some(monitor) => Some(monitor),
+            None => focused().await,
+        },
+        None => focused().await,
     };
+    let config::ScreenSetting {
+        notch,
+        screen,
+        islands,
+    } = match &monitor {
+        Some(monitor) => screens.screen_for(&monitor.name, &monitor.description),
+        None => screens.top,
+    };
+    // Physical pixels to logical.
+    let scale = monitor.as_ref().map_or(1.0, |monitor| monitor.scale);
     let notch = match notch {
         config::Notch::Off => None,
         config::Notch::Fixed(shape) => Some(fixed(shape, scale)),
-        config::Notch::Auto => detect().await,
+        config::Notch::Auto => match &monitor {
+            Some(monitor) => detect(monitor).await,
+            None => None,
+        },
     };
     let mut resolved = Screen {
         notch,
@@ -242,7 +249,7 @@ pub async fn resolve(
         ..Screen::default()
     };
     resolved.resolve_islands(islands, scale);
-    resolved
+    (output.or(monitor.map(|monitor| monitor.name)), resolved)
 }
 
 /// The notch config.toml gives, in logical pixels at `scale`, as big as the bar draws it: grown.
@@ -261,13 +268,12 @@ fn fixed(shape: config::NotchShape, scale: f32) -> Notch {
     }
 }
 
-/// This machine's notch, on the output the bar is on, if it shows there.
-async fn detect() -> Option<Notch> {
+/// This machine's notch, on `monitor`, if it shows there.
+async fn detect(monitor: &eave_hyprland::types::Monitor) -> Option<Notch> {
     let found = tokio::task::spawn_blocking(|| find(Path::new("/")))
         .await
         .ok()??;
     // Only the built-in panel has the notch, and only upright is it at the top.
-    let monitor = focused().await?;
     if !monitor.name.starts_with("eDP") || monitor.transform != 0 {
         return None;
     }
@@ -290,11 +296,22 @@ async fn detect() -> Option<Notch> {
 
 /// The output the bar opens on: the focused one (one surface for now).
 pub async fn focused() -> Option<eave_hyprland::types::Monitor> {
+    monitor(|monitor| monitor.focused).await
+}
+
+/// The output with this connector name, like `eDP-1`.
+async fn by_name(name: &str) -> Option<eave_hyprland::types::Monitor> {
+    monitor(|monitor| monitor.name == name).await
+}
+
+async fn monitor(
+    which: impl Fn(&eave_hyprland::types::Monitor) -> bool,
+) -> Option<eave_hyprland::types::Monitor> {
     let monitors: Vec<eave_hyprland::types::Monitor> =
         eave_hyprland::query("monitors").await.ok()?;
     monitors
         .into_iter()
-        .find(|monitor| monitor.focused && monitor.scale > 0.0)
+        .find(|monitor| which(monitor) && monitor.scale > 0.0)
 }
 
 /// This machine's notch as the hardware has it, in physical pixels, if the kernel shows it: its

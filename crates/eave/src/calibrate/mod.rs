@@ -24,10 +24,11 @@ use rows::{Editing, Line, Row};
 use shape::Shape;
 
 /// The output being calibrated: its name, its size in physical pixels as it's shown (rotated, if
-/// it is), and its scale.
+/// it is), and its scale. And the `[monitor."…"]` table it's saved in (D-94).
 #[derive(Debug, Clone)]
 struct Output {
     name: String,
+    table: String,
     width: u32,
     height: u32,
     scale: f32,
@@ -67,6 +68,20 @@ pub fn run() -> Result<(), iced_layershell::Error> {
         std::process::exit(1);
     };
     drop(runtime);
+    let config = config::load().unwrap_or_else(|error| {
+        eprintln!("eave calibrate: config: {error}");
+        config::Config::default()
+    });
+    let screens = config.screens();
+    let setting = screens.screen_for(&monitor.name, &monitor.description);
+    // The monitor's own table if there's one, or a new one for every monitor of its model.
+    let table = match screens.matching(&monitor.name, &monitor.description) {
+        Some((table, _)) => table.clone(),
+        None => match format!("{} {}", monitor.make, monitor.model).trim() {
+            "" => monitor.name.clone(),
+            model => model.to_string(),
+        },
+    };
     // Odd transforms turn the output on its side.
     let (width, height) = if monitor.transform % 2 == 1 {
         (monitor.height, monitor.width)
@@ -75,17 +90,14 @@ pub fn run() -> Result<(), iced_layershell::Error> {
     };
     let output = Output {
         name: monitor.name,
+        table,
         width,
         height,
         scale: monitor.scale,
     };
 
-    let config = config::load().unwrap_or_else(|error| {
-        eprintln!("eave calibrate: config: {error}");
-        config::Config::default()
-    });
     crate::prepare(&config);
-    let (shape, notch) = start(&config, &output);
+    let (shape, notch) = start(&setting, &output);
     let editing = Editing::new(shape, notch);
     eprintln!(
         "eave calibrate: {} at {}×{} pixels, scale {}. Change the model until every red pixel \
@@ -133,7 +145,7 @@ pub fn run() -> Result<(), iced_layershell::Error> {
 
 /// The model to start from, and the notch to bring in if there's none yet: what config.toml says,
 /// or what the hardware does.
-fn start(config: &config::Config, output: &Output) -> (Shape, NotchShape) {
+fn start(config: &config::ScreenSetting, output: &Output) -> (Shape, NotchShape) {
     let scale = output.scale;
     let bar_height = f32::from(theme::EDGE_GAP) + theme::ISLAND_HEIGHT as f32;
     let found = notch::hardware().map(|(width, height)| NotchShape {
@@ -216,9 +228,13 @@ fn key_pressed(
                 eprintln!("eave calibrate: neither XDG_CONFIG_HOME nor HOME is set, not saved");
                 return Task::none();
             };
-            match save::save(&path, &calibrator.editing.shape) {
+            let table = &calibrator.output.table;
+            match save::save(&path, table, &calibrator.editing.shape) {
                 Ok(()) => {
-                    println!("eave calibrate: saved to {}", path.display());
+                    println!(
+                        "eave calibrate: saved to {}, for [monitor.\"{table}\"]",
+                        path.display()
+                    );
                     return iced::exit();
                 }
                 Err(error) => eprintln!("eave calibrate: not saved: {error}"),

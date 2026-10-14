@@ -158,7 +158,7 @@ systemctl --user enable --now eave-rebuild.path   # eave-build init put the unit
 | Enter, `s` | save to config.toml and quit |
 | Esc, `q` | quit without saving |
 
-It starts from what config.toml says, or from the notch the hardware reports. Saving changes only `notch` and `screen`, keeps the notch's and the screen's `grow` as they were, keeps the rest of the file and its comments, and writes through a symlink. Run it with the binary the bar runs, `~/.local/bin/eave calibrate`, or `cargo run --release -- calibrate` in a checkout.
+It starts from what config.toml says for this monitor, or from the notch the hardware reports. Saving writes `notch` and `screen` into the monitor's `[monitor."…"]` table ([D-94](decisions.md)): the one that already matches it, or a new one named after its make and model, so the same config.toml fits every screen you use. It the notch's and the screen's `grow` as they were, the top-level keys, the rest of the file and its comments, and writes through a symlink. Run it with the binary the bar runs, `~/.local/bin/eave calibrate`, or `cargo run --release -- calibrate` in a checkout.
 
 ## The dormer
 
