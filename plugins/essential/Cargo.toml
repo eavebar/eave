@@ -1,0 +1,20 @@
+[package]
+name = "eave-essential"
+version = "0.1.0"
+description = "The bar's own actions in the dormer: calibrate the screen, restart the bar, check its health, for eave"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+# Restarts eave.service through systemd's D-Bus API.
+eave-dbus.workspace = true
+# eave calibrate and eave doctor are started by Hyprland's exec, so they aren't the bar's children.
+eave-hyprland.workspace = true
+# inotify and poll, to wait for eave doctor's report; already in the tree (D-21).
+rustix = { version = "1", default-features = false, features = ["std", "fs", "event"] }
+serde.workspace = true
+tokio = { version = "1", default-features = false, features = ["rt"] }
+# Reads eave doctor's report.
+toml.workspace = true

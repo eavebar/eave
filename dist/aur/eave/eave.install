@@ -23,7 +23,7 @@ post_remove() {
 	cat <<'MSG'
 eave: your bar and its files stay in your home. To remove them:
   systemctl --user disable --now eave.service eave-rebuild.path
-  rm ~/.config/systemd/user/eave{,-rebuild}.* ~/.local/bin/eave
+  rm ~/.config/systemd/user/eave{,-rebuild,-update,-update-check}.* ~/.local/bin/eave
   rm -r ~/.local/share/eave ~/.cache/eave
 MSG
 }

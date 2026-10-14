@@ -136,6 +136,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/app.rs               state, Message, update/view/subscription, popover lifecycle, the notifications panel and its clocks, surface fit, reload
   src/config.rs            config.toml → zone entries, with their island, divider and collapsible
   src/watch.rs             inotify watch on the config directory
+  src/doctor/              eave doctor: checks config.toml, widgets, keys, the screen and systemd; text and TOML report
   src/kit.rs               ui nodes → iced elements, styled
   src/icon.rs              status icons (volume, Wi-Fi, wired, battery, brightness, media) as vector paths
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
@@ -162,8 +163,8 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/field.rs             text field box, its focus on appearing, and the focus query popovers use
   src/clip.rs              a line of text cut at its room, fading at the end
   src/ease.rs              a number eased to each new value on the frame clock
-crates/eave-build/         builds the widgets config.toml uses, installs and restarts; `update`, `init`
-crates/eave-dbus/          service: shared system and session buses, snapshot-on-PropertiesChanged watcher
+crates/eave-build/         builds the widgets config.toml uses, installs and restarts; `update`, `check`, `init`
+crates/eave-dbus/          service: shared system and session buses, snapshot-on-PropertiesChanged watcher; systemd units
 crates/eave-mpris/         service: MPRIS media players on the session bus, and their controls
 crates/eave-iwd/           service: Wi-Fi networks and controls through iwd's D-Bus API, and a passphrase agent
 crates/eave-net/           service: network state from the kernel over netlink (one event thread)
@@ -172,6 +173,8 @@ crates/eave-hyprland/      service: shared socket2 events, socket1 queries and d
 eave-collection.toml       lists plugins/*: the built-ins, as one collection (D-46)
 plugins/apps/              installed apps as actions in the dormer, from desktop entries (eave-apps)
 plugins/clock/             the clock plugin (crate eave-clock) + its eave-plugin.toml
+plugins/essential/         the bar's own actions in the dormer: calibrate, restart, health (eave-essential)
+plugins/update/            check for updates and update, through eave-build's units (eave-update)
 plugins/workspaces/        Hyprland workspaces (eave-workspaces)
 plugins/window/            focused window title (eave-window)
 plugins/keyboard/          keyboard layout (eave-keyboard)
@@ -182,7 +185,7 @@ plugins/network/           primary connection, via eave-net; Wi-Fi to join via e
 plugins/volume/            output volume and switching (eave-volume)
 vendor/softbuffer/         softbuffer 0.4.8 with an alpha-carrying Wayland buffer (D-25)
 vendor/iced_tiny_skia/     iced_tiny_skia 0.14.1: lazy clip mask, damage-aware present, EAVE_FRAMES (D-66)
-dist/systemd/              user units: the bar, and the rebuild-on-config.toml pair
+dist/systemd/              user units: the bar, the rebuild-on-config.toml pair, and the update and check
 dist/config.toml           the starter config `eave-build init` writes
 install.sh                 the curl | sh installer
 ```

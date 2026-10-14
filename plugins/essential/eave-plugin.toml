@@ -1,0 +1,5 @@
+# Plugin manifest, beside the crate's Cargo.toml.
+[plugin]
+name = "essential"
+description = "The bar's own actions in the dormer: calibrate the screen, restart the bar, check its health"
+api = "0.1"

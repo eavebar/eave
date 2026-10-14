@@ -74,6 +74,7 @@ Current baseline (Asahi, aarch64, release, tiny-skia, default binary). Measured 
 | workspaces, volume, network, battery, clock + media (after D-56/D-57; 9.1 MiB before) | 11.2 MiB | ~18.1 MB with no player (~16.9 on main in the same session), ~18.8–19.1 MB with a cover shown | unchanged within noise |
 | the user's config, Markdown, text area, scroll (after D-62) | 11.6 MiB | ~19.3 MB (~18.8 on main in the same session) | unchanged within noise |
 | the user's config, notification cards (after D-85; both renderers built in, run on tiny-skia, alone on a session bus of its own) | 18.40 → 18.53 MiB | ~23.4 MB idle, ~27.7 MB with a notification shown (main in the same session: ~23.6 and ~27.3) | unchanged within noise |
+| two clocks, + `essential` and `update` under `[[dormer]]` (after D-96–D-98; CachyOS x86_64, both renderers built in, run on tiny-skia) | 20.77 → 21.98 MiB | ~18.2 MB for two clocks (~17.9 on main in the same session), ~18.4 MB with both plugins | 0% |
 
 Before the plugin split (skeleton, clock + date hard-coded): binary 5.6 MiB, RSS ~11.5 MB. The +0.2 MiB of binary and +0.3 MB of RSS are the price of the registry, config parsing (`toml`) and popover surfaces ([D-12](decisions.md), [D-14](decisions.md)).
 

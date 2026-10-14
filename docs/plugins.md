@@ -169,6 +169,8 @@ Use them by name. The default binary (`cargo run --release`) has all of them, an
 | `keyboard` | active layout, click for the next one; hidden with a single layout | `aliases` (`{ "English (US)" = "us" }`) |
 | `appearance` | a sun or a moon: the desktop's light or dark mode. Click to switch, right click for a popover with both. It sets GNOME's `color-scheme` through dconf, which apps and the bar (with `theme = "system"`) follow; hidden without dconf ([D-92](decisions.md)) | none |
 | `apps` | nothing in the bar: put it under `[[dormer]]`. Every installed app (its desktop entry) is an action in the dormer that launches it ([D-84](decisions.md)) | `terminal` (what runs apps that want a terminal, like `"foot"` or `"alacritty -e"`; without it they're left out) |
+| `essential` | nothing in the bar: put it under `[[dormer]]`, as the starter config does. The bar's own actions in the dormer: Calibrate screen (runs `eave calibrate`), Restart bar (only when the bar runs as `eave.service`, which it restarts) and Check health (runs `eave doctor` and shows what it found in a dialog, problems first) ([D-98](decisions.md)) | none |
+| `update` | nothing in the bar: put it under `[[dormer]]`, as the starter config does. Check for updates and Update eave in the dormer: each starts one of eave-build's systemd units (`eave-build check`, `eave-build update`), and a notification says what it found or moved when it's done. One that finds updates offers Update. Lists nothing without the units or systemd ([D-97](decisions.md), [D-98](decisions.md)) | none |
 | `media` | what an MPRIS player is playing: the track's cover (the player's icon without one), then title · artist, dimmed while paused; right click to play or pause, scroll to skip tracks, with a nudge; cover, track, seek bar, controls and a player list in the popover; hidden when nothing plays or is paused ([D-56](decisions.md)) | `show` (`"title"` (default), `"hover"`: the text only while hovered, `"icon"`: the cover alone), `max_chars` (default 40) |
 
 ```toml
@@ -201,6 +203,8 @@ The built-in widgets' actions that are always there have ids, for `eave action <
 | `keyboard` | `next-layout` |
 | `appearance` | `light`, `dark` |
 | `network` | `wifi-on`, `wifi-off` (only while its popover is open, like its other actions) |
+| `essential` | `calibrate`, `restart` (only under `eave.service`), `health` |
+| `update` | `check`, `update` |
 
 Notifications come from a plugin of their own, eave's notification server, in [eaveshell/eave-notifications](https://github.com/eaveshell/eave-notifications): `widget = "eaveshell/eave-notifications"` ([D-50](decisions.md)).
 

@@ -766,10 +766,12 @@ dependencies = [
  "eave-brightness",
  "eave-clock",
  "eave-dbus",
+ "eave-essential",
  "eave-hyprland",
  "eave-keyboard",
  "eave-media",
  "eave-network",
+ "eave-update",
  "eave-volume",
  "eave-window",
  "eave-workspaces",
@@ -879,6 +881,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "eave-essential"
+version = "0.1.0"
+dependencies = [
+ "eave-api",
+ "eave-dbus",
+ "eave-hyprland",
+ "rustix 1.1.5",
+ "serde",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "eave-hyprland"
 version = "0.2.0"
 dependencies = [
@@ -957,6 +972,18 @@ dependencies = [
  "futures-util",
  "pulseaudio",
  "tokio",
+]
+
+[[package]]
+name = "eave-update"
+version = "0.1.0"
+dependencies = [
+ "eave-api",
+ "eave-dbus",
+ "futures-util",
+ "serde",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

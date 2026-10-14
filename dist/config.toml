@@ -39,6 +39,14 @@ widget = "network"
 [[right]]
 widget = "battery"
 
+# The bar's own actions: calibrate the screen, restart the bar, check its health.
+[[dormer]]
+widget = "essential"
+
+# Check for updates and update eave.
+[[dormer]]
+widget = "update"
+
 # Launch apps from the dormer:
 # [[dormer]]
 # widget = "apps"

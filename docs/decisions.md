@@ -2043,6 +2043,8 @@ The settings are grouped by the thing they're about, not by situation, because e
 
 ## D-93: `update` reinstalls eave-build before the bar, not after
 
+*Amended by [D-97](#d-97-eave-build-check-and-the-update-units): the handover passes `--summary` on, and what had moved in `EAVE_BUILD_MOVED`.*
+
 **Decision:** when `eave-build update` moves eave, it reinstalls eave-build from the new checkout right away, before reading plugins, and hands the rest of the run to the new binary (`exec`, with `EAVE_BUILD_HANDED_OVER` set so it doesn't do it again). The new binary fetches the plugins, builds and installs the bar, rewrites the units and reloads systemd. A marker (`$XDG_DATA_HOME/eave/eave-build-outdated`) is written before the install and removed after it succeeds, so a failed install is retried by the next `update` even though eave no longer moves. Packaged and non-cargo eave-builds are unchanged ([D-54](#d-54-eave-on-the-aur-shipping-eave-build-from-release-tags)).
 
 **Why:** D-31 updated eave-build after the bar, so a failure there would never leave the bar half-updated. But the build recipe lives in eave-build: when eave vendored a patched layershellev (D-79), the old eave-build generated a manifest without that patch, cargo used crates.io's layershellev, and the build failed before the self-update could run. Every commit that changes both the recipe and code depending on it would break `update` the same way. Building the bar with the eave-build of the same checkout makes the recipe and the code always match.
@@ -2112,3 +2114,100 @@ The settings are grouped by the thing they're about, not by situation, because e
 
 **Cost:** no dependency. Finding the shift takes up to 3 ms (release) when the screen setting changes, and nothing per frame.
 
+
+---
+
+## D-96: `eave doctor` says what's wrong with the setup
+
+**Status:** accepted (2026-10-14).
+
+**Problem:** what goes wrong with a bar is mostly outside it: config.toml doesn't parse and the bar keeps the old one, a widget isn't in the build yet, two actions want the same key and one silently loses it (D-91), a MacBook's notch was never measured, eave.service can't reach the compositor because systemd lacks its environment. Each of these is printed to stderr once, if at all, and read only by someone who knows to look in the journal.
+
+**What:** `eave doctor`, a subcommand of the bar's binary like `eave calibrate`, runs the checks and prints one line each, `good`, `warning` or `problem`, with what to do under it. It exits with 1 when it found a problem. `--report <path>` also writes them as `[[check]]` tables, for the `essential` plugin's Check health ([D-98](#d-98-the-essential-and-update-plugins-the-bars-own-actions-in-the-dormer)).
+- **config.toml:** it's there and parses (`config::load_from`), and every warning the bar would print (`Config.warnings`).
+- **Widgets:** each one config.toml names is in this binary's registry and takes its options. It makes each widget, as the bar would, and drops the task `new` returns: the widget never runs.
+- **Keys:** the made widgets' actions, settled by `shortcut::resolve_actions`, the bar's own rule (D-91). Its warnings are the checks.
+- **Screen:** Hyprland answers. The focused monitor, the one the bar opens on, has `notch` measured when the kernel shows a notch on it (D-71, D-94).
+- **systemd:** `eave.service` and `eave-rebuild.path` are enabled, the manager's environment has `WAYLAND_DISPLAY` and `HYPRLAND_INSTANCE_SIGNATURE` (when the service is enabled), and the update units are installed ([D-97](#d-97-eave-build-check-and-the-update-units)). Asked over D-Bus through a new `eave_dbus::systemd` module, never `systemctl`. Without a user manager, one note says so.
+
+**Why:**
+- **In the bar's binary.** It must check against the widgets *this* binary has, read config.toml with the bar's own parser and settle keys with the bar's own rule, or it would drift from what the bar does. And it must run when the bar won't start, which a check inside the running bar can't.
+- **A report file, not output parsing.** The plugin can't run it as a child (plugins don't spawn processes), so Hyprland's exec runs it, and the file is how it answers. Written beside and renamed into place, so it's never read half-written.
+
+**Alternatives:**
+- **Checks in the plugin:** it can't see the registry or the host's config parser, and a second copy would drift.
+- **In `eave-build`:** it doesn't know the widgets' options or keys, only their names.
+- **A health page inside the running bar:** useless exactly when it's needed most.
+
+**What we give up:** what it can't know without running the bar: which renderer iced actually picked, and keys on popover rows (only the dormer's are checked).
+
+**Cost:** no new dependency (`toml_edit` writes the report, already there for calibrate). The binary grows 75 KB (21,778,352 → 21,853,744 B with every built-in but the two new plugins). Nothing runs in the bar.
+
+---
+
+## D-97: `eave-build check`, and the update units
+
+**Status:** accepted (2026-10-14). Amends [D-93](#d-93-update-reinstalls-eave-build-before-the-bar-not-after): the handover carries `--summary` and what moved.
+
+**Problem:** `eave-build update` moves everything at once, with no way to see what it would move first. And to update from the dormer, something must run it outside the bar: an update restarts the bar, so a child of the bar would be killed halfway (systemd stops the whole cgroup).
+
+**What:**
+- **`eave-build check`** fetches eave and every git plugin config.toml uses, and prints what `update` would move: `weather: 1111111 → 2222222 (3 new commits)`. It checks nothing out and builds nothing. `Sources::checkout` is split, so `check` and the move share `wanted`, which fetches and resolves. Paths and built-ins are skipped; a source never fetched is mentioned and left alone.
+- **`--summary`** leaves `~/.cache/eave/<command>.toml`: `ok`, `error`, and `[[moved]]` with `label`, `from`, `to`, `commits`. Every move is now recorded, not only eave's. A handover to a newly installed eave-build (D-93) passes `--summary` on, and what had moved in `EAVE_BUILD_MOVED`.
+- **Two units**, written by `eave-build init`: `eave-update.service` runs `eave-build update --summary`, `eave-update-check.service` runs `eave-build check --summary`. Oneshots at idle priority, like `eave-rebuild.service`, without its failure `notify-send`: the plugin tells.
+- **`init` reloads systemd** after writing the units. Before, only an update that moved eave did.
+
+**Why:**
+- **A summary file:** the bar that started the update may be gone when it ends, and the one that replaced it needs to know what happened. A file outlives both, and taking it (read, then delete) tells it once.
+- **systemd units:** a run outside the bar's cgroup, with its output in the journal, started over D-Bus with no process spawned by the bar. systemd is already what runs the bar and the rebuild.
+- **Fetching moves nothing:** `check` only updates the checkouts' remote-tracking refs, so nothing changes version without `update` ([D-31](#d-31-updates-are-explicit-installs-only-when-the-binary-changed)).
+
+**Alternatives:**
+- **`systemd-run --user`** from the plugin: a process the bar spawns, and the unit would be anonymous.
+- **eave-build sending the notification:** it would need zbus, or `notify-send`, a binary not everyone has.
+- **A periodic check:** polling the network, and something automatic. Nothing is checked unless asked.
+
+**Cost:** no new dependency. Two unit files.
+
+---
+
+## D-98: The `essential` and `update` plugins: the bar's own actions in the dormer
+
+**Status:** accepted (2026-10-14).
+
+**Problem:** calibrating the screen, restarting the bar after a `renderer` change, checking the setup and updating eave all need a terminal and the right command.
+
+**What:** two built-in plugins, with nothing in the bar, for `[[dormer]]`. The starter config has both, and they can be removed like any widget.
+- **`essential`:**
+  - **Calibrate screen** (`calibrate`) has Hyprland run `<the bar's binary> calibrate`.
+  - **Restart bar** (`restart`) calls systemd's `RestartUnit("eave.service")`. It's listed only when this bar is that service's current run: `$INVOCATION_ID` equals the unit's `InvocationID`.
+  - **Check health** (`health`) has Hyprland run `<the bar's binary> doctor --report $XDG_RUNTIME_DIR/eave/doctor.toml`, waits for the file with inotify (10 s at most), and opens a dialog with the checks, problems first ([D-96](#d-96-eave-doctor-says-whats-wrong-with-the-setup)). While it runs, the action reads "Checking health…".
+- **`update`:**
+  - **Check for updates** (`check`) and **Update eave** (`update`) start `eave-update-check.service` and `eave-update.service` over D-Bus ([D-97](#d-97-eave-build-check-and-the-update-units)).
+  - It follows both units through systemd's `PropertiesChanged` signals. When one finishes, it takes the summary and tells it in a notification: what moved or would move, or the error, critical for a failed update, with the journal to read.
+  - A check that found updates offers **Update** on its notification. The plugin listens for the notification's `ActionInvoked` only while one offers it.
+  - While either unit runs, the only action is "Checking for updates…" or "Updating eave…". Without the units (an older `init`) or without systemd, it lists nothing.
+- The bar's binary is `current_exe()`, without the " (deleted)" Linux adds once eave-build has replaced it: the new binary at the same path is the one to run.
+
+**Why:**
+- **Plugins, not the host's actions:** everything is a plugin, and these use only the public API. A bar that doesn't want them leaves them out.
+- **Hyprland's exec and systemd, never `std::process`:** core plugins don't spawn processes ([D-23](#d-23-core-plugins-depend-only-on-hyprland-and-the-kernel)). The `apps` plugin launches apps the same way. Processes started this way aren't the bar's children, so a restart doesn't take them along.
+- **Restart only under the service:** a bar started by hand, from a worktree, or from Hyprland's config would otherwise restart some other bar, or nothing.
+- **Two plugins, not one:** updating is about eave-build and its units, and depends on systemd. The bar's own actions don't.
+- **No icons:** they're commands, not things on screen.
+
+**Alternatives:**
+- **One plugin that can't be removed:** against "everything is a plugin" and the empty bar without a config.
+- **The host's own dormer actions:** they'd work without a config, but they'd be a second kind of action, outside the plugin API.
+
+**What we give up:** both bend D-23 a little: `update` needs systemd, and Restart bar does too. Without systemd they leave those actions out.
+
+**Cost:** no new dependency (rustix's `event` and inotify were already built). Release binary with every built-in, measured on CachyOS x86_64:
+
+| | Binary | RSS, two clocks, tiny-skia | Idle CPU |
+|---|---|---|---|
+| main | 21,778,352 B | ~17.9 MB | 0 ticks in 2 s |
+| this, two clocks | 23,049,392 B | ~18.2 MB | 0 |
+| this, + `essential` and `update` under `[[dormer]]` | | ~18.4–18.5 MB | 0 |
+
+The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` and 630 KB for `update`, mostly zbus, serde and iced code instantiated anew for each plugin, as with `appearance` (D-92). A bar built by eave-build has only what config.toml uses. The plugins' RSS is the session bus connection and two unit subscriptions.
