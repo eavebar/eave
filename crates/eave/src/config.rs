@@ -49,11 +49,13 @@
 //! Two more say when the bar and the notifications show (D-88):
 //!
 //! ```toml
-//! bar = { show = "always", fullscreen = "hide", peek = true }
+//! bar = { show = "always", fullscreen = "hide", peek = true, style = "islands" }
 //! notifications = { fullscreen = "critical" }
 //! ```
 //!
-//! `bar.show` is `"always"` or `"hover"`: hidden above the screen until the pointer touches the
+//! `bar.style = "solid"` draws all of the bar black, down to the islands' bottom, with its lower
+//! ends rounded like the screen's top corners, or square with `bar.corners = "square"`. Islands
+//! stay islands in it, and popovers flow out of it (D-89). `bar.show` is `"always"` or `"hover"`: hidden above the screen until the pointer touches the
 //! top edge, and keeping no room for itself. `bar.fullscreen` is the same on a workspace with a
 //! fullscreen window, `"hide"`, `"hover"` or `"show"`. `bar.peek` brings a hidden bar out for a
 //! moment when the workspace changes. `notifications.fullscreen` is `"show"`, `"critical"` (only
@@ -175,6 +177,29 @@ pub struct Bar {
     pub fullscreen: Showing,
     /// A hidden bar comes out for a moment when the workspace changes.
     pub peek: bool,
+    /// Islands on their own, or all of the bar black (D-89).
+    pub style: Style,
+    /// A solid bar's lower ends: rounded like the screen's top corners, or square.
+    pub corners: BarCorners,
+}
+
+/// How the bar is drawn (D-89).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Style {
+    /// Islands floating below the top edge.
+    #[default]
+    Islands,
+    /// All of it black, down to the islands' bottom. The islands are in it, and flow out of it.
+    Solid,
+}
+
+/// Where a solid bar's bottom meets the screen's sides.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum BarCorners {
+    /// Curving down into the sides the way the screen's top corners do.
+    #[default]
+    Round,
+    Square,
 }
 
 impl Default for Bar {
@@ -183,6 +208,8 @@ impl Default for Bar {
             show: Showing::Always,
             fullscreen: Showing::Never,
             peek: true,
+            style: Style::Islands,
+            corners: BarCorners::Round,
         }
     }
 }
@@ -649,7 +676,7 @@ fn islands(value: toml::Value, warnings: &mut Vec<String>) -> Islands {
     islands
 }
 
-/// `bar = { show = "always", fullscreen = "hide", peek = true }`.
+/// `bar = { show = "always", fullscreen = "hide", peek = true, style = "islands", corners = "round" }`.
 fn bar(value: toml::Value, warnings: &mut Vec<String>) -> Bar {
     let mut bar = Bar::default();
     let toml::Value::Table(table) = value else {
@@ -678,8 +705,22 @@ fn bar(value: toml::Value, warnings: &mut Vec<String>) -> Bar {
                 toml::Value::Boolean(peek) => bar.peek = *peek,
                 _ => warnings.push("`bar.peek` must be true or false, using true".into()),
             },
+            "style" => match name {
+                Some("islands") => bar.style = Style::Islands,
+                Some("solid") => bar.style = Style::Solid,
+                _ => warnings.push(
+                    "`bar.style` must be \"islands\" or \"solid\", using \"islands\"".into(),
+                ),
+            },
+            "corners" => match name {
+                Some("round") => bar.corners = BarCorners::Round,
+                Some("square") => bar.corners = BarCorners::Square,
+                _ => warnings.push(
+                    "`bar.corners` must be \"round\" or \"square\", using \"round\"".into(),
+                ),
+            },
             _ => warnings.push(format!(
-                "`bar` takes show, fullscreen and peek, ignoring `{key}`"
+                "`bar` takes show, fullscreen, peek, style and corners, ignoring `{key}`"
             )),
         }
     }
@@ -744,7 +785,8 @@ mod tests {
             Bar {
                 show: Showing::Hover,
                 fullscreen: Showing::Always,
-                peek: false
+                peek: false,
+                ..Bar::default()
             }
         );
         assert_eq!(set.notifications.fullscreen, Held::All);
@@ -752,6 +794,24 @@ mod tests {
         assert_eq!(hover.bar.fullscreen, Showing::Hover);
         let show = parse("notifications = { fullscreen = \"show\" }").unwrap();
         assert_eq!(show.notifications.fullscreen, Held::None);
+    }
+
+    #[test]
+    fn the_bar_is_islands_unless_its_solid() {
+        let plain = parse("").unwrap();
+        assert_eq!(
+            (plain.bar.style, plain.bar.corners),
+            (Style::Islands, BarCorners::Round)
+        );
+        let solid = parse("bar = { style = \"solid\", corners = \"square\" }").unwrap();
+        assert!(solid.warnings.is_empty());
+        assert_eq!(
+            (solid.bar.style, solid.bar.corners),
+            (Style::Solid, BarCorners::Square)
+        );
+        let odd = parse("bar = { style = \"glass\", corners = 4 }").unwrap();
+        assert_eq!(odd.bar, Bar::default());
+        assert_eq!(odd.warnings.len(), 2);
     }
 
     #[test]
