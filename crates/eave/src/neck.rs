@@ -4,10 +4,9 @@
 //! so a drop just below the notch sits in a wide, smooth fillet, which narrows as it falls, thins
 //! to a waist and pinches off, leaving a drip on the notch that draws back in.
 //!
-//! The union's field is symmetric about the drop's middle and only grows away from it along a row,
-//! so each row of the neck is one span, found by bisection, then kept to the root's reach. A drop
-//! that comes out of an island off to the side (D-88) leans: its spans center on the drop, not on
-//! the root. The outline is the spans' ends, top to bottom down the right, and back up the left.
+//! Both are symmetric about the drop's middle, and the union's field only grows away from it along
+//! a row, so each row of the neck is one span, found by bisection. The outline is the spans' ends,
+//! top to bottom down the right, and back up the left.
 
 use iced::widget::canvas::Path;
 use iced::{Point, Rectangle};
@@ -22,7 +21,7 @@ const HALVINGS: u32 = 16;
 pub struct Root {
     /// The bottom of what it hangs from, from the surface's top.
     pub y: f32,
-    /// The middle of where it comes out, across.
+    /// The drop's middle, across.
     pub x: f32,
     /// How far each way from the middle the neck may reach along the root: the fillet flattens
     /// into it out there. Short of the notch's lower corners.
@@ -32,11 +31,11 @@ pub struct Root {
     pub blend: f32,
 }
 
-/// The neck's rows, top to bottom: each row's height, and where its span starts and ends across,
-/// if it has one.
+/// The neck's rows, top to bottom: each row's height, and how far its span reaches from the
+/// middle each way, if it has one.
 pub struct Neck {
     root: Root,
-    rows: Vec<(f32, Option<(f32, f32)>)>,
+    rows: Vec<(f32, Option<f32>)>,
 }
 
 impl Neck {
@@ -57,23 +56,16 @@ impl Neck {
         let radius = radius.clamp(0.0, half.0.min(half.1));
         let field = |x: f32, y: f32| {
             let line = y - root.y;
-            let shape = rounded_box(x - center.x, y - center.y, half, radius);
+            let shape = rounded_box(x, y - center.y, half, radius);
             smooth_min(line, shape, blend)
         };
         // From half a row under the root: on it, every row reaches all the way along it.
         let top = root.y + ROW / 2.0;
         let count = ((bottom - top) / ROW).ceil().max(0.0) as usize + 1;
-        // Out from the drop's middle, as far as the far end of the root's reach, then kept to it.
-        let (from, to) = (root.x - root.spread, root.x + root.spread);
-        let reach = root.spread + (center.x - root.x).abs();
         let rows = (0..count)
             .map(|row| {
                 let y = (top + row as f32 * ROW).min(bottom);
-                let span = span(|x| field(center.x + x, y), reach).and_then(|half| {
-                    let (left, right) = ((center.x - half).max(from), (center.x + half).min(to));
-                    (left < right).then_some((left, right))
-                });
-                (y, span)
+                (y, span(|x| field(x, y), root.spread))
             })
             .collect();
         Some(Self { root, rows })
@@ -84,18 +76,13 @@ impl Neck {
         self.rows.iter().all(|(_, span)| span.is_some())
     }
 
-    /// How far across it reaches, from its leftmost to its rightmost, if it has any span.
-    pub fn across(&self) -> Option<(f32, f32)> {
-        let spans = self.rows.iter().filter_map(|(_, span)| *span);
-        spans.reduce(|(left, right), (l, r)| (left.min(l), right.max(r)))
-    }
-
     /// Its outline, to fill: a piece for each run of rows with spans. The piece at the top reaches
     /// a pixel up into what it hangs from, as wide as its first row, so no seam shows between them.
     pub fn path(&self) -> Option<Path> {
         if self.rows.iter().all(|(_, span)| span.is_none()) {
             return None;
         }
+        let x = self.root.x;
         Some(Path::new(|builder| {
             let mut start = 0;
             while start < self.rows.len() {
@@ -110,15 +97,15 @@ impl Neck {
                 let rows = &self.rows[start..start + run];
                 let spans = rows.iter().map(|&(y, span)| (y, span.unwrap_or_default()));
                 if start == 0 {
-                    let (left, right) = rows[0].1.unwrap_or_default();
-                    builder.move_to(Point::new(left, self.root.y - 1.0));
-                    builder.line_to(Point::new(right, self.root.y - 1.0));
-                    for (y, (_, right)) in spans.clone() {
-                        builder.line_to(Point::new(right, y));
+                    let first = rows[0].1.unwrap_or_default();
+                    builder.move_to(Point::new(x - first, self.root.y - 1.0));
+                    builder.line_to(Point::new(x + first, self.root.y - 1.0));
+                    for (y, half) in spans.clone() {
+                        builder.line_to(Point::new(x + half, y));
                     }
                 } else {
-                    for (index, (y, (_, right))) in spans.clone().enumerate() {
-                        let at = Point::new(right, y);
+                    for (index, (y, half)) in spans.clone().enumerate() {
+                        let at = Point::new(x + half, y);
                         if index == 0 {
                             builder.move_to(at);
                         } else {
@@ -126,8 +113,8 @@ impl Neck {
                         }
                     }
                 }
-                for (y, (left, _)) in spans.rev() {
-                    builder.line_to(Point::new(left, y));
+                for (y, half) in spans.rev() {
+                    builder.line_to(Point::new(x - half, y));
                 }
                 builder.close();
                 start += run;
@@ -199,7 +186,7 @@ mod tests {
         neck.rows
             .iter()
             .filter(|(y, _)| *y <= gap)
-            .map(|(_, span)| span.map_or(0.0, |(left, right)| right - left))
+            .map(|(_, span)| span.unwrap_or(0.0))
             .fold(f32::INFINITY, f32::min)
     }
 
@@ -214,8 +201,7 @@ mod tests {
             last = width;
         }
         // Right under the root it flattens into it: a wide bell, three times the ball's width.
-        let (left, right) = neck(1.0).rows[0].1.unwrap();
-        assert!(right - left > 6.0 * 13.0);
+        assert!(neck(1.0).rows[0].1.unwrap() > 3.0 * 13.0);
     }
 
     #[test]
@@ -235,30 +221,8 @@ mod tests {
         assert!(
             neck.rows
                 .iter()
-                .all(|(_, span)| span.is_none_or(|(left, right)| {
-                    left >= ROOT.x - ROOT.spread && right <= ROOT.x + ROOT.spread
-                }))
+                .all(|(_, span)| span.is_none_or(|half| half <= ROOT.spread))
         );
-    }
-
-    #[test]
-    fn a_drop_off_to_the_side_leans_its_way_and_stays_on_the_root() {
-        // The same ball, 20 to the right of the root's middle.
-        let moved = ball(3.0) + iced::Vector::new(20.0, 0.0);
-        let neck = Neck::new(ROOT, moved, 13.0).expect("close enough");
-        assert!(neck.joined());
-        // Where it meets the ball, it's around the ball's middle, not the root's.
-        let (left, right) = neck.rows.last().unwrap().1.unwrap();
-        assert!(
-            ((left + right) / 2.0 - 120.0).abs() < 0.5,
-            "{left}..{right}"
-        );
-        // Up at the root, it never reaches past the root's spread.
-        let (_, right) = neck.rows[0].1.unwrap();
-        assert!(right <= ROOT.x + ROOT.spread);
-        // Far off to the side, it can't reach the root at all.
-        let far = ball(3.0) + iced::Vector::new(200.0, 0.0);
-        assert!(Neck::new(ROOT, far, 13.0).is_none_or(|neck| !neck.joined()));
     }
 
     #[test]

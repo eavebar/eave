@@ -1,15 +1,13 @@
 //! A widget's dialog (D-88): its panel in the middle of the screen, for what needs more room than
-//! a popover, like a conversation. It comes out of what was just acted on as a drop, the way the
-//! dormer drops out of the notch: out of the popover, which folds back into its island as the drop
-//! falls, out of the item, or out of a notification. Picked in the dormer, the dormer turns into
-//! it. Asked for out of the blue, it drops out of the top. It goes back where it came from.
+//! a popover, like a conversation. What was just acted on turns into it: the popover, the panel of
+//! notifications or the item's island morphs straight into it, and so does the dormer. Asked for
+//! out of the blue, it drops out of the top, as the dormer does. It goes back where it came from.
 
 use std::time::{Duration, Instant};
 
 use iced::Rectangle;
 
 use crate::app::IslandId;
-use crate::island::Spouts;
 
 /// How long after something is acted on a dialog asked for still comes out of it: long enough for
 /// a notification's click to go round the session bus to the widget that sent it, and back.
@@ -33,7 +31,8 @@ pub enum Event {
 pub enum Origin {
     /// The notch, or the top edge, like the dormer.
     Top,
-    /// An island on the bar: the one whose item, popover or notification was acted on.
+    /// An island on the bar: the one whose item, popover or notification was acted on. It turns
+    /// into the dialog, and back.
     Island(IslandId),
 }
 
@@ -73,8 +72,6 @@ pub struct Dialog {
     /// Where its island put it, in surface coordinates. The surface grows to fit it.
     pub rect: Option<Rectangle>,
     pub origin: Origin,
-    /// Where the island it comes out of is drawn, which that island writes as it draws.
-    pub spout: Spouts,
 }
 
 impl Dialog {
@@ -85,7 +82,6 @@ impl Dialog {
             top,
             rect: None,
             origin,
-            spout: Spouts::default(),
         }
     }
 }

@@ -83,11 +83,11 @@ The dormer is the host's search dialog for widgets' actions ([D-84](decisions.md
 
 ## Dialogs
 
-A widget's dialog is its panel in the middle of the screen ([D-88](decisions.md)). It shares the dormer's island and machinery:
+A widget's dialog is its panel in the middle of the screen ([D-88](decisions.md)):
 
-1. The widget returns `open_dialog()`. The host looks at what was last acted on (`Bar::touched`), set by an item press (`Touched`), a message from a popover or a notification card (`Acted`), or a dormer pick. If that was within a second, the dialog comes out of it. Otherwise it comes out of the top.
-2. Picked in the dormer, the dormer turns into the dialog on the spot. Otherwise the host looks up where its top goes, as it does for the dormer (`Dialog(Opened(top))`). Opening it closes any popover, which folds back into its island as the drop falls out of it.
-3. `view` hands the island in the middle the dialog's panel, with the key `DIALOG`, `Placement::Centered`, and a drop from where it comes out. Out of an island, that island writes where its bottom is drawn to the dialog's `Spouts` each time it draws, and the drop's neck flows from there. Out of the top, it's the notch's sag, as for the dormer. As the neck lets go and catches it (`Neck`), what it comes out of squishes: the island through `Island::kick`, the notch through `Zones`.
+1. The widget returns `open_dialog()`. The host looks at what was last acted on (`Bar::touched`), set by an item press (`Touched`), a message from a popover or a notification card (`Acted`), or a dormer pick. If that was within a second, that turns into the dialog. Otherwise it comes out of the top.
+2. Picked in the dormer, the dormer turns into the dialog on the spot. Otherwise the host looks up where its top goes, as it does for the dormer (`Dialog(Opened(top))`). Opening it closes any popover. One open in the island acted on is dropped, since that island now shows the dialog.
+3. Out of an island, `view` hands that island the dialog's panel with the key `DIALOG` and `Placement::Centered`. It wins over the island's popover and its notifications, so the island morphs straight from whatever it shows into the dialog, and back into the island when it closes. Out of the top, the island in the middle gets it with a drop, as the dormer does, and the notch squishes as the neck lets go and catches it (`Neck`).
 4. Placing, growing the surface, the input region, the keyboard and closing are the dormer's (`Placed`, `Closed`). It also closes when the widget returns `close_dialog()` or stops offering a dialog.
 
 ## Data sources by widget
@@ -128,9 +128,9 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/icon.rs              status icons (volume, Wi-Fi, wired, battery, brightness, media) as vector paths
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
   src/cover.rs             covers: a file or https URL → cropped, rounded 32 and 256 px bitmaps, off the UI thread
-  src/dialog.rs            a widget's dialog: where it comes out of, and what was last acted on
+  src/dialog.rs            a widget's dialog: what turns into it, and what was last acted on
   src/dormer.rs            the dormer's list: what widgets offer, ranked for what's typed, the selection and recent picks
-  src/neck.rs              the neck a drop hangs on: the smooth union of the bottom it comes out of and the drop, row by row
+  src/neck.rs              the neck the dormer's drop hangs on: the smooth union of the notch's bottom and the drop, row by row
   src/theme.rs             every color, size and font
   src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay, switching popovers mid-morph, the collapse chevron on hover
   src/squish.rs            how squished the items being drawn are, set by their island
