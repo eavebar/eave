@@ -1,4 +1,4 @@
-//! A widget's dialog (D-88): its panel in the middle of the screen, for what needs more room than
+//! A widget's dialog (D-90): its panel in the middle of the screen, for what needs more room than
 //! a popover, like a conversation. It comes out of what was just acted on: the shape of the
 //! popover, the panel of notifications or the item's island springs on to it while the island
 //! stays on the bar, and the dormer turns into it. Asked for out of the blue, it drops out of the

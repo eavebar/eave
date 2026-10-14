@@ -1867,7 +1867,7 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 
 ---
 
-## D-88: Widgets' dialogs: they come out of what opened them
+## D-90: Widgets' dialogs: they come out of what opened them
 
 **Status:** accepted (2026-10-14).
 

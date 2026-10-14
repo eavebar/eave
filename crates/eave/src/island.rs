@@ -130,7 +130,7 @@ pub struct Popover<'a, M> {
     /// by whatever draws it, if given: its neck flows from there, so they never come apart.
     pub sag: Option<Sag>,
     /// Comes out of another island's shape, and goes back into it, instead of its own, if given:
-    /// wherever that is drawn right now (D-88).
+    /// wherever that is drawn right now (D-90).
     pub home: Option<Shape>,
 }
 
@@ -146,7 +146,7 @@ pub enum Placement {
     /// island at the top into the middle of the screen (D-84).
     Centered { top: f32 },
     /// In the middle of the screen both ways: `room` is how far it reaches down from the surface's
-    /// top, and the top stays at least `min_top` down. A widget's dialog (D-88).
+    /// top, and the top stays at least `min_top` down. A widget's dialog (D-90).
     Middle { room: f32, min_top: f32 },
 }
 

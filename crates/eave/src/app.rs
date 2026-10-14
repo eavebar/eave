@@ -3,7 +3,7 @@
 //! surface grows to make room while it's there. Widgets' notifications turn the right island at
 //! the screen's edge into a panel the same way, while there are any. The dormer, the search
 //! dialog for widgets' actions, drops out of the top of the screen the same way too (D-84). So do
-//! widgets' dialogs, which come out of whatever was acted on to open them (D-88).
+//! widgets' dialogs, which come out of whatever was acted on to open them (D-90).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -70,7 +70,7 @@ pub struct Bar {
     dormer: Option<Session>,
     /// The dormer's last picks, for as long as the bar runs.
     recent: Recent,
-    /// A widget's dialog, from when it opens until it's back where it came from (D-88).
+    /// A widget's dialog, from when it opens until it's back where it came from (D-90).
     dialog: Option<Dialog>,
     /// Each island's shape as it was last drawn, for a dialog to come out of and go back into.
     shapes: RefCell<HashMap<IslandId, island::Shape>>,
@@ -1900,7 +1900,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
 
 /// The island in the middle at the top, for the dormer or a widget's dialog: a dot where it comes
 /// out of the notch, or the top edge, which drops out as a ball and unfolds into it (D-86). The
-/// same island for both, so the dormer can turn into a dialog (D-88). A dialog that comes out of
+/// same island for both, so the dormer can turn into a dialog (D-90). A dialog that comes out of
 /// an island on the bar starts as that island's shape instead, and the island stays. Only there
 /// while one is, on the bar the notifications show on.
 fn center_view(bar: &Bar, window: window::Id) -> Element<'_, Message> {

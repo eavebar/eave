@@ -83,7 +83,7 @@ The dormer is the host's search dialog for widgets' actions ([D-84](decisions.md
 
 ## Dialogs
 
-A widget's dialog is its panel in the middle of the screen ([D-88](decisions.md)):
+A widget's dialog is its panel in the middle of the screen ([D-90](decisions.md)):
 
 1. The widget returns `open_dialog()`. The host looks at what was last acted on (`Bar::touched`), set by an item press (`Touched`), a message from a popover or a notification card (`Acted`), or a dormer pick. If that was within a second, the dialog comes out of it. Otherwise it comes out of the top.
 2. Picked in the dormer, the dormer turns into the dialog on the spot. Otherwise the host looks up how tall the focused screen is, as it does for the dormer (`Dialog(Opened(room))`). Opening it closes any popover. One open in the island acted on is dropped at once, without folding: the dialog's shape covers it as it leaves.

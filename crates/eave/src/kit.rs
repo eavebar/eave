@@ -56,7 +56,7 @@ pub fn panel<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessag
     in_panel(node, icons, Place::Panel, theme::SCROLL_MAX_HEIGHT)
 }
 
-/// A dialog's content: a panel's, with more room to scroll in (D-88): up to `scroll` tall.
+/// A dialog's content: a panel's, with more room to scroll in (D-90): up to `scroll` tall.
 pub fn dialog<'a>(node: Node<AnyMessage>, icons: &Icons, scroll: f32) -> Element<'a, AnyMessage> {
     in_panel(node, icons, Place::Dialog, scroll)
 }
