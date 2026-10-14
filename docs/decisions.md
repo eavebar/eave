@@ -1556,6 +1556,8 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 
 **Cost:** no new dependency. The corners are resolved when the setting changes, and an island's shape is cached as before, so nothing new runs per frame.
 
+*Superseded in part by [D-95](#d-95-islands-follow-a-measured-screen-nearly-square-and-very-round-ones-too): on a measured screen, a corner no rounder than the gap makes the island's barely round (4 px), and "auto" follows it there too. The theme's 14 px is only for a screen config.toml doesn't describe.*
+
 ---
 
 ## D-74: Islands have no border
@@ -2082,4 +2084,31 @@ The settings are grouped by the thing they're about, not by situation, because e
 - Top-level `notch` and `screen` written by an older `eave calibrate` stay where they are. The monitor's table now overrides them, and they still apply to other monitors.
 
 **Cost:** no dependency. One more Hyprland query when config.toml has no measurements, only when these settings change.
+
+---
+
+## D-95: Islands follow a measured screen, nearly square and very round ones too
+
+**Status:** accepted (2026-10-14). Amends [D-73](#d-73-islands-take-their-corners-from-the-screen).
+
+**Problem:** a monitor calibrated to `corners = 1` still had round 14 px islands, nothing like its screen. D-73 took the island's corner as the screen's minus the 6 px gap, and below zero fell back to the theme's 14 px, the same as for a screen nobody measured. And a screen corner much rounder than an island can follow put the island into it: an island's corner reaches at most halfway down it, so with a 30 px island the corner is capped at 15 px. Against a 39 px screen corner at scale 1, the gap was 0 to 1.5 px instead of 6.
+
+**What:**
+- **Measured or not.** `screen` in config.toml (top level or the monitor's table, D-94) means the screen is measured; `Config::screen` is `None` without it. Only an unmeasured screen gives islands the theme's corners.
+- **Barely round on a square screen.** On a measured screen the concentric radius is the screen's minus the gap, but at least `MIN_ISLAND_RADIUS` (4 px, with the theme's 0.6 smoothing). That's the corner facing the screen's, and the "auto" `islands` corners when there's no notch to take them from: a screen with corners of 10 px or less has islands with a hint of a squircle. Fully square ones looked wrong, like a bar with no shape of its own. `islands = { radius = … }` still sets them, 0 included.
+- **In from a corner too round to follow.** The first island on the left and the last on the right move in (`Screen::shift`, more padding on that side) until no point of their outline comes closer to the screen's than a quarter pixel short of the gap. Their outlines are flattened (`squircle::Polygons`, moved from the calibrator) and the shift found by bisection, once per setting. An island attached to that side doesn't move; it's flush by design (D-70).
+
+**How precise the even gap is:** measured with the island's and the screen's outlines flattened to 0.005 px.
+- **Circles** (`smoothing = 0`): exactly the gap. The arcs share a center.
+- **Squircles:** the arcs still share a center, but the easing curves on either side of them don't stay parallel, since a Figma squircle one gap in isn't a Figma squircle with the same smoothing. The gap dips to 5.91 px at smoothing 0.65 and 5.80 at 1.0. That's under a fifth of a pixel, so it's kept rather than drawing the island's corner as a true offset curve, which every morph and popover would have to carry.
+- **Squeezed into the island's height:** 5.77 px for a 20 px screen corner on a 30 px island, still within the quarter pixel. From 21 px (logical) on, the island moves in: 0.6 px for 21, 5 for 25, 11 for 30, 22 for 39.
+
+**Alternatives:**
+- **The theme's corners below the gap, as D-73 had it:** a square screen with round islands is what started this.
+- **Square, as the concentric radius says:** tried first. It's exact, but it looked harsh, so there's a floor.
+- **Only the corner facing the screen's follows it:** the others would keep 14 px. The user picked all of them, as "auto" says.
+- **Lowering the island instead of moving it in:** it would break the row of islands at the top, and the notch's island height.
+- **Making the island's corner as round as the screen's:** capped by the island's height, which is the problem.
+
+**Cost:** no dependency. Finding the shift takes up to 3 ms (release) when the screen setting changes, and nothing per frame.
 

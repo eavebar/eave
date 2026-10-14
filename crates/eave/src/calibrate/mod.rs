@@ -162,7 +162,7 @@ fn start(config: &config::ScreenSetting, output: &Output) -> (Shape, NotchShape)
         config::Notch::Auto => found,
     };
     let shape = Shape {
-        screen: config.screen,
+        screen: config.screen.unwrap_or_default(),
         notch,
     };
     let fallback = notch.or(found).unwrap_or(NotchShape {

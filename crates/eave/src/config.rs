@@ -233,7 +233,8 @@ pub struct Islands {
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct ScreenSetting {
     pub notch: Notch,
-    pub screen: Screen,
+    /// `None` when config.toml doesn't say: not measured.
+    pub screen: Option<Screen>,
     pub islands: Islands,
 }
 
@@ -277,7 +278,7 @@ impl Screens {
             .unwrap_or_default();
         ScreenSetting {
             notch: monitor.notch.unwrap_or(self.top.notch),
-            screen: monitor.screen.unwrap_or(self.top.screen),
+            screen: monitor.screen.or(self.top.screen),
             islands: monitor.islands.unwrap_or(self.top.islands),
         }
     }
@@ -407,7 +408,8 @@ pub struct Config {
     pub renderer: Renderer,
     pub theme: Theme,
     pub notch: Notch,
-    pub screen: Screen,
+    /// `None` without a `screen` key: not measured.
+    pub screen: Option<Screen>,
     pub islands: Islands,
     /// `[monitor."…"]` tables, by name: the screen settings of the monitors they match (D-94).
     pub monitors: Vec<(String, MonitorScreen)>,
@@ -494,7 +496,7 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
         config.notch = notch(value, &mut config.warnings);
     }
     if let Some(value) = table.remove("screen") {
-        config.screen = screen(value, &mut config.warnings);
+        config.screen = Some(screen(value, &mut config.warnings));
     }
     if let Some(value) = table.remove("islands") {
         config.islands = islands(value, &mut config.warnings);
@@ -1140,23 +1142,23 @@ mod tests {
 
     #[test]
     fn the_screen_is_a_plain_rectangle_unless_it_says_otherwise() {
-        assert_eq!(parse("").unwrap().screen, Screen::default());
+        assert_eq!(parse("").unwrap().screen, None);
         let config =
             parse("screen = { corners = [20, 20.5, 0, 0], smoothing = 0.6, inset = 2, grow = 4 }")
                 .unwrap();
         assert_eq!(
             config.screen,
-            Screen {
+            Some(Screen {
                 corners: [20.0, 20.5, 0.0, 0.0],
                 smoothing: 0.6,
                 inset: [2.0; 4],
                 grow: 4.0,
-            }
+            })
         );
         assert!(config.warnings.is_empty());
         let odd =
             parse("screen = { corners = [1, 2], smoothing = 3, edge = 1, grow = [1, 2] }").unwrap();
-        assert_eq!(odd.screen, Screen::default());
+        assert_eq!(odd.screen, Some(Screen::default()));
         assert_eq!(odd.warnings.len(), 4, "{:?}", odd.warnings);
     }
 
@@ -1200,15 +1202,21 @@ islands = { radius = 6 }
         .unwrap();
         assert!(config.warnings.is_empty(), "{:?}", config.warnings);
         let screens = config.screens();
-        let corners = |name, description| screens.screen_for(name, description).screen.corners;
+        let corners = |name, description| {
+            screens
+                .screen_for(name, description)
+                .screen
+                .unwrap()
+                .corners
+        };
 
         // The connector's table wins, and what it leaves out comes from the top level.
         let laptop = screens.screen_for("eDP-1", "ViewSonic Corporation XG2431 X");
         assert!(matches!(laptop.notch, Notch::Fixed(shape) if shape.width == 370.0));
-        assert_eq!(laptop.screen.corners, [10.0; 4]);
+        assert_eq!(laptop.screen.unwrap().corners, [10.0; 4]);
         // Then the longest start of the description.
         let desk = screens.screen_for("DP-2", "ViewSonic Corporation XG2431 WEE241700714");
-        assert_eq!(desk.screen.corners, [12.0; 4]);
+        assert_eq!(desk.screen.unwrap().corners, [12.0; 4]);
         assert_eq!(desk.islands.radius, Some(6.0));
         assert_eq!(desk.notch, Notch::Off);
         assert_eq!(corners("DP-3", "ViewSonic Corporation VX2758"), [4.0; 4]);

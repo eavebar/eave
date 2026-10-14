@@ -2223,11 +2223,20 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         ..Place::default()
     };
     let mut left = islands(Zone::Left, Horizontal::Left);
+    // Pushed in from a corner too round for its island to follow, unless attached to that side
+    // (D-95).
+    let mut shift = bar.screen.shift;
+    if left.first().is_some_and(|(_, attach)| attach.left) {
+        shift[0] = 0.0;
+    }
     if !left.is_empty() {
         let (first, attach) = left.remove(0);
         left.insert(0, (placed(first, &bar.screen, corner(Side::Left)), attach));
     }
     let mut right = islands(Zone::Right, Horizontal::Right);
+    if right.last().is_some_and(|(_, attach)| attach.right) {
+        shift[1] = 0.0;
+    }
     if let Some((last, attach)) = right.pop() {
         right.push((placed(last, &bar.screen, corner(Side::Right)), attach));
     }
@@ -2273,9 +2282,9 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     // below them, where a dragged island has room to move and popovers grow.
     let islands = container(zones).padding(Padding {
         top: f32::from(style::EDGE_GAP) + bar.screen.grow,
-        right: style::EDGE_GAP.into(),
+        right: f32::from(style::EDGE_GAP) + shift[1],
         bottom: style::DRAG_ROOM.into(),
-        left: style::EDGE_GAP.into(),
+        left: f32::from(style::EDGE_GAP) + shift[0],
     });
     // Lifted off the screen while the bar hides, far enough to clear it (D-88).
     let islands = Lift::new(islands, bar.out(), bar.surface_height() as f32);

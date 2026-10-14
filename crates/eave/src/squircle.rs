@@ -385,10 +385,103 @@ impl Corner {
     }
 }
 
+/// How far a piece of a flattened curve may be from the curve, in pixels.
+pub const TOLERANCE: f32 = 0.005;
+
+/// The outline as polygons: its curves cut into lines short enough to stay on them.
+#[derive(Default)]
+pub struct Polygons(pub Vec<Vec<Point>>);
+
+impl Polygons {
+    fn last(&mut self) -> Point {
+        self.0
+            .last()
+            .and_then(|polygon| polygon.last())
+            .copied()
+            .unwrap_or(Point::ORIGIN)
+    }
+}
+
+impl Sink for Polygons {
+    fn move_to(&mut self, to: Point) {
+        self.0.push(vec![to]);
+    }
+    fn line_to(&mut self, to: Point) {
+        match self.0.last_mut() {
+            Some(polygon) => polygon.push(to),
+            None => self.0.push(vec![to]),
+        }
+    }
+    fn cubic_to(&mut self, a: Point, b: Point, to: Point) {
+        let from = self.last();
+        // A cubic strays from its chords by at most 3/4 of how far its handles bend away from a
+        // line, over the square of how many pieces it's cut into.
+        let bend = |p: Point, q: Point, r: Point| {
+            Point::new(p.x - 2.0 * q.x + r.x, p.y - 2.0 * q.y + r.y).distance(Point::ORIGIN)
+        };
+        let most = bend(from, a, b).max(bend(a, b, to));
+        let pieces = ((0.75 * most / TOLERANCE).sqrt().ceil() as usize).clamp(1, 1024);
+        for piece in 1..=pieces {
+            let t = piece as f32 / pieces as f32;
+            let u = 1.0 - t;
+            let (w0, w1, w2, w3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+            self.line_to(Point::new(
+                w0 * from.x + w1 * a.x + w2 * b.x + w3 * to.x,
+                w0 * from.y + w1 * a.y + w2 * b.y + w3 * to.y,
+            ));
+        }
+    }
+    fn close(&mut self) {}
+}
+
+/// How close `inner` comes to `outer`: the shortest distance from any point of one outline, as
+/// flattened, to the other's edges. Exact to [`TOLERANCE`], plus how finely `inner` is cut.
+pub fn clearance(outer: &Polygons, inner: &Polygons) -> f32 {
+    let mut closest = f32::INFINITY;
+    for point in inner.0.iter().flatten() {
+        for polygon in &outer.0 {
+            let closed = polygon.iter().zip(polygon.iter().cycle().skip(1));
+            for (a, b) in closed {
+                closest = closest.min(to_segment(*point, *a, *b));
+            }
+        }
+    }
+    closest
+}
+
+/// The distance from `point` to the segment from `a` to `b`.
+fn to_segment(point: Point, a: Point, b: Point) -> f32 {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let length = dx * dx + dy * dy;
+    let t = if length == 0.0 {
+        0.0
+    } else {
+        (((point.x - a.x) * dx + (point.y - a.y) * dy) / length).clamp(0.0, 1.0)
+    };
+    point.distance(Point::new(a.x + t * dx, a.y + t * dy))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use iced::Size;
+
+    #[test]
+    fn concentric_circles_are_their_difference_apart() {
+        let (mut outer, mut inner) = (Polygons::default(), Polygons::default());
+        rectangle(
+            &mut outer,
+            Rectangle::new(Point::ORIGIN, Size::new(100.0, 100.0)),
+            [CornerShape::new(20.0, 0.0); 4],
+        );
+        rectangle(
+            &mut inner,
+            Rectangle::new(Point::new(6.0, 6.0), Size::new(88.0, 88.0)),
+            [CornerShape::new(14.0, 0.0); 4],
+        );
+        let clearance = clearance(&outer, &inner);
+        assert!((clearance - 6.0).abs() < 0.01, "{clearance}");
+    }
 
     #[test]
     fn flowing_shoulders_grow_from_nothing_with_the_corner_below_them() {

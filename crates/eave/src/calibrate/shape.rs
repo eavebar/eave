@@ -10,7 +10,7 @@
 use iced::{Point, Rectangle, Size};
 
 use crate::config::{NotchShape, Screen};
-use crate::squircle::{self, Corner, CornerShape, DOWN, LEFT, RIGHT, Sink, UP};
+use crate::squircle::{self, Corner, CornerShape, DOWN, LEFT, Polygons, RIGHT, Sink, UP};
 
 /// The model: how the screen's edges are rounded and hidden, and its notch.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -103,55 +103,6 @@ pub fn outline(sink: &mut impl Sink, shape: &Shape, size: Size) {
             [CornerShape::new(notch.radius, notch.smoothing); 4],
         );
     }
-}
-
-/// How far a piece of a flattened curve may be from the curve, in pixels.
-const TOLERANCE: f32 = 0.005;
-
-/// The outline as polygons: its curves cut into lines short enough to stay on them.
-#[derive(Default)]
-struct Polygons(Vec<Vec<Point>>);
-
-impl Polygons {
-    fn last(&mut self) -> Point {
-        self.0
-            .last()
-            .and_then(|polygon| polygon.last())
-            .copied()
-            .unwrap_or(Point::ORIGIN)
-    }
-}
-
-impl Sink for Polygons {
-    fn move_to(&mut self, to: Point) {
-        self.0.push(vec![to]);
-    }
-    fn line_to(&mut self, to: Point) {
-        match self.0.last_mut() {
-            Some(polygon) => polygon.push(to),
-            None => self.0.push(vec![to]),
-        }
-    }
-    fn cubic_to(&mut self, a: Point, b: Point, to: Point) {
-        let from = self.last();
-        // A cubic strays from its chords by at most 3/4 of how far its handles bend away from a
-        // line, over the square of how many pieces it's cut into.
-        let bend = |p: Point, q: Point, r: Point| {
-            Point::new(p.x - 2.0 * q.x + r.x, p.y - 2.0 * q.y + r.y).distance(Point::ORIGIN)
-        };
-        let most = bend(from, a, b).max(bend(a, b, to));
-        let pieces = ((0.75 * most / TOLERANCE).sqrt().ceil() as usize).clamp(1, 1024);
-        for piece in 1..=pieces {
-            let t = piece as f32 / pieces as f32;
-            let u = 1.0 - t;
-            let (w0, w1, w2, w3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-            self.line_to(Point::new(
-                w0 * from.x + w1 * a.x + w2 * b.x + w3 * to.x,
-                w0 * from.y + w1 * a.y + w2 * b.y + w3 * to.y,
-            ));
-        }
-    }
-    fn close(&mut self) {}
 }
 
 /// Inside what's shown, along its edge: every one of these should show.

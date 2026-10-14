@@ -54,6 +54,9 @@ pub const ISLAND_RADIUS: f32 = 14.0;
 /// 0.6 is the iOS look). On an island too short for the full spread, the curve is squeezed to fit
 /// rather than the smoothing reduced, so a radius up to half the island's height stays smooth.
 pub const ISLAND_SMOOTHING: f32 = 0.6;
+/// The least an island following the screen's corners is rounded, with `ISLAND_SMOOTHING`: on a
+/// screen with square corners, a hint of a squircle rather than none (D-95).
+pub const MIN_ISLAND_RADIUS: f32 = 4.0;
 /// A live island's padding at its ends while it has no items. With items, it's the room above
 /// and below them (D-78).
 pub const LIVE_ISLAND_PADDING: u16 = 4;

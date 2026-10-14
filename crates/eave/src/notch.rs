@@ -9,7 +9,9 @@
 use std::path::Path;
 
 use crate::config;
-use crate::squircle::CornerShape;
+use iced::{Point, Rectangle, Size};
+
+use crate::squircle::{self, CornerShape};
 use crate::theme;
 
 /// The notch, in logical pixels, centered at the top of the output.
@@ -73,6 +75,12 @@ pub struct Screen {
     pub corners: [CornerShape; 4],
     /// An island's corners where they face neither a screen corner nor the notch.
     pub islands: CornerShape,
+    /// Whether config.toml says how the screen is shaped. Unmeasured, islands keep the theme's
+    /// corners; measured, they follow the screen's, square on a square screen (D-95).
+    pub measured: bool,
+    /// How much further in than the gap the first island on the left, and the last on the
+    /// right, sit: room for a screen corner too round for theirs to follow (D-95).
+    pub shift: [f32; 2],
 }
 
 impl Default for Screen {
@@ -83,9 +91,14 @@ impl Default for Screen {
             grow: 0.0,
             corners: [CornerShape::SQUARE; 4],
             islands: CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING),
+            measured: false,
+            shift: [0.0; 2],
         }
     }
 }
+
+/// How far short of a whole gap an island may come to a screen corner before it moves in (D-95).
+const CLEAR_ENOUGH: f32 = 0.25;
 
 /// A side of an island, or of the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,11 +196,93 @@ impl Screen {
     }
 
     /// A corner one edge gap in from the screen's corner `index`, so the gap between them is the
-    /// same all the way round: none if the screen's is no rounder than the gap.
+    /// same all the way round. Never less round than the theme's least, which a screen no rounder
+    /// than the gap gets. None if the screen isn't measured.
     fn concentric(&self, index: usize) -> Option<CornerShape> {
         let corner = self.corners[index];
         let radius = corner.radius - f32::from(theme::EDGE_GAP);
-        (radius > 0.0).then(|| CornerShape::new(radius, corner.smoothing))
+        let shape = if radius < theme::MIN_ISLAND_RADIUS {
+            CornerShape::new(theme::MIN_ISLAND_RADIUS, theme::ISLAND_SMOOTHING)
+        } else {
+            CornerShape::new(radius, corner.smoothing)
+        };
+        self.measured.then_some(shape)
+    }
+
+    /// How far in the island at the screen's corner on `side` has to move for the gap to it to
+    /// stay a whole gap: none unless the corner is rounder than an island can follow, whose
+    /// corners reach at most halfway down it.
+    fn corner_shift(&self, side: Side) -> f32 {
+        let gap = f32::from(theme::EDGE_GAP);
+        let (index, place) = match side {
+            Side::Left => (
+                0,
+                Place {
+                    screen_corner: Some(Side::Left),
+                    ..Place::default()
+                },
+            ),
+            Side::Right => (
+                1,
+                Place {
+                    screen_corner: Some(Side::Right),
+                    ..Place::default()
+                },
+            ),
+        };
+        let screen = self.corners[index];
+        if !self.measured || screen.radius <= gap {
+            return 0.0;
+        }
+        // Mirrored for the right: the island's corner facing the screen's is its top left, and
+        // the one below it its bottom left.
+        let corners = self.island_corners(place);
+        let [facing, below] = match side {
+            Side::Left => [corners[0], corners[3]],
+            Side::Right => [corners[1], corners[2]],
+        };
+        // The screen from its corner on: far enough on that its other corners don't count.
+        let far = 1.0e4;
+        let mut outer = squircle::Polygons::default();
+        squircle::rectangle(
+            &mut outer,
+            Rectangle::new(Point::ORIGIN, Size::new(far, far)),
+            [
+                screen,
+                CornerShape::SQUARE,
+                CornerShape::SQUARE,
+                CornerShape::SQUARE,
+            ],
+        );
+        let height = self.island_height();
+        // Wide enough that its far corners are well past the screen's.
+        let width = height.max(2.0 * (1.0 + screen.smoothing) * screen.radius + height);
+        let clearance = |shift: f32| {
+            let mut island = squircle::Polygons::default();
+            squircle::rectangle(
+                &mut island,
+                Rectangle::new(Point::new(gap + shift, gap), Size::new(width, height)),
+                [facing, CornerShape::SQUARE, CornerShape::SQUARE, below],
+            );
+            squircle::clearance(&outer, &island)
+        };
+        // A quarter of a pixel short is as good as there: a squircle's corner one gap in already
+        // strays a tenth of one from the gap (D-95), and a corner squeezed into an island's
+        // height a little more.
+        let enough = gap - CLEAR_ENOUGH;
+        if clearance(0.0) >= enough {
+            return 0.0;
+        }
+        let (mut near, mut far) = (0.0, screen.radius * (1.0 + screen.smoothing));
+        for _ in 0..20 {
+            let middle = (near + far) / 2.0;
+            if clearance(middle) >= enough {
+                far = middle;
+            } else {
+                near = middle;
+            }
+        }
+        far
     }
 
     /// `islands` from config.toml: what it says, or the notch's corners, else the screen's top
@@ -239,8 +334,11 @@ pub async fn resolve(screens: config::Screens, output: Option<String>) -> (Optio
             None => None,
         },
     };
+    let measured = screen.is_some();
+    let screen = screen.unwrap_or_default();
     let mut resolved = Screen {
         notch,
+        measured,
         inset: screen.inset.map(|inset| inset / scale),
         grow: screen.grow / scale,
         corners: screen
@@ -249,6 +347,7 @@ pub async fn resolve(screens: config::Screens, output: Option<String>) -> (Optio
         ..Screen::default()
     };
     resolved.resolve_islands(islands, scale);
+    resolved.shift = [Side::Left, Side::Right].map(|side| resolved.corner_shift(side));
     (output.or(monitor.map(|monitor| monitor.name)), resolved)
 }
 
@@ -417,6 +516,7 @@ mod tests {
                 CornerShape::new(0.5, 0.65),
                 CornerShape::new(0.5, 0.65),
             ],
+            measured: true,
             ..Screen::default()
         };
         screen.resolve_islands(islands, 2.0);
@@ -482,6 +582,97 @@ mod tests {
         assert_eq!(screen.island_corners(place), [theme; 4]);
     }
 
+    /// A screen measured with these corners, and its islands as they'd be resolved.
+    fn measured(radius: f32, smoothing: f32) -> Screen {
+        let mut screen = Screen {
+            corners: [CornerShape::new(radius, smoothing); 4],
+            measured: true,
+            ..Screen::default()
+        };
+        screen.resolve_islands(config::Islands::default(), 1.0);
+        screen
+    }
+
+    #[test]
+    fn a_measured_square_screen_has_barely_round_islands() {
+        let screen = measured(1.0, 0.65);
+        let place = Place {
+            screen_corner: Some(Side::Left),
+            ..Place::default()
+        };
+        let least = CornerShape::new(theme::MIN_ISLAND_RADIUS, theme::ISLAND_SMOOTHING);
+        assert_eq!(screen.island_corners(place), [least; 4]);
+        // A little rounder, and they follow it again.
+        assert_eq!(
+            measured(12.0, 0.65).island_corners(place),
+            [CornerShape::new(6.0, 0.65); 4]
+        );
+        assert_eq!(screen.corner_shift(Side::Left), 0.0);
+        // Unless config.toml rounds them.
+        let mut screen = measured(1.0, 0.65);
+        screen.resolve_islands(
+            config::Islands {
+                radius: Some(8.0),
+                smoothing: None,
+            },
+            1.0,
+        );
+        assert_eq!(
+            screen.islands,
+            CornerShape::new(8.0, theme::ISLAND_SMOOTHING)
+        );
+    }
+
+    #[test]
+    fn islands_stay_where_they_are_at_corners_they_can_follow() {
+        for (radius, smoothing) in [(20.0, 0.65), (19.5, 0.65), (13.5, 0.0), (6.0, 1.0)] {
+            let screen = measured(radius, smoothing);
+            assert_eq!(screen.corner_shift(Side::Left), 0.0, "{radius}");
+            assert_eq!(screen.corner_shift(Side::Right), 0.0, "{radius}");
+        }
+    }
+
+    #[test]
+    fn islands_move_in_from_corners_too_round_to_follow() {
+        let screen = measured(39.0, 0.65);
+        let shift = screen.corner_shift(Side::Left);
+        assert!(shift > 1.0, "{shift}");
+        assert_eq!(screen.corner_shift(Side::Right), shift);
+        // As far as it takes, and no further: the gap is whole at the shift, a pixel less isn't.
+        let gap = f32::from(theme::EDGE_GAP);
+        let clearance = |shift: f32| {
+            let mut outer = squircle::Polygons::default();
+            squircle::rectangle(
+                &mut outer,
+                Rectangle::new(Point::ORIGIN, Size::new(1.0e4, 1.0e4)),
+                [
+                    screen.corners[0],
+                    CornerShape::SQUARE,
+                    CornerShape::SQUARE,
+                    CornerShape::SQUARE,
+                ],
+            );
+            let corners = screen.island_corners(Place {
+                screen_corner: Some(Side::Left),
+                ..Place::default()
+            });
+            let mut island = squircle::Polygons::default();
+            squircle::rectangle(
+                &mut island,
+                Rectangle::new(Point::new(gap + shift, gap), Size::new(200.0, 30.0)),
+                corners,
+            );
+            squircle::clearance(&outer, &island)
+        };
+        let enough = gap - CLEAR_ENOUGH;
+        assert!(clearance(shift) >= enough, "{}", clearance(shift));
+        assert!(
+            clearance(shift - 1.0) < enough,
+            "{}",
+            clearance(shift - 1.0)
+        );
+    }
+
     #[test]
     fn auto_islands_are_the_notchs_then_the_screens() {
         let screen = macbook(config::Islands::default());
@@ -533,12 +724,13 @@ mod tests {
             screen.island_corners(after_notch),
             [shoulder, free, free, notch]
         );
-        // A screen corner no rounder than the gap leaves the island's as it was.
+        // A screen corner no rounder than the gap leaves the island's barely round.
         let square = Screen {
             corners: [CornerShape::new(4.0, 0.0); 4],
             ..screen
         };
-        assert_eq!(square.island_corners(left), [free; 4]);
+        let least = CornerShape::new(theme::MIN_ISLAND_RADIUS, theme::ISLAND_SMOOTHING);
+        assert_eq!(square.island_corners(left), [least, free, free, free]);
     }
 
     #[test]
