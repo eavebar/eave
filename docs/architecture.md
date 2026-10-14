@@ -46,7 +46,7 @@ Core plugins depend only on Hyprland and the kernel, plus an audio server for vo
 
 - Each widget instance's `subscription()` is tagged with the instance's stable id and mapped to `Message::Widget(id, AnyMessage)` ([D-15](decisions.md)). `update` hands the message to that instance only. Messages for an id that no longer exists (removed by a reload) are dropped.
 - `config.toml` is watched with inotify. When it changes, the host re-reads it and rebuilds only the instances whose entry changed ([D-21](decisions.md)).
-- A widget's `update` returns an `Effect`: a `Task` for async work, plus optional requests to open or close its popover, or to nudge its island. `update` never does I/O.
+- A widget's `update` returns an `Effect`: a `Task` for async work, plus optional requests to open or close its popover or its dialog, or to nudge its island. `update` never does I/O.
 - `view(window)` is pure. For the bar it lays out the left, center and right zones from `config.toml`, each as one or more squircle islands side by side, each only as wide as its items. The center zone stays centered on screen unless a side's islands reach it, and is then pushed aside. An island with nothing to show isn't drawn ([D-24](decisions.md)). Items marked `collapsible` are left out while their island is collapsed, and `divider` entries put a line between two items that show ([D-55](decisions.md)). When items come or go, the island morphs: its edges spring to the new size, items slide to their new places and new ones fade in ([D-27](decisions.md)). Pressing an island squeezes it; dragging stretches it toward the pointer with a rubber band, most where it was grabbed, and it springs back on release ([D-26](decisions.md), [D-45](decisions.md)). An open popover stretches the same way when a press on it isn't a control's. A widget's nudge pushes the island a little that way and pokes its outline, a jelly of springs that smooths the poke out by itself: the edge bulges at the item, and the island swells on the side it's going toward ([D-32](decisions.md)). Each item is wrapped in a `Slot`, which turns unhandled clicks and scroll steps into messages. An open popover's `Panel` is drawn by the island it grew out of.
 - Nothing is drawn when no message arrives. Pointer tracking is only subscribed while a popover is open, so hovering over the bar sends the app no messages. The pointer entering or leaving an item does redraw it: its `Slot` tells the alternates inside, which fade to their hover option and back ([D-35](decisions.md)). Moving within an item, or resting on it, draws nothing. An island with collapsible items does the same for itself: the pointer entering it makes room for its chevron, and leaving gives the room back, with no message to the app ([D-55](decisions.md)).
 
@@ -81,6 +81,15 @@ The dormer is the host's search dialog for widgets' actions ([D-84](decisions.md
 4. A pick (`Run`) closes the dormer, remembers the pick, and sends the action's message to its widget through the usual `Message::Widget` route, or opens the widget's popover.
 5. It closes like a popover: Esc, a key the field doesn't take, a click elsewhere, or the keybind again. When its island is back, it reports `Closed` and the surface shrinks.
 
+## Dialogs
+
+A widget's dialog is its panel in the middle of the screen ([D-88](decisions.md)). It shares the dormer's island and machinery:
+
+1. The widget returns `open_dialog()`. The host looks at what was last acted on (`Bar::touched`), set by an item press (`Touched`), a message from a popover or a notification card (`Acted`), or a dormer pick. If that was within a second, the dialog comes out of it. Otherwise it comes out of the top.
+2. Picked in the dormer, the dormer turns into the dialog on the spot. Otherwise the host looks up where its top goes, as it does for the dormer (`Dialog(Opened(top))`). Opening it closes any popover, which folds back into its island as the drop falls out of it.
+3. `view` hands the island in the middle the dialog's panel, with the key `DIALOG`, `Placement::Centered`, and a drop from where it comes out. Out of an island, that island writes where its bottom is drawn to the dialog's `Spouts` each time it draws, and the drop's neck flows from there. Out of the top, it's the notch's sag, as for the dormer. As the neck lets go and catches it (`Neck`), what it comes out of squishes: the island through `Island::kick`, the notch through `Zones`.
+4. Placing, growing the surface, the input region, the keyboard and closing are the dormer's (`Placed`, `Closed`). It also closes when the widget returns `close_dialog()` or stops offering a dialog.
+
 ## Data sources by widget
 
 | Widget | Source | Mechanism |
@@ -106,7 +115,7 @@ Cargo.toml                 workspace, release profile
 crates/eave-api/           the plugin SDK: what plugin authors depend on
   src/widget.rs            the Widget trait
   src/ui.rs                the closed vocabulary: Node, Item, Panel, Notice, Action, Tone
-  src/effect.rs            Effect: a Task plus popover requests
+  src/effect.rs            Effect: a Task plus popover and dialog requests
   src/registry.rs          Registry: widget name → constructor
   src/erased.rs            type erasure for the host (doc-hidden)
 crates/eave/               the host, as a library (`eave::run`) plus the default binary
@@ -119,8 +128,9 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/icon.rs              status icons (volume, Wi-Fi, wired, battery, brightness, media) as vector paths
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
   src/cover.rs             covers: a file or https URL → cropped, rounded 32 and 256 px bitmaps, off the UI thread
+  src/dialog.rs            a widget's dialog: where it comes out of, and what was last acted on
   src/dormer.rs            the dormer's list: what widgets offer, ranked for what's typed, the selection and recent picks
-  src/neck.rs              the neck the dormer's drop hangs on: the smooth union of the notch's bottom and the drop, row by row
+  src/neck.rs              the neck a drop hangs on: the smooth union of the bottom it comes out of and the drop, row by row
   src/theme.rs             every color, size and font
   src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay, switching popovers mid-morph, the collapse chevron on hover
   src/squish.rs            how squished the items being drawn are, set by their island

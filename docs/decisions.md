@@ -1864,3 +1864,29 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 - a `-symbolic` lookup tinted like `symbol`: still depends on the theme having it.
 - the battery plugin sending an `x-eave-*` hint: other apps' device notifications (a volume OSD, a VPN) would still show letters.
 
+
+---
+
+## D-88: Widgets' dialogs drop out of what opened them
+
+**Status:** accepted (2026-10-14).
+
+**What:** a widget can have a dialog: a panel in the middle of the screen, for what needs more room than a popover. eave-claude's chat is the first.
+- **The API.** `Widget::dialog()` returns its `Panel`, like `popover()`, and `Panel::on_open`/`on_close` work the same. `Effect::open_dialog()` and `close_dialog()` ask for it. A click never opens it. Returning `None` while it's open closes it. To keep `Effect::into_parts` the same shape for the plugins that test with it, the host reads the request through a hidden `Effect::dialog_request()`.
+- **One island in the middle** holds the dormer or a dialog (`center_view`). It's `DIALOG_WIDTH` (640) wide, and a `scroll` in it grows to `DIALOG_SCROLL_MAX_HEIGHT` (600) before it scrolls (`kit::dialog`). Its top is a fifth of the way down the screen, as the dormer's is. A dialog takes the keyboard while it's open, and closes on what closes the dormer: Esc, a key its field doesn't keep, or a click elsewhere. It also closes when its widget asks. A dialog, the dormer and popovers take turns.
+- **It comes out of what was acted on.** The host notes what was last touched, and when (`Touched`): an item (`Touched`), a message from a popover's content or a notification card (`Acted`), or a dormer pick. A dialog asked for within `ORIGIN_WINDOW` (1 s) of that comes out of it. Anything later or unprompted comes out of the notch, or the top edge, like the dormer.
+  - **Out of an island:** the drop's dot rests at the middle of that island's bottom, as drawn. The island writes it to a shared cell (`Spouts`) each time it draws, as `Zones` does for the notch (D-86). So the neck follows a popover as it folds back into its island: opening a dialog closes the popover, which folds as the drop falls out of it. The neck spreads along the island's bottom, short of its corners. The drop waits for the island to say where it is, a few frames at most, and then comes out of the top. The island pinches as the drop leaves, and flattens as it lands back (`Island::kick`), with the notch's sizes.
+  - **Out of a notification:** the same, out of the island the notifications show in. The click goes over the bus to eave-notifications, then to the widget that sent it, which asks for its dialog. The time window covers that round trip.
+  - **Out of the dormer:** a pick that asks for a dialog turns the dormer into it. The same island takes the dialog's key, the shape springs on to the new panel, the new content fades in, and it goes back into the notch.
+- **The neck leans.** Each row of the neck centers on the drop, not on where it comes out, and is kept to the root's reach (`neck.rs`). So a drop under an island off to the side, or one heading for the middle, flows out of it without a step. While the drop is right under the root, the rows are the same as before.
+
+**Why:** a chat in a 480 px popover hung from a small island reads as squeezed, and covers the bar's side. The middle of the screen is where the dormer already is. Coming out of what you clicked keeps the cause and the effect together, the way a popover grows out of its island. A dialog out of the notch would look like the dormer for no reason.
+
+**Alternatives:**
+- **the popover staying open behind:** the user chose the fold. Two panels at once compete, and Esc would have to close one and not the other.
+- **always out of the notch:** one path, but it breaks the link with what was clicked.
+- **a host-side link from the notification to the dialog** (the engine passing on where the click was): the click goes through two plugins and the session bus, so the host can't see the link without a protocol of its own. The time window is enough, and harmless when it misses: then the dialog comes out of the top.
+- **a separate layer surface for the dialog:** the same reasons as for popovers (D-28). It's drawn on the bar surface, which grows to fit, with an input region.
+- **changing `Effect::into_parts`** to return a struct: cleaner, but it breaks plugins' tests that read the tuple, in a patch release.
+
+**Measured** (Asahi aarch64, release, the user's config with eave-claude and eave-notifications, both renderers built in, run on tiny-skia on a session bus of its own, three alternating runs against main): binary unchanged to the byte at 19,427,344 B (the code fits in the padding of the page-aligned sections); RSS ~23.3 MB both, within noise; idle CPU the same on both (~3.7%, from the mascot's question loop with a session asking). Nothing runs while no dialog is open, apart from a `Cell` write while the island draws, and only for the island a dialog comes out of. No dependency.
