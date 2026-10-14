@@ -1804,3 +1804,22 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 
 **Measured** (CachyOS x86_64, release, the user's config, both renderers built in, run on tiny-skia on a session bus of its own, two alternating runs against main): binary +128 KiB (18.40 → 18.53 MiB); RSS unchanged within noise, ~23.4 MB idle and ~27.7 MB with one notification shown, against ~23.6 and ~27.3 on main. No dependency. The time in a card's corner moves on with a one-minute subscription, only while the panel shows a notice with a time.
 
+---
+
+## D-86: Every notification has an icon; workspaces' app icons are optional
+
+**Status:** accepted (2026-10-14). Amends [D-38](#d-38-app-icons-found-and-drawn-by-the-host) and [D-85](#d-85-notification-cards-fixed-slots-pictures-choices-stacks).
+
+**What:**
+- `Notice::icon(Icon)` (eave-api 0.1.7) gives a notice a status symbol as its icon, drawn in the text's tone. It wins over `app_icon`.
+- The card's icon is the symbol, else the app's icon, else a bell: a notice with no app, or whose app's icon the host looked for and didn't find, gets the bell instead of the id's first letter. One still loading keeps its place empty. Elsewhere `app_icon` still falls back to the letter: in a workspace, the letter tells apps apart.
+- eave-notifications maps icon names from the freedesktop naming spec that are about the device to eave's symbols: `battery-*` (filled by `caution`, `low`, `good`, `full`, charging for `charging`/`charged`), `audio-volume-*`, microphones, `network-wireless-*`, `network-wired`, brightness, media controls, headphones, speakers, displays, `dialog-information` and bells, with or without `-symbolic`. The battery plugin keeps sending `battery-caution` over the bus, so mako and dunst still find it in their theme.
+- The workspaces widget shows only names unless `icons = true`.
+
+**Why:** the battery's notification showed a "B": the name it sends is in Adwaita and Breeze, not in `hicolor`, which is all a system without a GTK theme set has. A status symbol is what the bar draws for the battery anyway, so the card matches the bar. The mapping lives in the notification engine, not the host, because it's about a bus convention, and the host only learns of symbols (D-13). As for workspaces, names alone are what most bars show, and quieter; the icons stay one key away.
+
+**Alternatives:**
+- falling back to `Adwaita` in the host's lookup: color, raster art for device states that eave draws as symbols, and only if Adwaita is installed.
+- a `-symbolic` lookup tinted like `symbol`: still depends on the theme having it.
+- the battery plugin sending an `x-eave-*` hint: other apps' device notifications (a volume OSD, a VPN) would still show letters.
+
