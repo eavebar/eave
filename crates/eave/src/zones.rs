@@ -10,6 +10,7 @@
 //! grows it (D-81). The dormer's drop squishes them, within what they're grown by (D-86).
 
 use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Instant;
 
 use iced::advanced::Renderer as _;
@@ -37,7 +38,15 @@ pub struct Zones<'a, M> {
     /// The latest kick from the dormer's drop, with its number. Only one newer than the zones have
     /// seen plays.
     kick: Option<(u64, Kick)>,
+    /// Where the zones say how far the middle of the notch's bottom (or the edge's) is from where
+    /// it rests, as last drawn, if given.
+    sag: Option<Sag>,
 }
+
+/// How far the middle of the bottom of what the dormer's drop comes out of is from where it
+/// rests, as drawn (down is positive). The zones draw it and write it; the drop's neck flows from
+/// there, so the two never come apart while the notch squishes.
+pub type Sag = Rc<Cell<f32>>;
 
 /// What the dormer's drop does to what it comes out of (D-86).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +99,7 @@ impl<'a, M> Zones<'a, M> {
             at: 0.0,
             edge: None,
             kick: None,
+            sag: None,
         }
     }
 
@@ -116,6 +126,7 @@ impl<'a, M> Zones<'a, M> {
             at,
             edge: None,
             kick: None,
+            sag: None,
         }
     }
 
@@ -130,6 +141,12 @@ impl<'a, M> Zones<'a, M> {
     /// grown edge) when a newer one comes.
     pub fn kick(mut self, kick: Option<(u64, Kick)>) -> Self {
         self.kick = kick;
+        self
+    }
+
+    /// Writes where the notch's bottom (or the edge's) is drawn to `sag`, each time it's drawn.
+    pub fn sag(mut self, sag: Option<Sag>) -> Self {
+        self.sag = sag;
         self
     }
 
@@ -351,6 +368,11 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
             let gap = f32::from(theme::EDGE_GAP);
             let width = bounds.width + 2.0 * gap;
             let bump = (state.dip.value, state.dip_width);
+            if self.notch.is_none()
+                && let Some(sag) = &self.sag
+            {
+                sag.set(bump_at(width / 2.0, width / 2.0, bump, grow));
+            }
             let drawn = (grow, corners, width, bump);
             if state.edge_drawn.replace(Some(drawn)) != Some(drawn) {
                 state.edge_cache.clear();
@@ -365,8 +387,11 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
             renderer.with_translation(at, |renderer| renderer.draw_geometry(geometry));
         }
         // Under the islands, so what's fused to it covers it.
-        if let Some((notch, _)) = self.notch {
-            let notch = squished(notch, state.stretch_x.value, state.stretch_y.value);
+        if let Some((rest, _)) = self.notch {
+            let notch = squished(rest, state.stretch_x.value, state.stretch_y.value);
+            if let Some(sag) = &self.sag {
+                sag.set(notch.height - rest.height);
+            }
             let drawn = (notch, self.at);
             if state.drawn.replace(Some(drawn)) != Some(drawn) {
                 state.cache.clear();

@@ -39,6 +39,7 @@ use crate::spring::{FADE, HAND, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
 use crate::squircle::{self, CornerShape, squircle_corners, warp};
 use crate::squish::{self, Squish};
 use crate::theme;
+use crate::zones::Sag;
 
 pub struct Island<'a, M> {
     /// Each item's key, which follows it when items before it come or go.
@@ -118,6 +119,9 @@ pub struct Popover<'a, M> {
     /// Sent as a drop's neck lets go of it (false) or catches it back (true), if given: the moment
     /// it leaves where it comes out of, and touches it again.
     pub on_neck: Option<Box<dyn Fn(bool) -> M + 'a>>,
+    /// How far the bottom of what a drop comes out of is from where it rests right now, as drawn
+    /// by whatever draws it, if given: its neck flows from there, so they never come apart.
+    pub sag: Option<Sag>,
 }
 
 /// Turns a key into a message, or leaves it alone.
@@ -321,6 +325,8 @@ struct Motion {
     drop: Option<f32>,
     /// The island's corners, which a drop rounds off into.
     corner: CornerShape,
+    /// How far what a drop comes out of has moved its bottom ([`Popover::sag`]).
+    sag: Option<Sag>,
     /// The newest nudge already played, once the island has been laid out.
     seen: Option<u64>,
     /// The fastest the island has slid as a whole in the push going on, signed (negative is
@@ -352,6 +358,7 @@ impl Default for Motion {
             stretch_y: Spring::new(0.0, REACT),
             drop: None,
             corner: CornerShape::SQUARE,
+            sag: None,
             seen: None,
             pushed: 0.0,
             pushing: 0.0,
@@ -841,10 +848,11 @@ impl Motion {
         }
     }
 
-    /// Where the shape rests: the island, or for a drop, a dot where it comes out.
+    /// Where the shape rests: the island, or for a drop, a dot where it comes out, wherever that's
+    /// drawn right now.
     fn home(&self, island: Rectangle) -> Rectangle {
         match self.drop {
-            Some(y) => Rectangle::new(Point::new(island.center_x(), y), Size::ZERO),
+            Some(y) => Rectangle::new(Point::new(island.center_x(), y + self.sag()), Size::ZERO),
             None => island,
         }
     }
@@ -861,6 +869,11 @@ impl Motion {
             ..ball
         };
         Some(if out { [swell, ball] } else { [ball, swell] })
+    }
+
+    /// How far the bottom of what a drop comes out of is drawn from where it rests.
+    fn sag(&self) -> f32 {
+        self.sag.as_ref().map_or(0.0, |sag| sag.get())
     }
 
     /// The ball a drop goes by, on its way out and back: under where it comes out.
@@ -907,7 +920,7 @@ impl Motion {
         };
         let size = (shape.width.min(shape.height) / theme::DROP_BALL).min(1.0);
         let root = neck::Root {
-            y,
+            y: y + self.sag(),
             x: island.center_x(),
             spread: theme::NECK_SPREAD,
             blend: theme::NECK_BLEND * size,
@@ -1881,6 +1894,10 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         motion.swap(self.popover.as_ref().map(|popover| popover.key));
         motion.drop = self.popover.as_ref().and_then(|popover| popover.drop);
         motion.corner = self.corners[0];
+        motion.sag = self
+            .popover
+            .as_ref()
+            .and_then(|popover| popover.sag.clone());
         // A hidden toggle isn't arranged, so it isn't drawn, and fades in when it shows.
         let positions = self
             .keys
@@ -2390,6 +2407,23 @@ mod tests {
         );
         assert_eq!(motion.edges.rect(), home);
         assert!(motion.closing_done());
+    }
+
+    #[test]
+    fn a_drop_follows_the_bottom_it_comes_out_of_as_that_squishes() {
+        let sag = Sag::default();
+        let mut motion = Motion {
+            drop: Some(40.0),
+            sag: Some(sag.clone()),
+            ..Motion::default()
+        };
+        motion.arrange(rect(100.0, 120.0), [(1, 110.0)].into_iter(), None);
+        assert_eq!(motion.home(rect(100.0, 120.0)).y, 40.0);
+        // The notch flattens 3 px: home, and where the neck flows from, go up with it.
+        sag.set(-3.0);
+        assert_eq!(motion.home(rect(100.0, 120.0)).y, 37.0);
+        let ball = Rectangle::new(Point::new(147.0, 38.0), Size::new(26.0, 26.0));
+        assert!(motion.neck(ball).is_some_and(|neck| neck.joined()));
     }
 
     #[test]

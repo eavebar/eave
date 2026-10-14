@@ -69,6 +69,9 @@ pub struct Bar {
     recent: Recent,
     /// What the dormer's drop last did to the notch or the edge it comes out of, numbered (D-86).
     notch_kick: Option<(u64, zones::Kick)>,
+    /// How far the notch's bottom (or the edge's) is drawn from where it rests, on the dormer's
+    /// bar: the drop's neck flows from there.
+    notch_sag: zones::Sag,
     /// Bar surfaces, in the order they opened.
     windows: Vec<window::Id>,
     /// Numbers the expiry timer, so only the one set last counts.
@@ -296,6 +299,7 @@ impl Bar {
             notices: None,
             dormer: None,
             notch_kick: None,
+            notch_sag: zones::Sag::default(),
             recent: Recent::default(),
             windows: Vec::new(),
             timer: 0,
@@ -1633,7 +1637,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     .kick(
         bar.notch_kick
             .filter(|_| bar.toast_window() == Some(window)),
-    );
+    )
+    .sag((bar.toast_window() == Some(window)).then(|| bar.notch_sag.clone()));
 
     // No background of its own: the surface is transparent around and between the islands, and
     // below them, where a dragged island has room to move and popovers grow.
@@ -1757,6 +1762,7 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         placement: Placement::Centered { top: session.top },
         drop: Some(dormer_drop(&bar.screen)),
         on_neck: Some(Box::new(|caught| Message::Dormer(Event::Neck(caught)))),
+        sag: Some(bar.notch_sag.clone()),
         on_key: Some(Box::new(|key| {
             use keyboard::key::Named;
             match key {
@@ -1925,6 +1931,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         on_key: None,
         drop: None,
         on_neck: None,
+        sag: None,
     }
 }
 
@@ -1997,6 +2004,7 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
         on_key: None,
         drop: None,
         on_neck: None,
+        sag: None,
     }
 }
 
