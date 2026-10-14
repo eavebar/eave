@@ -184,7 +184,7 @@ terminal = "foot"   # optional: for apps that run in a terminal
 
 ## Shortcuts
 
-Some popovers and actions have keys of their own, shown as keycaps on their rows: in eave-claude's popover, `1` to `9` and `0` open the first ten chats. They work only while that popover, or the dormer, is open. Give one another key, or none, in its widget's entry of config.toml, by the name its README gives it ([D-88](decisions.md)):
+Some popovers and actions have keys of their own, shown as keycaps on their rows: in eave-claude's popover, `1` to `9` and `0` open the first ten chats. They work only while that popover, or the dormer, is open. Give one another key, or none, in its widget's entry of config.toml, by the name its README gives it ([D-91](decisions.md)):
 
 ```toml
 [[right]]

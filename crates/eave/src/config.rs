@@ -89,7 +89,7 @@ pub struct Entry {
     pub live: bool,
     /// The screen edges its island is attached to, set on the marker that starts it.
     pub attach: Edges,
-    /// The keys the user gives its shortcuts, by name (D-88).
+    /// The keys the user gives its shortcuts, by name (D-91).
     pub keys: shortcut::Keys,
     pub options: toml::Table,
 }

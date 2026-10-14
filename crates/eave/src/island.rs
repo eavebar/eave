@@ -109,7 +109,7 @@ pub struct Popover<'a, M> {
     /// Where it goes: under the island, or across the middle of the surface.
     pub placement: Placement,
     /// Turns a key the panel's content left alone into a message, if given: the dormer's arrows
-    /// pick a row while its field keeps the rest, a widget's shortcuts press its rows (D-88).
+    /// pick a row while its field keeps the rest, a widget's shortcuts press its rows (D-91).
     pub on_key: Option<OnKey<'a, M>>,
     /// Comes out as a drop instead of growing out of the island, if given: from this far down the
     /// surface, under the island's middle (D-86). At rest it's a dot there. It swells into a ball
@@ -1361,7 +1361,7 @@ enum KeyAction {
 
 /// Any key closes a popover, unless a text field in it has the focus. Esc always closes it, even
 /// while typing (D-41). A modifier alone keeps it, since it may start a shortcut like Ctrl+K
-/// (D-88).
+/// (D-91).
 fn key_policy(key: &keyboard::Key, field_focused: bool) -> KeyAction {
     use key::Named::{Alt, Control, Escape, Shift, Super};
     match key {
@@ -2727,7 +2727,7 @@ mod tests {
         assert_eq!(key_policy(&letter, true), KeyAction::Keep);
         assert_eq!(key_policy(&shift, true), KeyAction::Keep);
         assert_eq!(key_policy(&letter, false), KeyAction::Close);
-        // A modifier alone may start a shortcut (D-88).
+        // A modifier alone may start a shortcut (D-91).
         assert_eq!(key_policy(&shift, false), KeyAction::Keep);
         assert_eq!(key_policy(&control, false), KeyAction::Keep);
     }

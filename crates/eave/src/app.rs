@@ -254,9 +254,9 @@ pub enum Message {
     ToastTimer(u64),
     /// Something happened to the dormer.
     Dormer(dormer::Event),
-    /// `eave popover <widget>`: open that widget's popover, or close it (D-88).
+    /// `eave popover <widget>`: open that widget's popover, or close it (D-91).
     TogglePopover(String),
-    /// `eave action <widget> <id>`: run that widget's action (D-88).
+    /// `eave action <widget> <id>`: run that widget's action (D-91).
     RunAction(String, String),
     /// A collapsed item's time out is up, if this is still its last reveal.
     Unreveal(u64, u64),
@@ -1880,7 +1880,7 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
                     Some(Message::Dormer(Event::Move(1)))
                 }
                 keyboard::Key::Named(Named::ArrowUp) => Some(Message::Dormer(Event::Move(-1))),
-                // Every action's key, shown or not. None of them types (D-88).
+                // Every action's key, shown or not. None of them types (D-91).
                 _ => keys
                     .iter()
                     .find(|(shortcut, _)| shortcut::matches(shortcut, key, modifiers))
@@ -2040,7 +2040,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         }
         None => Space::new().into(),
     };
-    // The rows' shortcuts press them; one that types gives way to a focused field (D-88).
+    // The rows' shortcuts press them; one that types gives way to a focused field (D-91).
     let on_key: Option<island::OnKey<'_, Message>> = (!keys.is_empty()).then(|| {
         Box::new(move |key: &keyboard::Key, modifiers, typing| {
             keys.iter()

@@ -143,7 +143,7 @@ pub struct Shortcut {
 }
 
 /// A row's named shortcut: the name config.toml rebinds it by, and the key it has now. The host
-/// replaces the plugin's key with the user's, or none, before drawing and binding it (D-88).
+/// replaces the plugin's key with the user's, or none, before drawing and binding it (D-91).
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {

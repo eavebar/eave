@@ -52,7 +52,7 @@ pub struct Entry {
     pub title: String,
     pub subtitle: Option<String>,
     pub keywords: Vec<String>,
-    /// What runs it while the dormer is open, from config.toml or its widget (D-88).
+    /// What runs it while the dormer is open, from config.toml or its widget (D-91).
     pub key: Option<Shortcut>,
 }
 

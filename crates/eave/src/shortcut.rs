@@ -1,4 +1,4 @@
-//! Shortcuts (D-88): finding the keys a popover's rows name ([`eave_api::ui::Node::shortcut`]) and
+//! Shortcuts (D-91): finding the keys a popover's rows name ([`eave_api::ui::Node::shortcut`]) and
 //! the ones the dormer's actions name, giving each the key the user set in config.toml or else the
 //! plugin's, telling whether a key press is one, and the labels on their keycaps.
 
