@@ -421,9 +421,6 @@ impl Bar {
         for id in ids {
             self.sync_notices(id);
         }
-        if let Some(window) = self.toast_window() {
-            tasks.push(self.fit(window));
-        }
 
         // An island that no longer has collapsible items starts collapsed if it gets some again.
         let instances = &self.instances;
@@ -441,6 +438,8 @@ impl Bar {
         tasks.extend(gone.iter().map(|popover| self.fit(popover.window)));
         self.refresh_dormer();
         self.config = config;
+        // Fitted to the new config: how the bar shows and how it's drawn size the surfaces.
+        tasks.extend(self.windows.iter().map(|window| self.fit(*window)));
         Task::batch(tasks)
     }
 
@@ -782,7 +781,7 @@ impl Bar {
         let height = rects
             .iter()
             .map(|rect| (rect.y + rect.height).ceil() as u32 + u32::from(style::EDGE_GAP))
-            .fold(self.screen.surface_height(), u32::max);
+            .fold(self.surface_height(), u32::max);
         // A hidden bar takes the pointer only at the top edge, if hovering brings it out (D-88).
         let strip = if self.out() {
             self.screen.bar_height()
@@ -841,6 +840,20 @@ impl Bar {
                 zone_size: zone,
             }),
         ])
+    }
+
+    /// The bar surface at rest: the screen's, or down to where a solid bar's rounded ends end,
+    /// so they're drawn whole (D-89). Only the bar's strip takes the pointer.
+    fn surface_height(&self) -> u32 {
+        let surface = self.screen.surface_height();
+        if self.config.bar.style != Style::Solid || self.config.bar.corners != BarCorners::Round {
+            return surface;
+        }
+        let reach = self.screen.corners[..2]
+            .iter()
+            .map(|corner| corner.radius * (1.0 + corner.smoothing))
+            .fold(0.0, f32::max);
+        surface.max((band_bottom(&self.screen) + reach).ceil() as u32)
     }
 
     /// How the bar shows right now: outside fullscreen, or over a fullscreen window (D-88).
@@ -1864,13 +1877,13 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         }
     }
     .edge(
-        band.unwrap_or(bar.screen.grow),
+        bar.screen.grow,
         match (band, bar.config.bar.corners) {
             (Some(_), BarCorners::Square) => [CornerShape::SQUARE; 2],
             _ => [bar.screen.corners[0], bar.screen.corners[1]],
         },
     )
-    .solid(band.is_some())
+    .solid(band.map(|bottom| bottom - bar.screen.grow))
     .kick(
         bar.notch_kick
             .filter(|_| bar.toast_window() == Some(window)),
@@ -1886,7 +1899,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         left: style::EDGE_GAP.into(),
     });
     // Lifted off the screen while the bar hides, far enough to clear it (D-88).
-    let islands = Lift::new(islands, bar.out(), bar.screen.surface_height() as f32);
+    let islands = Lift::new(islands, bar.out(), bar.surface_height() as f32);
     // Always a stack, so the islands' state stays put when the dormer comes and goes.
     stack![islands, dormer_view(bar, window)].into()
 }
