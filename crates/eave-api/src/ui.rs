@@ -111,6 +111,81 @@ pub enum Change {
     Hunk,
 }
 
+/// A key a [`Shortcut`] names. There is no Escape: it always closes the popover (D-41).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Key {
+    /// A key that types a character, as it reads with no modifier held: `'k'`, `'1'`.
+    Char(char),
+    Enter,
+    Space,
+    Tab,
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl From<char> for Key {
+    fn from(c: char) -> Self {
+        Key::Char(c)
+    }
+}
+
+/// A key, with the modifiers held for it: `Ctrl+K`. Build it with [`shortcut`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shortcut {
+    pub key: Key,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    /// The Super key.
+    pub logo: bool,
+}
+
+/// A row's named shortcut: the name config.toml rebinds it by, and the key it has now. The host
+/// replaces the plugin's key with the user's, or none, before drawing and binding it (D-91).
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binding {
+    pub id: String,
+    pub key: Option<Shortcut>,
+}
+
+/// A key to press, for [`list_item`]'s [`shortcut`](Node::shortcut) or to show with [`keys`]:
+/// `shortcut('1')`, `shortcut('k').ctrl()`.
+pub fn shortcut(key: impl Into<Key>) -> Shortcut {
+    Shortcut {
+        key: key.into(),
+        ctrl: false,
+        alt: false,
+        shift: false,
+        logo: false,
+    }
+}
+
+impl Shortcut {
+    pub fn ctrl(mut self) -> Self {
+        self.ctrl = true;
+        self
+    }
+
+    pub fn alt(mut self) -> Self {
+        self.alt = true;
+        self
+    }
+
+    pub fn shift(mut self) -> Self {
+        self.shift = true;
+        self
+    }
+
+    /// Held with the Super key.
+    pub fn logo(mut self) -> Self {
+        self.logo = true;
+        self
+    }
+}
+
 /// A piece of UI. Build it with the functions in this module.
 pub struct Node<M>(Kind<M>);
 
@@ -197,6 +272,7 @@ pub enum Kind<M> {
         selected: bool,
         on_press: Option<M>,
         on_secondary: Option<M>,
+        shortcut: Option<Binding>,
     },
     List(Vec<Node<M>>),
     Section {
@@ -249,6 +325,10 @@ pub enum Kind<M> {
     },
     Badge {
         text: String,
+        tone: Option<Tone>,
+    },
+    Keys {
+        shortcut: Shortcut,
         tone: Option<Tone>,
     },
     /// Pages and their names. The host shows one at a time and owns which.
@@ -480,7 +560,8 @@ pub fn empty<M>() -> Node<M> {
 /// A row in a popover list: a network, a device, a window. Give it a [`subtitle`](Node::subtitle),
 /// a [`leading`](Node::leading) icon, a [`trailing`](Node::trailing) node at the far end (a lock,
 /// an info button), mark the one in use with [`selected`](Node::selected), and make it clickable
-/// with [`on_press`](Node::on_press). A long title fades out at the end rather than wrapping.
+/// with [`on_press`](Node::on_press). A [`shortcut`](Node::shortcut) presses it from the keyboard.
+/// A long title fades out at the end rather than wrapping.
 pub fn list_item<M>(title: impl Into<String>) -> Node<M> {
     Node(Kind::ListItem {
         title: title.into(),
@@ -490,6 +571,7 @@ pub fn list_item<M>(title: impl Into<String>) -> Node<M> {
         selected: false,
         on_press: None,
         on_secondary: None,
+        shortcut: None,
     })
 }
 
@@ -698,6 +780,15 @@ pub fn badge<M>(text: impl Into<String>) -> Node<M> {
     })
 }
 
+/// A shortcut drawn as keycaps, `[Ctrl] [K]`, to say which key does something. It only shows
+/// the keys; to bind one, give a [`list_item`] a [`shortcut`](Node::shortcut).
+pub fn keys<M>(shortcut: Shortcut) -> Node<M> {
+    Node(Kind::Keys {
+        shortcut,
+        tone: None,
+    })
+}
+
 /// Pages behind a row of tabs, one page showing at a time: a popover's Output, Input and Apps.
 /// The host draws the tabs, switches pages when one is clicked and starts on the first each time
 /// the popover opens, so the plugin keeps no state for it. In the bar, only the first page shows.
@@ -784,6 +875,21 @@ impl<M> Node<M> {
         | Kind::TextArea { trailing, .. } = &mut self.0
         {
             *trailing = Some(Box::new(node));
+        }
+        self
+    }
+
+    /// For a [`list_item`] with an [`on_press`](Node::on_press): a key that presses it while its
+    /// popover is open, named `id`. `key` is the default: the user can give the row another key,
+    /// or none, under that name in config.toml (`keys = { chat-1 = "alt+1" }`). The host shows the
+    /// key at the row's end. A key with no Ctrl, Alt or Super does nothing while a text field has
+    /// the focus, so it can be typed. Rows inside [`tabs`] get no key. Other nodes ignore it.
+    pub fn shortcut(mut self, id: impl Into<String>, key: Shortcut) -> Self {
+        if let Kind::ListItem { shortcut, .. } = &mut self.0 {
+            *shortcut = Some(Binding {
+                id: id.into(),
+                key: Some(key),
+            });
         }
         self
     }
@@ -885,7 +991,8 @@ impl<M> Node<M> {
             | Kind::TextInput { tone, .. }
             | Kind::Markdown { tone, .. }
             | Kind::Literal { tone, .. }
-            | Kind::Badge { tone, .. } => {
+            | Kind::Badge { tone, .. }
+            | Kind::Keys { tone, .. } => {
                 tone.get_or_insert(new);
             }
             Kind::Cover { tone, fallback, .. } => {
@@ -1047,6 +1154,7 @@ impl<M> Node<M> {
                 selected,
                 on_press,
                 on_secondary,
+                shortcut,
             } => Kind::ListItem {
                 title,
                 subtitle,
@@ -1055,6 +1163,7 @@ impl<M> Node<M> {
                 selected,
                 on_press: on_press.map(f),
                 on_secondary: on_secondary.map(f),
+                shortcut,
             },
             Kind::List(rows) => Kind::List(map_all(rows)),
             Kind::Section { title, trailing } => Kind::Section {
@@ -1135,6 +1244,7 @@ impl<M> Node<M> {
                 count,
             },
             Kind::Badge { text, tone } => Kind::Badge { text, tone },
+            Kind::Keys { shortcut, tone } => Kind::Keys { shortcut, tone },
             Kind::Tabs(pages) => Kind::Tabs(
                 pages
                     .into_iter()
@@ -1186,6 +1296,11 @@ impl<M> Node<M> {
     #[doc(hidden)]
     pub fn kind(&self) -> &Kind<M> {
         &self.0
+    }
+
+    #[doc(hidden)]
+    pub fn kind_mut(&mut self) -> &mut Kind<M> {
+        &mut self.0
     }
 }
 
@@ -1877,6 +1992,8 @@ pub struct NoticeParts<M> {
 /// the host's search dialog. Typing finds it by its title, subtitle and keywords, and picking it
 /// sends `message` to the widget.
 pub struct Action<M> {
+    id: Option<String>,
+    shortcut: Option<Shortcut>,
     title: String,
     subtitle: Option<String>,
     keywords: Vec<String>,
@@ -1887,6 +2004,8 @@ pub struct Action<M> {
 /// An action titled `title` that sends `message` when picked.
 pub fn action<M>(title: impl Into<String>, message: M) -> Action<M> {
     Action {
+        id: None,
+        shortcut: None,
         title: title.into(),
         subtitle: None,
         keywords: Vec::new(),
@@ -1896,6 +2015,23 @@ pub fn action<M>(title: impl Into<String>, message: M) -> Action<M> {
 }
 
 impl<M> Action<M> {
+    /// Its name, for `eave action <widget> <id>` and for `keys` in config.toml. Give one to every
+    /// action that's always there, like `mute`; leave it out on ones that come and go, like a
+    /// window to switch to.
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// A key that runs it while the dormer is open, shown at its row's end. It needs Ctrl, Alt or
+    /// Super, since the dormer's field has the keys that type, and an [`id`](Action::id), which
+    /// the user can give it another key by. When two widgets' actions want the same key, the
+    /// widget earlier in config.toml keeps it.
+    pub fn shortcut(mut self, key: Shortcut) -> Self {
+        self.shortcut = Some(key);
+        self
+    }
+
     /// A line under the title: what it acts on, or what kind of thing it is.
     pub fn subtitle(mut self, text: impl Into<String>) -> Self {
         self.subtitle = Some(text.into());
@@ -1919,6 +2055,8 @@ impl<M> Action<M> {
         M: 'static,
     {
         Action {
+            id: self.id,
+            shortcut: self.shortcut,
             title: self.title,
             subtitle: self.subtitle,
             keywords: self.keywords,
@@ -1932,8 +2070,15 @@ impl<M> Action<M> {
     }
 
     #[doc(hidden)]
+    pub fn id_str(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+
+    #[doc(hidden)]
     pub fn into_parts(self) -> ActionParts<M> {
         ActionParts {
+            id: self.id,
+            shortcut: self.shortcut,
             title: self.title,
             subtitle: self.subtitle,
             keywords: self.keywords,
@@ -1945,6 +2090,8 @@ impl<M> Action<M> {
 
 #[doc(hidden)]
 pub struct ActionParts<M> {
+    pub id: Option<String>,
+    pub shortcut: Option<Shortcut>,
     pub title: String,
     pub subtitle: Option<String>,
     pub keywords: Vec<String>,

@@ -251,14 +251,17 @@ impl Widget for Volume {
         let mute = if sink.muted { "Unmute" } else { "Mute" };
         let mut actions = vec![
             ui::action(mute, Message::ToggleMute)
+                .id("mute")
                 .subtitle(sink.description.clone())
                 .keywords(sound.into_iter().chain(["silence", "quiet"]))
                 .leading(speaker(sink.volume, !sink.muted)),
             ui::action("Volume up", Message::Up)
+                .id("up")
                 .subtitle(format!("{}%", sink.volume))
                 .keywords(sound.into_iter().chain(["louder", "raise"]))
                 .leading(speaker(100, false)),
             ui::action("Volume down", Message::Down)
+                .id("down")
                 .subtitle(format!("{}%", sink.volume))
                 .keywords(sound.into_iter().chain(["quieter", "lower"]))
                 .leading(speaker(30, false)),
@@ -271,6 +274,7 @@ impl Widget for Volume {
             };
             actions.push(
                 ui::action(mute, Message::ToggleMic)
+                    .id("mic-mute")
                     .subtitle(source.description.clone())
                     .keywords(["mic", "input"])
                     .leading(ui::icon(Icon::Mic {

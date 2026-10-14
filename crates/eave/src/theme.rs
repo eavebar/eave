@@ -361,6 +361,13 @@ pub const MARK_RING: f32 = 1.5;
 pub const GRID_ROW: f32 = 32.0;
 /// A badge's outline.
 pub const BADGE_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
+/// The corners of a badge, and of a keycap.
+pub const BADGE_RADIUS: f32 = 4.0;
+/// A keycap ([`eave_api::ui::keys`]) is filled like a button, faint enough that its key reads
+/// first. Its padding makes one digit about square; caps of one shortcut sit this far apart.
+pub const KEYCAP_BG: Color = BUTTON_BG;
+pub const KEYCAP_PADDING: [u16; 2] = [1, 5];
+pub const KEYCAP_SPACING: u32 = 3;
 /// A count badge ([`eave_api::ui::counted`]): as tall as it is wide for one digit, so one digit
 /// makes a circle and two a pill.
 pub const PIP_HEIGHT: f32 = 14.0;

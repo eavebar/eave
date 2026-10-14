@@ -119,7 +119,7 @@ pub struct Popover<'a, M> {
     /// Where it goes: under the island, or across the middle of the surface.
     pub placement: Placement,
     /// Turns a key the panel's content left alone into a message, if given: the dormer's arrows
-    /// pick a row while its field keeps the rest.
+    /// pick a row while its field keeps the rest, a widget's shortcuts press its rows (D-91).
     pub on_key: Option<OnKey<'a, M>>,
     /// Comes out as a drop instead of growing out of the island, if given: from this far down the
     /// surface, under the island's middle (D-86). At rest it's a dot there. It swells into a ball
@@ -137,8 +137,9 @@ pub struct Popover<'a, M> {
     pub home: Option<Shape>,
 }
 
-/// Turns a key into a message, or leaves it alone.
-pub type OnKey<'a, M> = Box<dyn Fn(&keyboard::Key) -> Option<M> + 'a>;
+/// Turns a key, with the modifiers held, into a message, or leaves it alone. The flag says whether
+/// a text field in the panel has the focus.
+pub type OnKey<'a, M> = Box<dyn Fn(&keyboard::Key, keyboard::Modifiers, bool) -> Option<M> + 'a>;
 
 /// Where a popover goes.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1409,10 +1410,13 @@ enum KeyAction {
 }
 
 /// Any key closes a popover, unless a text field in it has the focus. Esc always closes it, even
-/// while typing (D-41).
+/// while typing (D-41). A modifier alone keeps it, since it may start a shortcut like Ctrl+K
+/// (D-91).
 fn key_policy(key: &keyboard::Key, field_focused: bool) -> KeyAction {
+    use key::Named::{Alt, Control, Escape, Shift, Super};
     match key {
-        keyboard::Key::Named(key::Named::Escape) => KeyAction::Close,
+        keyboard::Key::Named(Escape) => KeyAction::Close,
+        keyboard::Key::Named(Shift | Control | Alt | Super) => KeyAction::Keep,
         _ if field_focused => KeyAction::Keep,
         _ => KeyAction::Close,
     }
@@ -2205,9 +2209,11 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
         let content = layout.children().next().expect("a morph has its panel");
         // Keys go to the panel even while it fades in, so typing isn't lost; Esc never does, so
         // it always closes the popover (D-41).
-        let key = match event {
-            Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => Some(key),
-            _ => None,
+        let (key, modifiers) = match event {
+            Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                (Some(key), *modifiers)
+            }
+            _ => (None, keyboard::Modifiers::empty()),
         };
         let shown = state.motion.popover.panel.target > 0.0;
         let escape = key.is_some_and(|key| *key == keyboard::Key::Named(key::Named::Escape));
@@ -2219,19 +2225,20 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
         }
         if let Some(key) = key
             && popover.open
-            && let Some(message) = popover.on_key.as_ref().and_then(|on_key| on_key(key))
-        {
-            shell.publish(message);
-            shell.capture_event();
-        } else if let Some(key) = key
-            && popover.open
         {
             let mut focused = AnyFocused::default();
             popover
                 .content
                 .as_widget_mut()
                 .operate(panel, content, renderer, &mut focused);
-            if key_policy(key, focused.found) == KeyAction::Keep {
+            if let Some(message) = popover
+                .on_key
+                .as_ref()
+                .and_then(|on_key| on_key(key, modifiers, focused.found))
+            {
+                shell.publish(message);
+                shell.capture_event();
+            } else if key_policy(key, focused.found) == KeyAction::Keep {
                 shell.capture_event();
             }
         }
@@ -2821,13 +2828,16 @@ mod tests {
     fn keys_close_a_popover_unless_a_field_has_the_focus() {
         let escape = keyboard::Key::Named(key::Named::Escape);
         let shift = keyboard::Key::Named(key::Named::Shift);
+        let control = keyboard::Key::Named(key::Named::Control);
         let letter = keyboard::Key::Character("a".into());
         assert_eq!(key_policy(&escape, true), KeyAction::Close);
         assert_eq!(key_policy(&escape, false), KeyAction::Close);
         assert_eq!(key_policy(&letter, true), KeyAction::Keep);
         assert_eq!(key_policy(&shift, true), KeyAction::Keep);
-        assert_eq!(key_policy(&shift, false), KeyAction::Close);
         assert_eq!(key_policy(&letter, false), KeyAction::Close);
+        // A modifier alone may start a shortcut (D-91).
+        assert_eq!(key_policy(&shift, false), KeyAction::Keep);
+        assert_eq!(key_policy(&control, false), KeyAction::Keep);
     }
 
     #[test]

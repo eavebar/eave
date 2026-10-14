@@ -182,6 +182,38 @@ widget = "apps"
 terminal = "foot"   # optional: for apps that run in a terminal
 ```
 
+## Shortcuts
+
+Some popovers and actions have keys of their own, shown as keycaps on their rows: in eave-claude's popover, `1` to `9` and `0` open the first ten chats. They work only while that popover, or the dormer, is open. Give one another key, or none, in its widget's entry of config.toml, by the name its README gives it ([D-91](decisions.md)):
+
+```toml
+[[right]]
+widget = "fran/eave-claude"
+keys = { chat-1 = "alt+1", chat-10 = false }
+
+[[right]]
+widget = "volume"
+keys = { mute = "ctrl+m" }   # in the dormer, Ctrl+M mutes
+```
+
+A key is modifiers (`ctrl`, `alt`, `shift`, `super`) and one key (a character, `enter`, `space`, `tab`, `up`, `down`, `left`, `right`), joined with `+`. In the dormer a key needs Ctrl, Alt or Super, since plain keys type into its search. When two widgets want the same key there, your keys win over the widgets' own, and then the widget earlier in config.toml.
+
+eave takes no key outside its popovers. To open a popover or run an action from anywhere, bind a key in Hyprland, like the dormer's:
+
+```lua
+-- hyprland.lua (Hyprland 0.56+)
+hl.bind("SUPER + C", hl.dsp.event("eave-popover claude"))       -- opens Claude's popover, or closes it
+hl.bind("SUPER + M", hl.dsp.event("eave-action volume mute"))   -- mutes, or unmutes
+```
+
+```ini
+# hyprland.conf (older Hyprland)
+bind = SUPER, C, event, eave-popover claude
+bind = SUPER, M, event, eave-action volume mute
+```
+
+`eave popover <widget>` and `eave action <widget> <id>` do the same from a script or any other shortcut tool. `<widget>` is the name in `widget = "…"`, without its owner (`claude` for `fran/eave-claude`). The built-in widgets' action ids are listed in [plugins.md](plugins.md#action-ids).
+
 ## Notifications
 
 With `widget = "eaveshell/eave-notifications"` in config.toml, eave is your notification daemon ([D-48](decisions.md), [D-50](decisions.md)). Only one program can be. If mako, dunst or swaync is already running, eave waits in line and takes over as soon as it quits. Until then, the bell is dimmed and the popover says which daemon has them. To switch, stop starting the other daemon (remove its `exec-once`, or `systemctl --user disable --now mako`), then quit it.

@@ -168,6 +168,7 @@ impl Widget for Keyboard {
         let words = ["keyboard", "layout", "language", "input"];
         let mut actions = vec![
             ui::action("Next keyboard layout", Message::Next)
+                .id("next-layout")
                 .subtitle(self.layout.clone())
                 .keywords(words),
         ];

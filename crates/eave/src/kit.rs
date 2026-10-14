@@ -10,7 +10,7 @@ use std::time::SystemTime;
 
 use eave_api::erased::AnyMessage;
 use eave_api::ui::{
-    ChoiceParts, ChoicesParts, Kind, Mark, Node, NoticeParts, ReplyParts, Tone, Urgency,
+    ChoiceParts, ChoicesParts, Kind, Mark, Node, NoticeParts, ReplyParts, Shortcut, Tone, Urgency,
 };
 use iced::widget::scrollable::{self, Scrollbar};
 use iced::widget::{
@@ -33,6 +33,7 @@ use crate::label::Label;
 use crate::markdown;
 use crate::meter::Meter;
 use crate::pip::Pip;
+use crate::shortcut;
 use crate::slider::Slider;
 use crate::slot::Slot;
 use crate::sprite::Sprite;
@@ -760,7 +761,7 @@ fn choice<'a>(option: ChoiceParts<AnyMessage>, multiple: bool) -> Element<'a, An
             border: Border {
                 color: theme::BADGE_BORDER,
                 width: 1.0,
-                radius: 4.0.into(),
+                radius: theme::BADGE_RADIUS.into(),
             },
             ..container::Style::default()
         })
@@ -829,6 +830,7 @@ pub fn fingerprint<M>(node: &Node<M>, hasher: &mut impl Hasher) {
         Kind::AppIcon { app_id, .. } => app_id.hash(hasher),
         Kind::Cover { url, .. } => url.hash(hasher),
         Kind::Counter { value, unit, .. } => (value, unit).hash(hasher),
+        Kind::Keys { shortcut, .. } => shortcut::labels(shortcut).hash(hasher),
         Kind::Counted { content, count } => {
             count.hash(hasher);
             fingerprint(content, hasher);
@@ -975,7 +977,8 @@ pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
         | Kind::Slider { .. }
         | Kind::Toggle { .. }
         | Kind::Meter { .. }
-        | Kind::Badge { .. } => {}
+        | Kind::Badge { .. }
+        | Kind::Keys { .. } => {}
     }
 }
 
@@ -1316,6 +1319,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             selected,
             on_press,
             on_secondary,
+            shortcut,
         } => list_item(
             ListItem {
                 title,
@@ -1325,6 +1329,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 selected,
                 on_press,
                 on_secondary,
+                shortcut: shortcut.and_then(|binding| binding.key),
             },
             ctx,
             icons,
@@ -1569,13 +1574,37 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 border: Border {
                     color: edge,
                     width: 1.0,
-                    radius: 4.0.into(),
+                    radius: theme::BADGE_RADIUS.into(),
                 },
                 ..container::Style::default()
             })
             .into()
         }
+        Kind::Keys { shortcut, tone } => keycaps(&shortcut, ctx.color(tone)),
     }
+}
+
+/// A shortcut as keycaps, `[Ctrl] [K]`: each key on a faint filled cap, in the text's tone.
+fn keycaps<'a>(shortcut: &Shortcut, color: Color) -> Element<'a, AnyMessage> {
+    let caps = shortcut::labels(shortcut).into_iter().map(|label| {
+        container(
+            text(label)
+                .size(theme::SMALL_SIZE - 1.0)
+                .font(theme::STRONG_FONT)
+                .color(color),
+        )
+        .padding(theme::KEYCAP_PADDING)
+        .style(|_| container::Style {
+            background: Some(Background::Color(theme::KEYCAP_BG)),
+            border: Border::default().rounded(theme::BADGE_RADIUS),
+            ..container::Style::default()
+        })
+        .into()
+    });
+    row(caps)
+        .spacing(theme::KEYCAP_SPACING)
+        .align_y(alignment::Vertical::Center)
+        .into()
 }
 
 /// The free space in a popover row; nothing in the bar.
@@ -1624,9 +1653,11 @@ struct ListItem {
     selected: bool,
     on_press: Option<AnyMessage>,
     on_secondary: Option<AnyMessage>,
+    shortcut: Option<Shortcut>,
 }
 
-/// A row: leading icon, title over subtitle, then trailing at the far end. The selected row is
+/// A row: leading icon, title over subtitle, then trailing at the far end, then its shortcut's
+/// keys. The selected row is
 /// lit: a soft white fill behind, a heavier title, and its icons at full white.
 fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMessage> {
     let background = if item.selected {
@@ -1686,10 +1717,14 @@ fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMess
         ..ctx
     };
     let trailing = item.trailing.map(|node| render(*node, trailing_ctx, icons));
+    let keys = item
+        .shortcut
+        .map(|shortcut| keycaps(&shortcut, trailing_ctx.color(None)));
     let content = row![]
         .push(leading)
         .push(lines)
         .push(trailing)
+        .push(keys)
         .spacing(10)
         .align_y(alignment::Vertical::Center);
     let height = if tall {

@@ -29,6 +29,7 @@ mod meter;
 mod neck;
 mod notch;
 mod pip;
+mod shortcut;
 mod slider;
 mod slot;
 mod spring;
@@ -96,7 +97,13 @@ With no command, runs the bar.
 Commands:
   calibrate   Measure the screen's corners and notch, and save them to config.toml
   dormer      Open the running bar's dormer, or close it. A Hyprland bind can do it directly:
-              bind = SUPER, SPACE, event, eave-dormer";
+              bind = SUPER, SPACE, event, eave-dormer
+  popover <widget>
+              Open a widget's popover, or close it. As a Hyprland bind:
+              bind = SUPER, C, event, eave-popover claude
+  action <widget> <id>
+              Run a widget's action, by the id its README gives. As a Hyprland bind:
+              bind = SUPER, M, event, eave-action volume mute";
 
 /// Sets up what the bar and the calibrator both draw with: the renderer config.toml asks for, and
 /// the sans-serif that's installed.
@@ -117,7 +124,24 @@ pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
     match std::env::args().nth(1).as_deref() {
         None => {}
         Some("calibrate") => return calibrate::run(),
-        Some("dormer") => return dormer(),
+        Some("dormer") => return send(eave_hyprland::DORMER.to_owned()),
+        Some(command @ ("popover" | "action")) => {
+            let words: Vec<String> = std::env::args().skip(2).collect();
+            let (event, wanted) = match command {
+                "popover" => (eave_hyprland::POPOVER, 1),
+                _ => (eave_hyprland::ACTION, 2),
+            };
+            // A name with a space in it would read as two words on the other side.
+            if words.len() != wanted
+                || words
+                    .iter()
+                    .any(|word| word.is_empty() || word.contains(char::is_whitespace))
+            {
+                eprintln!("eave: {command} takes {wanted} name(s) (try --help)");
+                std::process::exit(2);
+            }
+            return send(format!("{event} {}", words.join(" ")));
+        }
         Some("-h" | "--help") => {
             println!("{USAGE}");
             return Ok(());
@@ -171,10 +195,11 @@ pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
     .run()
 }
 
-/// `eave dormer`: sends the dormer's event through Hyprland, which hands it to the running bar.
-fn dormer() -> Result<(), Error> {
-    let event = format!("hl.dsp.event(\"{}\")", eave_hyprland::DORMER);
-    let legacy = format!("event {}", eave_hyprland::DORMER);
+/// `eave dormer`, `eave popover` and `eave action`: send `data` to the running bar as a Hyprland
+/// custom event, the way a bind with the `event` dispatcher would.
+fn send(data: String) -> Result<(), Error> {
+    let event = format!("hl.dsp.event(\"{data}\")");
+    let legacy = format!("event {data}");
     let sent = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

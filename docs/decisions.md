@@ -1753,7 +1753,7 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 - **Every widget with a popover gets a row of its own**, titled with its name, that opens it. So the dormer is useful before any widget declares an action.
 - **The dialog:** the host matches what's typed against titles, then keywords and subtitles: every character in order, scoring more for a start, a word start or a run, plus a little for recent picks. It shows the best eight, so nothing scrolls. With nothing typed, it lists the recent picks first, then the rest. The picks are kept in memory only, like the notification history.
 - **Its island:** a host island at the top center: the notch's width when there is one, otherwise a dot under the top edge, attached to the top. It is only there while the dormer is. The panel uses the popover machinery, with a new `Placement::Centered { top }`: centered across the surface, its top a fifth of the way down the focused screen (from Hyprland's `monitors`). It moves in the motion language like any popover ([D-83](#d-83-one-motion-language)), with nothing of its own: every edge rides `MORPH`, so the shape glides down whole and never passes where it goes, the opening squish and the landing splat ride `REACT`, and the splat's look-ahead lands it against the top, not on the way up. *(Superseded by [D-86](#d-86-the-dormer-comes-out-as-a-drop): its island is a dot where it comes out, and it comes out as a drop.)* The surface grows to fit it, and the bar takes the keyboard for it, as it does for a popover. The dormer and popovers take turns: opening either closes the other.
-- **The keybind** is a Hyprland custom event, `eave-dormer`: `bind = SUPER, SPACE, event, eave-dormer`, or `eave dormer` from anywhere, which dispatches that event. The bar's socket2 reader now runs all the time to catch it. Every other event stops in its filter, before `update`.
+- **The keybind** is a Hyprland custom event, `eave-dormer`: `bind = SUPER, SPACE, event, eave-dormer`, or `eave dormer` from anywhere, which dispatches that event. The bar's socket2 reader now runs all the time to catch it. Every other event stops in its filter, before `update`. *(Amended by [D-91](#d-91-shortcuts-plugins-name-them-users-rebind-them-hyprland-owns-the-global-ones): `eave-popover` and `eave-action` events too, and actions can have ids and keys.)*
 - **`[[dormer]]` in config.toml** holds widgets that are only there for their actions. Their items aren't drawn and their popovers never open. eave-build compiles them in like any other.
 - **The `apps` plugin** is the first of those. It turns each desktop entry into an action that launches it through Hyprland's `exec`, so the app isn't a child of the bar. `Terminal=true` entries need `terminal = "foot"`. It reads the entries off the UI thread, then again whenever an `applications` directory changes (inotify, on a thread of its own).
 - **Built-in actions:** volume (mute, up, down, the mic, switch devices), media (play or pause, next, previous, follow another player), brightness (brighter, dimmer), workspaces (every window to switch to, every workspace, previous, next), keyboard (next layout, each other layout).
@@ -1964,3 +1964,43 @@ The settings are grouped by the thing they're about, not by situation, because e
 - **changing `Effect::into_parts`** to return a struct: cleaner, but it breaks plugins' tests that read the tuple, in a patch release.
 
 **Measured** (Asahi aarch64, release, the user's config with eave-claude and eave-notifications, both renderers built in, run on tiny-skia on a session bus of its own, three alternating runs against main): binary unchanged to the byte at 19,427,344 B (the code fits in the padding of the page-aligned sections); RSS ~23.3 MB both, within noise; idle CPU the same on both (~3.7%, from the mascot's question loop with a session asking). RSS and CPU were measured with the first version, which drew more (a neck out of any island); the later ones take code away from it. The third (centered, out of the island's shape) against the second, same setup: binary unchanged at 19,427,344 B; RSS ~22.8 MB both; idle CPU the same. It adds one shared cell per island, written as it's drawn. Nothing runs while no dialog is open. No dependency.
+
+---
+
+## D-91: Shortcuts: plugins name them, users rebind them, Hyprland owns the global ones
+
+**Status:** accepted (2026-10-14). Amends [D-36](#d-36-popovers-take-the-keyboard-while-open), [D-41](#d-41-text-fields-in-popovers) and [D-84](#d-84-the-dormer-actions-widgets-declare-found-by-typing).
+
+**What:** keys come in three kinds, each with its own owner.
+- **Popover keys** press a popover's rows while it's open. eave-api 0.1.8 adds `ui::Key` (a character, Enter, Space, Tab, the arrows; no Escape), `ui::Shortcut` built with `shortcut(key)` and `.ctrl()`, `.alt()`, `.shift()`, `.logo()`, `list_item(..).shortcut(id, key)` and a `keys(shortcut)` node that only draws one.
+  - The host draws a row's key as keycaps at its end, after its trailing node, and binds it to the row's `on_press`. Popovers only have the keyboard while open (D-36), so that's all "only when focused" takes.
+  - `popover_view` resolves and then collects the keys of the panel's rows, skipping rows inside `tabs` (only one page shows), and gives the island an `on_key` that matches the key and exactly the modifiers held. A letter matches in either case. A dialog's rows ([D-90](#d-90-widgets-dialogs-they-come-out-of-what-opened-them)) get theirs the same way (`panel_keys`, `rows_on_key`).
+  - A key with no Ctrl, Alt or Super gives way while a text field in the panel has the focus, so typing `1` in a field types it. The island now finds out whether a field has the focus before asking `on_key`, and tells it.
+  - A modifier pressed alone no longer closes a popover: it may start `Ctrl+K`.
+  - The keys are the widget's alone, so two plugins never clash.
+- **Dormer keys** run an action while the dormer is open: `ui::action(..).id("mute").shortcut(shortcut('m').ctrl())`. The keycaps show on its row, and the key works whether the row shows or not.
+  - It needs Ctrl, Alt or Super, since the dormer's field takes the keys that type, and an id. Otherwise the host drops it and says so.
+  - Every widget's actions share the dormer, so keys can clash. The user's keys come first, then the plugins', each in config.toml's order; a key that loses is dropped, and the host says so once.
+- **Global keys** open a popover or run an action from anywhere. eave takes none of them. `eave popover <widget>` and `eave action <widget> <id>` send the custom events `eave-popover <widget>` and `eave-action <widget> <id>`, like `eave dormer`, and the user binds them in hyprland.conf (`bind = SUPER, C, event, eave-popover claude`) or runs the commands from any other shortcut tool.
+  - `<widget>` is the name `widget = "…"` gives, and the first such widget in config.toml is the one.
+  - `eave popover` opens the popover or closes it, like a click on the item. `eave action` runs the action as the dormer would, so one that opens its popover does that too.
+  - The built-in widgets give their fixed actions ids: `volume` `mute`, `up`, `down`, `mic-mute`; `media` `play-pause`, `next`, `previous`; `brightness` `up`, `down`; `workspaces` `previous`, `next`; `keyboard` `next-layout`; `network` `wifi-on`, `wifi-off`. Actions that come and go, like a window to switch to, have none. They set no default keys.
+- **The user rebinds** popover and dormer keys in config.toml: `keys = { chat-1 = "alt+1", chat-10 = false }` in the widget's entry, by id. Rows and actions share the ids. A key is modifiers (`ctrl`, `alt`, `shift`, `super`) and one key, joined with `+`; `false` takes the key away. The host takes `keys` out like `width_group`, so the widget never sees it, and a change reloads live without starting the widget again. Within a popover, a key the user set wins over a plugin's, then the first row wins.
+- The first user is eave-claude: the first ten sessions get `chat-1` to `chat-10`, keyed `1` to `9` and `0`.
+
+**Why:**
+- The plugin names the key once, and the host shows it, binds it and lets the user change it, so the hint can't say one key while another works. Plugins never see key events, which keeps the vocabulary closed (D-13). Esc stays the host's: it always closes.
+- Ids make keys the user's: a default that clashes with their habits is one line away from another key, and the plugin needn't know.
+- Clashes only happen where plugins share keys. In a popover only its widget's rows are there, so first-wins is enough; the dormer gathers everyone's actions, so config.toml's order decides, the same order the user already arranges.
+- Global keys belong to the compositor. Hyprland already knows every bind, warns about clashes and is where the user looks for them. Installing a plugin should never take a key across the whole system.
+
+**Alternatives:**
+- a `Panel::on_key` that hands plugins raw keys: they'd draw their own hints, or none, and every plugin would match keys its own way.
+- `iced::keyboard::Key` in the API: ties eave-api to iced's types and lets plugins bind keys the host can't draw.
+- keys on buttons too: no use for it yet; a row is what the keyboard picks among.
+- unnamed shortcuts: they can't be rebound.
+- eave adding its global binds to Hyprland over IPC (`keyword bind`), checked against `binds`: it writes into the user's compositor config behind their back, and `hyprctl reload` wipes them, so eave would have to put them back.
+- `hyprland-global-shortcuts-v1`: one more protocol for the same result as a custom event, and the user still binds the keys in hyprland.conf.
+- plugins giving global keys by default: a plugin would take a key everywhere just by being installed.
+
+**Cost:** no dependency. Popover keys are resolved only while one is open, and dormer keys when it asks the widgets, so the bar at rest does nothing more. One small list per open popover or dormer.
