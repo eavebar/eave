@@ -21,7 +21,7 @@ use eave_api::ui::{NoticeParts, Pixels};
 use iced::Size;
 
 use crate::apps::Picture;
-use crate::theme;
+use crate::theme::{self, Scheme};
 
 /// The largest file read or download taken: covers are rarely over a megabyte.
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
@@ -37,14 +37,16 @@ pub struct Cover {
     large: image::Handle,
     /// Whole, at most twice a card's width across, and how tall that is for each pixel across.
     wide: Option<(image::Handle, f32)>,
-    color: Option<Color>,
+    /// Its strongest hue, with its saturation and lightness, if it has one.
+    hue: Option<(f32, f32, f32)>,
 }
 
 impl Cover {
-    /// The cover's strongest color, made bright enough to read on a black island. `None` for a
-    /// cover with little color in it: then the controls stay white.
-    pub fn color(&self) -> Option<Color> {
-        self.color
+    /// The cover's strongest color, made bright enough to read on a black island, or deep
+    /// enough on a white one. `None` for a cover with little color in it: then the controls keep
+    /// the ink's.
+    pub fn color(&self, scheme: Scheme) -> Option<Color> {
+        self.hue.map(|hue| lifted(hue, scheme))
     }
 
     /// Its large drawing, `size` across, faded to `opacity`: for a notification's picture.
@@ -209,13 +211,13 @@ fn draw_rgba(rgba: &Rgba) -> Cover {
     let small = (2.0 * theme::ICON_SIZE) as usize;
     let large = (2.0 * theme::COVER_SIZE) as usize;
     let (side, pixels) = shrink(rgba, small, theme::COVER_ICON_RADIUS / theme::ICON_SIZE);
-    let color = content_color(&pixels);
+    let hue = content_hue(&pixels);
     let wide = (rgba.height as f32 <= rgba.width as f32 * WIDE).then(|| wide(rgba));
     Cover {
         small: image::Handle::from_rgba(side as u32, side as u32, pixels),
         large: square(rgba, large, theme::COVER_RADIUS / theme::COVER_SIZE),
         wide,
-        color,
+        hue,
     }
 }
 
@@ -267,9 +269,9 @@ const HUES: usize = 12;
 /// needs to count: below it the cover is mostly grey, black or white.
 const LEAST_COLOR: f32 = 0.06;
 
-/// The hue with the most color in it, weighted by how saturated and bright each pixel is, then
-/// lifted to a lightness and saturation that read on black.
-fn content_color(pixels: &[u8]) -> Option<Color> {
+/// The hue with the most color in it, weighted by how saturated and bright each pixel is, as
+/// hue, saturation and lightness.
+fn content_hue(pixels: &[u8]) -> Option<(f32, f32, f32)> {
     let mut weight = [0.0f32; HUES];
     let mut sum = [[0.0f32; 3]; HUES];
     let count = pixels.len() / 4;
@@ -296,9 +298,23 @@ fn content_color(pixels: &[u8]) -> Option<Color> {
         return None;
     }
     let [r, g, b] = sum[bin].map(|total| total / best);
-    let (h, s, l) = hsl(r, g, b);
-    let (r, g, b) = rgb(h, s.max(0.6), l.clamp(0.62, 0.74));
-    Some(Color::from_rgb(r, g, b))
+    Some(hsl(r, g, b))
+}
+
+/// A hue at a lightness and saturation that read on the islands: light on black, and deep on
+/// white, so the ink on it (black or white) reads too.
+fn lifted((h, s, l): (f32, f32, f32), scheme: Scheme) -> Color {
+    let l = match scheme {
+        Scheme::Dark => l.clamp(0.62, 0.74),
+        Scheme::Light => l.clamp(0.34, 0.44),
+    };
+    let (r, g, b) = rgb(h, s.max(0.6), l);
+    Color::from_rgb(r, g, b)
+}
+
+#[cfg(test)]
+fn content_color(pixels: &[u8], scheme: Scheme) -> Option<Color> {
+    content_hue(pixels).map(|hue| lifted(hue, scheme))
 }
 
 /// Hue (0 to 1), saturation and lightness.
@@ -523,27 +539,30 @@ mod tests {
     }
 
     #[test]
-    fn a_colorful_cover_gives_its_color_lifted_to_read_on_black() {
-        let color = content_color(&plain([140, 20, 10, 255], 64)).expect("a color");
+    fn a_colorful_cover_gives_its_color_lifted_to_read_on_black_or_deepened_on_white() {
+        let color = content_color(&plain([140, 20, 10, 255], 64), Scheme::Dark).expect("a color");
         assert!(
             color.r > color.g && color.r > color.b,
             "still red: {color:?}"
         );
         let (_, _, l) = hsl(color.r, color.g, color.b);
         assert!((0.6..=0.75).contains(&l), "bright enough: {l}");
+        let color = content_color(&plain([140, 20, 10, 255], 64), Scheme::Light).expect("a color");
+        let (_, _, l) = hsl(color.r, color.g, color.b);
+        assert!((0.3..=0.45).contains(&l), "deep enough: {l}");
     }
 
     #[test]
     fn a_grey_cover_has_no_color() {
-        assert!(content_color(&plain([120, 120, 122, 255], 64)).is_none());
-        assert!(content_color(&plain([0, 0, 0, 255], 64)).is_none());
+        assert!(content_hue(&plain([120, 120, 122, 255], 64)).is_none());
+        assert!(content_hue(&plain([0, 0, 0, 255], 64)).is_none());
     }
 
     #[test]
     fn the_strongest_hue_wins_over_a_grey_background() {
         let mut pixels = plain([128, 128, 128, 255], 48);
         pixels.extend(plain([20, 60, 230, 255], 16));
-        let color = content_color(&pixels).expect("a color");
+        let color = content_color(&pixels, Scheme::Dark).expect("a color");
         assert!(color.b > color.r && color.b > color.g, "blue: {color:?}");
     }
 

@@ -39,7 +39,7 @@ use crate::neck;
 use crate::spring::{FADE, HAND, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
 use crate::squircle::{self, CornerShape, squircle_corners, warp};
 use crate::squish::{self, Squish};
-use crate::theme;
+use crate::theme::{self, Palette, Scheme};
 use crate::zones::Sag;
 
 pub struct Island<'a, M> {
@@ -305,6 +305,8 @@ struct State {
     /// Where a solid bar's bottom was on the shape it was drawn with, so it's drawn again when
     /// that moves.
     shape_band: Cell<Option<f32>>,
+    /// The scheme `shape` was filled in, so a new theme fills it again.
+    shape_scheme: Cell<Scheme>,
     /// The popover panel's widget state, while there is one.
     panel: Option<Tree>,
     /// Whether the pointer is over the island, which shows the toggle.
@@ -1499,6 +1501,10 @@ fn draw_island<M>(
     if state.shape_band.replace(band_at) != band_at {
         state.shape.clear();
     }
+    let palette = Palette::of(theme);
+    if state.shape_scheme.replace(palette.scheme) != palette.scheme {
+        state.shape.clear();
+    }
 
     // What's drawn: the shape, reaching on to the edges it's attached to.
     let body = Rectangle::new(
@@ -1518,7 +1524,7 @@ fn draw_island<M>(
             moved.y + moved.height + 1.0,
         );
         let mut frame = Frame::new(renderer, far);
-        frame.fill(&path, theme::ISLAND_BG);
+        frame.fill(&path, palette.island_bg);
         renderer.draw_geometry(frame.into_geometry());
     }
     renderer.with_translation(motion.offset(), |renderer| {
@@ -1570,7 +1576,7 @@ fn draw_island<M>(
                     }),
                     None => squircle_corners(outline, corners),
                 };
-                frame.fill(&bend(outline), theme::ISLAND_BG);
+                frame.fill(&bend(outline), palette.island_bg);
             });
             renderer.with_translation(Vector::new(body.x, body.y) - room, |renderer| {
                 renderer.draw_geometry(geometry);
@@ -1610,7 +1616,7 @@ fn draw_island<M>(
                             });
                         });
                         // In the item's moved coordinates, the shape is the other way.
-                        fade(renderer, bounds, shape - moved, shown);
+                        fade(renderer, theme, bounds, shape - moved, shown);
                     });
                 }
                 if let Some((panel, tree, layout)) = panel {
@@ -1631,7 +1637,7 @@ fn draw_island<M>(
                                 cursor,
                                 &(visible - moved),
                             );
-                            fade(renderer, layout.bounds(), shape - moved, shown);
+                            fade(renderer, theme, layout.bounds(), shape - moved, shown);
                         });
                     }
                 }
@@ -1673,7 +1679,13 @@ fn stretched(shape: Rectangle, pull: Vector) -> Rectangle {
 /// Fades what was just drawn in `bounds` toward the island's background. iced has no group
 /// opacity, but the island is opaque, so covering content with its own color is the same thing.
 /// Kept inside `shape`: a nested layer isn't clipped by the one around it.
-pub(crate) fn fade(renderer: &mut iced::Renderer, bounds: Rectangle, shape: Rectangle, shown: f32) {
+pub(crate) fn fade(
+    renderer: &mut iced::Renderer,
+    theme: &iced::Theme,
+    bounds: Rectangle,
+    shape: Rectangle,
+    shown: f32,
+) {
     use iced::advanced::Renderer as _;
 
     let Some(bounds) = bounds
@@ -1691,7 +1703,7 @@ pub(crate) fn fade(renderer: &mut iced::Renderer, bounds: Rectangle, shape: Rect
             },
             Color {
                 a: 1.0 - shown,
-                ..theme::ISLAND_BG
+                ..Palette::of(theme).island_bg
             },
         );
     });
@@ -1709,6 +1721,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             shape_bent: Cell::new(false),
             shape_corners: Cell::new([CornerShape::SQUARE; 4]),
             shape_band: Cell::new(None),
+            shape_scheme: Cell::new(Scheme::Dark),
             panel: None,
             hovered: false,
             toggle_shown: false,

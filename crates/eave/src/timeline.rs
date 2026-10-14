@@ -272,12 +272,13 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Strip {
         &self,
         _tree: &Tree,
         renderer: &mut iced::Renderer,
-        _theme: &iced::Theme,
+        theme: &iced::Theme,
         _style: &renderer::Style,
         layout: Layout<'_>,
         _cursor: mouse::Cursor,
         _viewport: &Rectangle,
     ) {
+        let p = crate::theme::Palette::of(theme);
         use iced::advanced::Renderer as _;
 
         let bounds = layout.bounds();
@@ -295,7 +296,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Strip {
                     ),
                     ..renderer::Quad::default()
                 },
-                theme::TRACK,
+                p.track,
             );
         };
         if self.hole > 0.0 {
@@ -341,28 +342,23 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Strip {
             );
         };
         match mark {
-            Mark::Note => dot(renderer, theme::RAIL_NOTE, theme::RAIL_DONE, None),
-            Mark::You => dot(renderer, theme::RAIL_MARK, theme::tone(Tone::Accent), None),
-            Mark::Done => dot(renderer, theme::RAIL_MARK, theme::RAIL_DONE, None),
-            Mark::Failed => dot(
-                renderer,
-                theme::RAIL_MARK,
-                theme::tone(Tone::Critical),
-                None,
-            ),
+            Mark::Note => dot(renderer, theme::RAIL_NOTE, p.rail_done, None),
+            Mark::You => dot(renderer, theme::RAIL_MARK, p.tone(Tone::Accent), None),
+            Mark::Done => dot(renderer, theme::RAIL_MARK, p.rail_done, None),
+            Mark::Failed => dot(renderer, theme::RAIL_MARK, p.tone(Tone::Critical), None),
             Mark::Waiting => dot(
                 renderer,
                 theme::RAIL_MARK,
-                theme::ISLAND_BG,
-                Some(theme::tone(Tone::Warning)),
+                p.island_bg,
+                Some(p.tone(Tone::Warning)),
             ),
             Mark::Running => {
-                dot(renderer, theme::RAIL_MARK + 6.0, theme::RAIL_HALO, None);
+                dot(renderer, theme::RAIL_MARK + 6.0, p.rail_halo, None);
                 dot(
                     renderer,
                     theme::RAIL_MARK,
-                    theme::ISLAND_BG,
-                    Some(theme::tone(Tone::Accent)),
+                    p.island_bg,
+                    Some(p.tone(Tone::Accent)),
                 );
             }
         }

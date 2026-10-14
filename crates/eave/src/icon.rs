@@ -17,7 +17,8 @@ use iced::widget::canvas::{self, Frame, Geometry, LineCap, LineJoin, Path, Strok
 use iced::{Color, Element, Event, Point, Radians, Rectangle, Renderer, Size, Theme, Vector};
 use iced::{mouse, window};
 
-use crate::{squish, theme};
+use crate::squish;
+use crate::theme::{self, Palette};
 
 /// The grid icons are drawn on, in units.
 const GRID: f32 = 16.0;
@@ -146,8 +147,8 @@ struct Glyph {
 struct State {
     pour: Pour,
     still: canvas::Cache,
-    /// What `still` holds a drawing of.
-    drawn: Cell<Option<(Icon, Color)>>,
+    /// What `still` holds a drawing of, and on what background.
+    drawn: Cell<Option<(Icon, Color, Color)>>,
 }
 
 impl<M> canvas::Program<M> for Glyph {
@@ -174,19 +175,21 @@ impl<M> canvas::Program<M> for Glyph {
         &self,
         state: &State,
         renderer: &Renderer,
-        _theme: &Theme,
+        theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
+        let background = Palette::of(theme).island_bg;
         let squish = squish::current();
         let pouring = matches!(self.icon, Icon::Battery { charging: true, .. });
         if squish.is_none() && !pouring {
-            if state.drawn.replace(Some((self.icon, self.color))) != Some((self.icon, self.color)) {
+            let drawn = Some((self.icon, self.color, background));
+            if state.drawn.replace(drawn) != drawn {
                 state.still.clear();
             }
             return vec![state.still.draw(renderer, bounds.size(), |frame| {
                 frame.scale(theme::ICON_SIZE / GRID);
-                self.paint(frame, Gulp::default());
+                self.paint(frame, Gulp::default(), background);
             })];
         }
         let mut frame = if squish.is_none() {
@@ -210,16 +213,17 @@ impl<M> canvas::Program<M> for Glyph {
             ));
             frame.translate(-middle);
         }
-        self.paint(&mut frame, gulp);
+        self.paint(&mut frame, gulp, background);
         vec![frame.into_geometry()]
     }
 }
 
 impl Glyph {
-    /// Draws the icon on `frame`, scaled to the grid.
-    fn paint(&self, frame: &mut Frame, gulp: Gulp) {
+    /// Draws the icon on `frame`, scaled to the grid, over `background`.
+    fn paint(&self, frame: &mut Frame, gulp: Gulp, background: Color) {
         let mut pen = Pen {
             frame,
+            background,
             on: self.color,
             off: Color {
                 a: self.color.a * theme::ICON_OFF_ALPHA,
@@ -286,6 +290,8 @@ impl Glyph {
 
 struct Pen<'a> {
     frame: &'a mut Frame,
+    /// What a slash cuts through to: the island's color.
+    background: Color,
     on: Color,
     off: Color,
 }
@@ -496,7 +502,7 @@ impl Pen<'_> {
         self.frame.stroke(
             &path,
             Stroke::default()
-                .with_color(theme::ISLAND_BG)
+                .with_color(self.background)
                 .with_width(theme::ICON_STROKE * 3.0)
                 .with_line_cap(LineCap::Round),
         );

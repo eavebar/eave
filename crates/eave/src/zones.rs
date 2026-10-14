@@ -7,7 +7,8 @@
 //! of the notch. A half whose island there is fused to the notch is right against it, so they read
 //! as one; any other keeps `ISLAND_SPACING` from it (D-73). The notch itself is drawn black, as
 //! big as the bar has it, which may be bigger than it is (D-75). So is the top edge, when the bar
-//! grows it (D-81). The dormer's drop squishes them, within what they're grown by (D-86).
+//! grows it (D-81): they're the screen's black, whatever the theme (D-92). A solid bar's band is
+//! the islands' color. The dormer's drop squishes them, within what they're grown by (D-86).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -23,7 +24,7 @@ use iced::{Element, Event, Length, Point, Rectangle, Size, Vector, window};
 use crate::notch::Notch;
 use crate::spring::{MAX_FRAME, REACT, Spring};
 use crate::squircle::{self, CornerShape, squircle_corners};
-use crate::theme;
+use crate::theme::{self, Palette, Scheme};
 
 pub struct Zones<'a, M> {
     /// Left, center and right; or left, the center's two halves and right, around a notch.
@@ -62,8 +63,9 @@ pub enum Kick {
 
 /// What an edge's bump was drawn with: how deep (down is positive) and how wide.
 type Bump = (f32, f32);
-/// What the grown edge was drawn from: how thick, the screen's corners, how wide, its bump.
-type EdgeDrawn = (f32, [CornerShape; 2], f32, Bump);
+/// What the grown edge was drawn from: how thick, the screen's corners, how wide, its bump, and
+/// the scheme it was filled in.
+type EdgeDrawn = (f32, [CornerShape; 2], f32, Bump, Scheme);
 
 /// The notch and the grown edge as last drawn, and what they were drawn from.
 struct State {
@@ -387,6 +389,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
         viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<State>();
+        let palette = Palette::of(theme);
         let bounds = layout.bounds();
         // Across the whole surface, gaps included, from its top.
         if let Some((top, grow, corners)) = self.band() {
@@ -398,15 +401,20 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
             {
                 sag.set(bump_at(width / 2.0, width / 2.0, bump, grow));
             }
-            let drawn = (grow, corners, width, bump);
+            let drawn = (grow, corners, width, bump, palette.scheme);
             if state.edge_drawn.replace(Some(drawn)) != Some(drawn) {
                 state.edge_cache.clear();
             }
             let (path, height) = edge_outline(grow, corners, width, bump);
+            let color = if self.solid.is_some() {
+                palette.island_bg
+            } else {
+                theme::BEZEL
+            };
             let geometry = state
                 .edge_cache
                 .draw(renderer, Size::new(width, height), |frame| {
-                    frame.fill(&path, theme::ISLAND_BG);
+                    frame.fill(&path, color);
                 });
             // From the surface's top, which is where the zones start less the gap and the grown
             // edge: a solid band is thicker than that, and reaches on below.
@@ -429,7 +437,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Zones<'_, M> {
                 notch.height + theme::ATTACH_OVERHANG,
             );
             let geometry = state.cache.draw(renderer, size, |frame| {
-                frame.fill(&path, theme::ISLAND_BG);
+                frame.fill(&path, theme::BEZEL);
             });
             renderer.with_translation(Vector::new(bounds.x + at.x, bounds.y + at.y), |renderer| {
                 renderer.draw_geometry(geometry);

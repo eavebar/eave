@@ -10,6 +10,9 @@ repository.workspace = true
 eave-api.workspace = true
 # Reports clicks anywhere while a popover is open, so a click outside closes it (D-14).
 eave-hyprland.workspace = true
+# `theme = "system"` (D-92): the settings portal's color scheme, on the session bus. Already in
+# the build through the built-in plugins that talk D-Bus.
+eave-dbus.workspace = true
 iced = { version = "0.14", default-features = false, features = ["tiny-skia", "wayland", "tokio", "crisp", "advanced", "canvas", "image-without-codecs"] }
 # App icons (D-38): draws SVG icons, and through its tiny-skia decodes and scales PNG ones, into
 # small bitmaps. No text, fonts or embedded raster images, which app icons don't need.

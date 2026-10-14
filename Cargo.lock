@@ -764,6 +764,7 @@ dependencies = [
  "eave-battery",
  "eave-brightness",
  "eave-clock",
+ "eave-dbus",
  "eave-hyprland",
  "eave-keyboard",
  "eave-media",

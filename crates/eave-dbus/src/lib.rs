@@ -22,6 +22,8 @@ use zbus::{Connection, MatchRule, MessageStream};
 pub use futures_util::Stream;
 pub use zbus;
 
+pub mod portal;
+
 /// The shared system bus connection, opened on first use.
 pub async fn system() -> zbus::Result<Connection> {
     static SYSTEM: OnceCell<Connection> = OnceCell::const_new();

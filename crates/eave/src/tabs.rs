@@ -169,6 +169,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        let p = crate::theme::Palette::of(theme);
         use iced::advanced::Renderer as _;
 
         let bounds = layout.bounds();
@@ -187,7 +188,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
                 border: pill(theme::TAB_HEIGHT),
                 ..renderer::Quad::default()
             },
-            theme::TAB_TRACK,
+            p.tab_track(),
         );
         if let Some(hovered) = state.hovered.filter(|&hovered| hovered != current) {
             let hover = segment(bounds.width, count, hovered) + origin;
@@ -197,7 +198,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
                     border: pill(hover.height),
                     ..renderer::Quad::default()
                 },
-                theme::HOVER_BG,
+                p.hover_bg,
             );
         }
         if let Some(shown) = state.motion.shown {
@@ -207,7 +208,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
                     border: pill(shown.height),
                     ..renderer::Quad::default()
                 },
-                theme::TAB_MARK,
+                p.tab_mark,
             );
         }
 
@@ -234,7 +235,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
                     wrapping: text::Wrapping::None,
                 },
                 place.center(),
-                theme::tone(tone),
+                p.tone(tone),
                 clip,
             );
         }
@@ -278,7 +279,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
         renderer.with_layer(reach, |renderer| {
             renderer.with_translation(slide, |renderer| {
                 draw(renderer);
-                island::fade(renderer, cover, reach - slide, shown);
+                island::fade(renderer, theme, cover, reach - slide, shown);
             });
         });
     }

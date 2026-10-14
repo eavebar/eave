@@ -180,6 +180,9 @@ impl<Message> Program<Message> for Panel {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
+        // The calibrator is black on a black screen whatever the bar's theme: it's measuring the
+        // screen's edges against it.
+        let p = &theme::DARK;
         let mut frame = Frame::new(renderer, bounds.size());
         let open = self.size();
         let size = if motion.width.value.is_nan() {
@@ -199,7 +202,7 @@ impl<Message> Program<Message> for Panel {
         };
         frame.fill(
             &squircle(shape, radius, theme::ISLAND_SMOOTHING),
-            theme::ISLAND_BG,
+            p.island_bg,
         );
 
         let open_by = if motion.open.value.is_nan() {
@@ -243,7 +246,7 @@ impl<Message> Program<Message> for Panel {
                 );
                 frame.fill(
                     &squircle(mark, ROW / 2.0, theme::ISLAND_SMOOTHING),
-                    faded(theme::SELECTED_BG, open_by),
+                    faded(p.selected_bg, open_by),
                 );
 
                 let mut y = PADDING;
@@ -256,7 +259,7 @@ impl<Message> Program<Message> for Panel {
                                 heading,
                                 left,
                                 y + HEADING / 2.0 + 3.0,
-                                faded(theme::tone(eave_api::ui::Tone::Dim), shown),
+                                faded(p.tone(eave_api::ui::Tone::Dim), shown),
                                 theme::STRONG_FONT,
                                 iced::alignment::Horizontal::Left.into(),
                             );
@@ -276,7 +279,7 @@ impl<Message> Program<Message> for Panel {
                                 row.label(),
                                 left,
                                 middle,
-                                faded(theme::tone(tone), shown),
+                                faded(p.tone(tone), shown),
                                 font,
                                 iced::alignment::Horizontal::Left.into(),
                             );
@@ -285,7 +288,7 @@ impl<Message> Program<Message> for Panel {
                                 value,
                                 right,
                                 middle,
-                                faded(theme::tone(tone), shown),
+                                faded(p.tone(tone), shown),
                                 font,
                                 iced::alignment::Horizontal::Right.into(),
                             );
@@ -301,7 +304,7 @@ impl<Message> Program<Message> for Panel {
                         line,
                         size.width / 2.0,
                         y + FOOTER_LINE / 2.0,
-                        faded(theme::tone(eave_api::ui::Tone::Dim), shown),
+                        faded(p.tone(eave_api::ui::Tone::Dim), shown),
                         Font::DEFAULT,
                         iced::alignment::Horizontal::Center.into(),
                     );
@@ -314,7 +317,7 @@ impl<Message> Program<Message> for Panel {
                     PILL_TEXT,
                     size.width / 2.0,
                     size.height / 2.0,
-                    faded(theme::tone(eave_api::ui::Tone::Normal), 1.0 - open_by),
+                    faded(p.tone(eave_api::ui::Tone::Normal), 1.0 - open_by),
                     Font::DEFAULT,
                     iced::alignment::Horizontal::Center.into(),
                 );

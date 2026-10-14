@@ -158,13 +158,14 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Field<'_, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        let p = crate::theme::Palette::of(theme);
         use iced::advanced::Renderer as _;
 
         let state = tree.state.downcast_ref::<State>();
         let edge = match (state.focused, self.alert) {
             (_, Some(alert)) => alert,
-            (true, None) => theme::FIELD_FOCUS,
-            (false, None) => theme::FIELD_BORDER,
+            (true, None) => p.field_focus,
+            (false, None) => p.field_border,
         };
         renderer.fill_quad(
             renderer::Quad {
@@ -176,7 +177,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Field<'_, M> {
                 },
                 ..renderer::Quad::default()
             },
-            theme::FIELD_BG,
+            p.field_bg,
         );
         if let Some(content) = layout.children().next() {
             self.content.as_widget().draw(

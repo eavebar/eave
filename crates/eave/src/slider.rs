@@ -123,12 +123,13 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slider<'_, M> {
         &self,
         tree: &Tree,
         renderer: &mut iced::Renderer,
-        _theme: &iced::Theme,
+        theme: &iced::Theme,
         _style: &renderer::Style,
         layout: Layout<'_>,
         _cursor: mouse::Cursor,
         _viewport: &Rectangle,
     ) {
+        let p = crate::theme::Palette::of(theme);
         use iced::advanced::Renderer as _;
 
         let state = tree.state.downcast_ref::<State>();
@@ -146,7 +147,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slider<'_, M> {
                 border: rounded,
                 ..renderer::Quad::default()
             },
-            theme::TRACK,
+            p.track,
         );
         let filled = rail.width * state.fill.value();
         if filled >= 0.5 {

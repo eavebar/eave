@@ -47,6 +47,9 @@
 //! `islands` rounds the islands' corners that face neither a screen corner nor the notch (D-73),
 //! also in physical pixels. `"auto"`, the default, takes the notch's, then the screen's.
 //!
+//! `theme` is `"system"` (the default), `"light"` or `"dark"` (D-92). `"system"` follows the
+//! desktop's dark mode, as the settings portal tells it, and is dark when it has no preference.
+//!
 //! Two more say when the bar and the notifications show (D-88):
 //!
 //! ```toml
@@ -311,11 +314,22 @@ impl Renderer {
     }
 }
 
+/// Which way round the bar's palette is (D-92).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Theme {
+    /// The desktop's: light when it prefers light, dark otherwise.
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
 /// Entries in bar order, plus a warning for everything that was skipped.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Config {
     pub entries: Vec<Entry>,
     pub renderer: Renderer,
+    pub theme: Theme,
     pub notch: Notch,
     pub screen: Screen,
     pub islands: Islands,
@@ -387,6 +401,15 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
         Some(_) => config
             .warnings
             .push("`renderer` must be \"gpu\" or \"cpu\", using \"gpu\"".into()),
+        None => {}
+    }
+    match table.remove("theme") {
+        Some(toml::Value::String(name)) if name == "system" => config.theme = Theme::System,
+        Some(toml::Value::String(name)) if name == "light" => config.theme = Theme::Light,
+        Some(toml::Value::String(name)) if name == "dark" => config.theme = Theme::Dark,
+        Some(_) => config
+            .warnings
+            .push("`theme` must be \"system\", \"light\" or \"dark\", using \"system\"".into()),
         None => {}
     }
     if let Some(value) = table.remove("notch") {
@@ -927,6 +950,17 @@ mod tests {
         assert_eq!(parse("renderer = \"gpu\"").unwrap().renderer, Renderer::Gpu);
         let odd = parse("renderer = \"vulkan\"").unwrap();
         assert_eq!(odd.renderer, Renderer::Gpu);
+        assert_eq!(odd.warnings.len(), 1);
+    }
+
+    #[test]
+    fn the_theme_follows_the_system_unless_it_says_light_or_dark() {
+        assert_eq!(parse("").unwrap().theme, Theme::System);
+        assert_eq!(parse("theme = \"light\"").unwrap().theme, Theme::Light);
+        assert_eq!(parse("theme = \"dark\"").unwrap().theme, Theme::Dark);
+        assert_eq!(parse("theme = \"system\"").unwrap().theme, Theme::System);
+        let odd = parse("theme = \"sepia\"").unwrap();
+        assert_eq!(odd.theme, Theme::System);
         assert_eq!(odd.warnings.len(), 1);
     }
 

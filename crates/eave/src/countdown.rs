@@ -55,12 +55,13 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Countdown {
         &self,
         _tree: &Tree,
         renderer: &mut iced::Renderer,
-        _theme: &iced::Theme,
+        theme: &iced::Theme,
         _style: &renderer::Style,
         layout: Layout<'_>,
         _cursor: mouse::Cursor,
         _viewport: &Rectangle,
     ) {
+        let p = crate::theme::Palette::of(theme);
         use iced::advanced::Renderer as _;
 
         let bar = layout.bounds();
@@ -71,7 +72,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Countdown {
                 border: rounded,
                 ..renderer::Quad::default()
             },
-            theme::METER_TRACK,
+            p.meter_track,
         );
         let left = bar.width * self.fraction(Instant::now());
         if left >= 1.0 {
@@ -81,7 +82,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Countdown {
                     border: rounded,
                     ..renderer::Quad::default()
                 },
-                theme::COUNTDOWN,
+                p.countdown,
             );
         }
     }

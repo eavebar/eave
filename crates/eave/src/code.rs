@@ -9,14 +9,14 @@ use iced::{Background, Border, Color, Element, Font, Length, Padding, font};
 
 use crate::glide::Glide;
 use crate::highlight::{self, Token};
-use crate::theme;
+use crate::theme::{self, Palette};
 
 const LINE_HEIGHT: f32 = 1.35;
 
 /// A code block: monospace on a tinted box, colored for its language, its lines numbered once
 /// there are a few. Long lines don't wrap: the box scrolls sideways. A `diff` block reads as a
 /// [`diff`].
-pub fn block<'a, M: 'a>(code: &str, language: &str) -> Element<'a, M> {
+pub fn block<'a, M: 'a>(code: &str, language: &str, p: &'static Palette) -> Element<'a, M> {
     if matches!(language, "diff" | "patch") {
         let lines = code.lines().map(|line| {
             let change = match line.chars().next() {
@@ -31,14 +31,14 @@ pub fn block<'a, M: 'a>(code: &str, language: &str) -> Element<'a, M> {
             };
             (change, text.to_string())
         });
-        return diff(None, lines.collect(), "");
+        return diff(None, lines.collect(), "", p);
     }
     let count = code.lines().count();
     let numbers = (count >= theme::CODE_NUMBERED).then(|| count.to_string().len());
     let number = |n: usize, width: usize| {
         Span::new(format!("{n:>width$}  "))
             .font(theme::MONO_FONT)
-            .color(theme::CODE_GUTTER)
+            .color(p.code_gutter)
     };
     let mut spans = Vec::new();
     let mut line = 1;
@@ -50,7 +50,7 @@ pub fn block<'a, M: 'a>(code: &str, language: &str) -> Element<'a, M> {
         let mut pieces = code[range].split('\n').peekable();
         while let Some(piece) = pieces.next() {
             if !piece.is_empty() {
-                spans.push(span(piece.to_string(), token));
+                spans.push(span(piece.to_string(), token, p));
             }
             if pieces.peek().is_some() {
                 spans.push(Span::new("\n"));
@@ -83,6 +83,7 @@ pub fn diff<'a, M: 'a>(
     title: Option<String>,
     lines: Vec<(Change, String)>,
     language: &str,
+    p: &'static Palette,
 ) -> Element<'a, M> {
     // Without a language, the file's extension says it.
     let extension = title
@@ -104,33 +105,31 @@ pub fn diff<'a, M: 'a>(
         let added = count(Change::Added);
         let removed = count(Change::Removed);
         row![
-            container(
-                small(title, theme::tone(Tone::Normal)).wrapping(text::Wrapping::WordOrGlyph)
-            )
-            .width(Length::Fill),
-            small(format!("+{added}"), theme::DIFF_ADDED),
-            small(format!("−{removed}"), theme::DIFF_REMOVED),
+            container(small(title, p.tone(Tone::Normal)).wrapping(text::Wrapping::WordOrGlyph))
+                .width(Length::Fill),
+            small(format!("+{added}"), p.diff_added),
+            small(format!("−{removed}"), p.diff_removed),
         ]
         .spacing(6)
         .padding([6, 10])
     });
     let rows = lines.into_iter().map(|(change, line)| {
         let (mark, background) = match change {
-            Change::Added => ("+", Some(theme::DIFF_ADDED_BG)),
-            Change::Removed => ("−", Some(theme::DIFF_REMOVED_BG)),
+            Change::Added => ("+", Some(p.diff_added_bg)),
+            Change::Removed => ("−", Some(p.diff_removed_bg)),
             Change::Context | Change::Hunk => (" ", None),
         };
         let mark_color = match change {
-            Change::Added => theme::DIFF_ADDED,
-            Change::Removed => theme::DIFF_REMOVED,
-            _ => theme::CODE_GUTTER,
+            Change::Added => p.diff_added,
+            Change::Removed => p.diff_removed,
+            _ => p.code_gutter,
         };
         let spans = if change == Change::Hunk {
-            vec![Span::new(line).color(theme::tone(Tone::Dim))]
+            vec![Span::new(line).color(p.tone(Tone::Dim))]
         } else {
             highlight::tokens(&line, language)
                 .into_iter()
-                .map(|(token, range)| span(line[range].to_string(), token))
+                .map(|(token, range)| span(line[range].to_string(), token, p))
                 .collect()
         };
         let content: Rich<'a, (), M> = Rich::with_spans(spans)
@@ -167,16 +166,16 @@ pub fn diff<'a, M: 'a>(
 }
 
 /// A piece of code in its token's color.
-fn span(content: String, token: Token) -> Span<'static> {
+fn span(content: String, token: Token, p: &Palette) -> Span<'static> {
     let color = match token {
-        Token::Plain => theme::CODE_PLAIN,
-        Token::Keyword => theme::CODE_KEYWORD,
-        Token::Type => theme::CODE_TYPE,
-        Token::Function => theme::CODE_FUNCTION,
-        Token::String => theme::CODE_STRING,
-        Token::Number => theme::CODE_NUMBER,
-        Token::Comment => theme::CODE_COMMENT,
-        Token::Punctuation => theme::CODE_PUNCTUATION,
+        Token::Plain => p.code_plain,
+        Token::Keyword => p.code_keyword,
+        Token::Type => p.code_type,
+        Token::Function => p.code_function,
+        Token::String => p.code_string,
+        Token::Number => p.code_number,
+        Token::Comment => p.code_comment,
+        Token::Punctuation => p.code_punctuation,
     };
     let span = Span::new(content).font(theme::MONO_FONT).color(color);
     if token == Token::Comment {
@@ -189,9 +188,10 @@ fn span(content: String, token: Token) -> Span<'static> {
     }
 }
 
-fn boxed(_: &iced::Theme) -> container::Style {
+fn boxed(theme: &iced::Theme) -> container::Style {
+    let p = Palette::of(theme);
     container::Style {
-        background: Some(Background::Color(theme::CODE_BG)),
+        background: Some(Background::Color(p.code_bg)),
         border: Border::default().rounded(theme::BUTTON_RADIUS),
         ..container::Style::default()
     }

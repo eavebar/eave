@@ -58,12 +58,13 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Meter {
         &self,
         tree: &Tree,
         renderer: &mut iced::Renderer,
-        _theme: &iced::Theme,
+        theme: &iced::Theme,
         _style: &renderer::Style,
         layout: Layout<'_>,
         _cursor: mouse::Cursor,
         _viewport: &Rectangle,
     ) {
+        let p = crate::theme::Palette::of(theme);
         use iced::advanced::Renderer as _;
 
         let bounds = layout.bounds();
@@ -78,7 +79,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Meter {
                 border: rounded,
                 ..renderer::Quad::default()
             },
-            theme::METER_TRACK,
+            p.meter_track,
         );
         let filled = bar.width * tree.state.downcast_ref::<Ease>().value();
         if filled >= 1.0 {
@@ -105,7 +106,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Meter {
                     border: Border::default().rounded(TICK_WIDTH / 2.0),
                     ..renderer::Quad::default()
                 },
-                theme::tone(eave_api::ui::Tone::Dim),
+                p.tone(eave_api::ui::Tone::Dim),
             );
         }
     }

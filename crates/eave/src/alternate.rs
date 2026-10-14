@@ -365,7 +365,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Alternate<'_, M> {
         let cover = child.bounds().expand(2.0);
         if slide == Vector::ZERO {
             draw(renderer);
-            island::fade(renderer, cover, cover, shown);
+            island::fade(renderer, theme, cover, cover, shown);
             return;
         }
         // Clipped to where a slide can reach, which stays inside the island.
@@ -379,7 +379,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Alternate<'_, M> {
         renderer.with_layer(reach, |renderer| {
             renderer.with_translation(slide, |renderer| {
                 draw(renderer);
-                island::fade(renderer, cover, reach - slide, shown);
+                island::fade(renderer, theme, cover, reach - slide, shown);
             });
         });
     }

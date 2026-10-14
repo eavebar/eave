@@ -1,14 +1,15 @@
 //! Every visual constant in one place. Plugins can't reach any of this: they name a [`Tone`], the
 //! host picks the color.
 //!
-//! The palette is black islands and white ink, with opacity for hierarchy. Color only appears as a
-//! signal (good, warning, critical) or when it comes from the content, like a cover's (D-61,
+//! The palette is black islands and white ink, or in the light scheme its mirror, white islands
+//! and black ink, with opacity for hierarchy. Color only appears as a signal (good, warning,
+//! critical) or when it comes from the content, like a cover's (D-61, D-92,
 //! [docs/design.md](../../../docs/design.md)).
 
 use std::time::Duration;
 
 use eave_api::ui::Tone;
-use iced::{Color, Font, font};
+use iced::{Color, Font, Theme, font};
 
 /// Height of an island, the visible part of the bar, where there's no notch. With one, the islands
 /// end where it does (D-76).
@@ -37,17 +38,13 @@ pub fn surface_height(grow: f32, island: f32) -> u32 {
     (grow + f32::from(EDGE_GAP) + island + f32::from(DRAG_ROOM)).ceil() as u32
 }
 
+/// The notch, and the top edge the bar grows (D-75, D-81): the screen's own black, whatever the
+/// theme, since they stand for the hardware around the picture (D-92).
+pub const BEZEL: Color = Color::BLACK;
+
 /// How far an island attached to a screen edge reaches past it (D-70): further than its corners
 /// and anything that moves it, so the edge never shows a gap or a corner.
 pub const ATTACH_OVERHANG: f32 = 32.0;
-
-pub const ISLAND_BG: Color = Color::BLACK;
-pub const HOVER_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
-pub const PRESSED_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.14);
-pub const SEPARATOR: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);
-/// Behind the current option of a switcher (the active workspace): the current thing is marked
-/// with light, not a hue.
-pub const SWITCHER_MARK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.14);
 
 /// Horizontal padding inside each island, at its ends.
 pub const ISLAND_PADDING: u16 = 14;
@@ -202,10 +199,9 @@ pub const NUDGE_BUMP_ROOM: f32 = 4.0;
 /// Horizontal padding inside each item, so its click target is wider than its text.
 pub const ITEM_PADDING: u16 = 6;
 pub const ITEM_SPACING: u32 = 4;
-/// A divider between items: a line this wide and tall, in this color.
+/// A divider between items: a line this wide and tall.
 pub const DIVIDER_WIDTH: f32 = 1.0;
 pub const DIVIDER_HEIGHT: f32 = 14.0;
-pub const DIVIDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
 /// Space between islands in the same zone.
 pub const ISLAND_SPACING: u32 = EDGE_GAP as u32;
 
@@ -229,29 +225,10 @@ pub const DIALOG_SCROLL_MAX_HEIGHT: f32 = 600.0;
 /// How much of the screen a dialog keeps beside its scroll: the rows above and below it, its
 /// padding, and a margin at the top and bottom of the screen. A short screen's scroll gets less.
 pub const DIALOG_CHROME: f32 = 260.0;
-/// Markdown: behind code, the bar beside a quote, and the room between blocks.
-pub const CODE_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.07);
-pub const QUOTE_BAR: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
+/// Markdown: the room between blocks.
 pub const BLOCK_SPACING: u32 = 6;
-/// Code is content, so it's colored (D-65): soft hues, all about as light, so none of them
-/// shouts and none reads as a signal. Comments and punctuation sit back.
-pub const CODE_PLAIN: Color = Color::from_rgb8(0xD8, 0xDA, 0xE0);
-pub const CODE_KEYWORD: Color = Color::from_rgb8(0xC7, 0xAE, 0xF0);
-pub const CODE_TYPE: Color = Color::from_rgb8(0x9F, 0xD3, 0xDC);
-pub const CODE_FUNCTION: Color = Color::from_rgb8(0xE9, 0xD7, 0xA6);
-pub const CODE_STRING: Color = Color::from_rgb8(0xB7, 0xD2, 0xA6);
-pub const CODE_NUMBER: Color = Color::from_rgb8(0xE8, 0xB8, 0x8F);
-pub const CODE_COMMENT: Color = Color::from_rgb8(0x6C, 0x74, 0x80);
-pub const CODE_PUNCTUATION: Color = Color::from_rgb8(0x8B, 0x8F, 0x98);
-/// A code block's line numbers, and the marks in a diff's margin.
-pub const CODE_GUTTER: Color = Color::from_rgb8(0x4A, 0x4A, 0x4A);
 /// A code block numbers its lines once it has this many.
 pub const CODE_NUMBERED: usize = 4;
-/// Behind a diff's added and removed lines: the signal colors, faint, so the code on them reads.
-pub const DIFF_ADDED_BG: Color = Color::from_rgba(0.188, 0.820, 0.345, 0.12);
-pub const DIFF_REMOVED_BG: Color = Color::from_rgba(1.0, 0.271, 0.227, 0.12);
-pub const DIFF_ADDED: Color = Color::from_rgb8(0x30, 0xD1, 0x58);
-pub const DIFF_REMOVED: Color = Color::from_rgb8(0xFF, 0x45, 0x3A);
 
 /// A timeline: the room left of its steps where the line runs, the line, and the marks on it.
 /// Marks sit level with the middle of a step's first line of text.
@@ -264,9 +241,7 @@ pub const RAIL_MARK_Y: f32 = 9.5;
 pub const RAIL_STEP_GAP: f32 = 10.0;
 /// A mark under way: a ring, with a faint halo around it. It doesn't pulse: a loop redraws the
 /// whole popover (D-64).
-pub const RAIL_HALO: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.12);
 /// A done mark and a note: on the line, a little brighter than it.
-pub const RAIL_DONE: Color = Color::from_rgb(0.33, 0.33, 0.33);
 /// A notification card's close button: smaller than a popover's icon buttons, to sit beside the
 /// app's name.
 pub const NOTICE_CLOSE: f32 = 22.0;
@@ -282,10 +257,9 @@ pub const NOTICE_IMAGE_RADIUS: f32 = 8.0;
 pub const NOTICE_DOT: f32 = 8.0;
 /// A notification asking several questions: a dot for each, the one asked now lit.
 pub const STEP_DOT: f32 = 5.0;
-/// A check box beside an option, when several can be picked: a ring at rest, a white square with
-/// a black check once picked. The ring is the white of the countdown.
+/// A check box beside an option, when several can be picked: a ring at rest, a square in the
+/// accent fill with a check once picked.
 pub const CHECK_SIZE: f32 = 16.0;
-pub const CHECK_RING: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.35);
 /// How many cards the panel of notifications shows at once. The rest wait, under a line that
 /// says how many, which opens their popover (D-85).
 pub const NOTICES_SHOWN: usize = 3;
@@ -299,7 +273,6 @@ pub const NOTICE_REPLY_GAP: f32 = 12.0;
 pub const NOTICE_SUMMARY_GAP: f32 = 2.0;
 /// The bar across the top of a notification that shows its time left on screen.
 pub const COUNTDOWN_HEIGHT: f32 = 2.0;
-pub const COUNTDOWN: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.35);
 /// The shortest time between two frames of that bar: it moves a pixel at a time, but no faster
 /// than this. 30 fps, like the battery's gulp: smooth enough for motion this slow, and half the
 /// redraws of 60 (D-47).
@@ -313,23 +286,11 @@ pub const ROW_HEIGHT_TALL: f32 = 46.0;
 pub const ROW_SPACING: u32 = 2;
 /// A list taller than this many one-line rows scrolls.
 pub const LIST_MAX_ROWS: f32 = 6.0;
-/// Behind the list row in use, like the current option of a switcher but softer, since a row is
-/// bigger.
-pub const SELECTED_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);
 /// Square buttons holding just an icon, and the height of text buttons.
 pub const ICON_BUTTON: f32 = 28.0;
-/// A prominent icon button (play and pause): a white disc this wide.
+/// A prominent icon button (play and pause): a disc this wide, in the accent fill.
 pub const PROMINENT_BUTTON: f32 = 36.0;
 pub const BUTTON_HEIGHT: f32 = 30.0;
-/// A text button at rest in a popover, so it reads as a button and not a label.
-pub const BUTTON_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
-/// What's drawn on a white fill: a prominent button's text or icon, a toggle's knob when on.
-pub const ON_ACCENT: Color = Color::BLACK;
-/// A prominent button's fill, and a toggle's pill when on.
-pub const ACCENT_FILL: Color = Color::WHITE;
-/// The empty part of a slider, toggle or meter.
-pub const TRACK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.14);
-pub const METER_TRACK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);
 /// A slider is a line with no knob: this thick at rest, `SLIDER_RAIL_HOVER` under the pointer or
 /// while dragged, easing between the two over `SLIDER_GROW`. `SLIDER_HEIGHT` is the room it takes,
 /// and what the pointer can grab. A click eases the fill over `SLIDER_EASE`.
@@ -346,26 +307,17 @@ pub const TOGGLE_WIDTH: f32 = 34.0;
 pub const TOGGLE_HEIGHT: f32 = 20.0;
 pub const TOGGLE_KNOB: f32 = 14.0;
 pub const TOGGLE_SLIDE: Duration = Duration::from_millis(160);
-/// A text field: its height, background, edge, and placeholder text.
+/// A text field's height.
 pub const FIELD_HEIGHT: f32 = 34.0;
-pub const FIELD_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
-pub const FIELD_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.10);
-/// A focused field's edge.
-pub const FIELD_FOCUS: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.50);
-pub const PLACEHOLDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.30);
-pub const SELECTION: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.25);
 /// The ring of a mark (today in a calendar), how thick its line is, and the height of a
 /// calendar's rows.
 pub const MARK_SIZE: f32 = 28.0;
 pub const MARK_RING: f32 = 1.5;
 pub const GRID_ROW: f32 = 32.0;
-/// A badge's outline.
-pub const BADGE_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
 /// The corners of a badge, and of a keycap.
 pub const BADGE_RADIUS: f32 = 4.0;
 /// A keycap ([`eave_api::ui::keys`]) is filled like a button, faint enough that its key reads
 /// first. Its padding makes one digit about square; caps of one shortcut sit this far apart.
-pub const KEYCAP_BG: Color = BUTTON_BG;
 pub const KEYCAP_PADDING: [u16; 2] = [1, 5];
 pub const KEYCAP_SPACING: u32 = 3;
 /// A count badge ([`eave_api::ui::counted`]): as tall as it is wide for one digit, so one digit
@@ -378,14 +330,9 @@ pub const PIP_PADDING: f32 = 4.0;
 /// thing's top: enough to sit on its corner without covering it.
 pub const PIP_OVERLAP: f32 = 7.0;
 pub const PIP_DROP: f32 = 3.0;
-/// A scrolling list's scrollbar.
-pub const SCROLLER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.20);
 /// Tabs: a pill-shaped track with a mark sliding behind the current tab, inset by `TAB_INSET`.
 pub const TAB_HEIGHT: f32 = 28.0;
 pub const TAB_INSET: f32 = 2.0;
-pub const TAB_TRACK: Color = BUTTON_BG;
-/// A little brighter than a selected row's fill, since it sits on the track.
-pub const TAB_MARK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.16);
 /// Switching tabs hands the page over: the old one slides `TAB_SLIDE` away from the new tab as it
 /// fades out, then the new one slides in from that side, over `TAB_FADE` in all. Further than an
 /// alternate's slide, since pages are wide.
@@ -491,17 +438,258 @@ pub const SANS_FAMILIES: &[&str] = &[
     "FreeSans",
 ];
 
-pub fn tone(tone: Tone) -> Color {
-    match tone {
-        // White ink at 94 % and 50 %: brightness, not hue, sets the hierarchy. Written as the
-        // grey it makes on a black island, so overlapping strokes in an icon don't show seams.
-        Tone::Normal => Color::from_rgb(0.94, 0.94, 0.94),
-        Tone::Dim => Color::from_rgb(0.50, 0.50, 0.50),
-        // The thing to notice is the brightest thing there.
-        Tone::Accent => Color::WHITE,
-        // Signals: vivid, because they're the only color on screen.
-        Tone::Warning => Color::from_rgb8(0xFF, 0xB0, 0x20),
-        Tone::Critical => Color::from_rgb8(0xFF, 0x45, 0x3A),
-        Tone::Good => Color::from_rgb8(0x30, 0xD1, 0x58),
+/// Which way round the palette is: black islands and white ink, or white islands and black ink
+/// (D-92).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Scheme {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl Scheme {
+    pub fn palette(self) -> &'static Palette {
+        match self {
+            Scheme::Dark => &DARK,
+            Scheme::Light => &LIGHT,
+        }
+    }
+
+    /// The iced theme the bar runs with, which is how the widgets that draw themselves find the
+    /// palette ([`Palette::of`]).
+    pub fn theme(self) -> Theme {
+        match self {
+            Scheme::Dark => Theme::Dark,
+            Scheme::Light => Theme::Light,
+        }
     }
 }
+
+/// Every color the host draws with. Two of them: [`DARK`] and [`LIGHT`], each the other's mirror.
+#[derive(Debug, PartialEq)]
+pub struct Palette {
+    pub scheme: Scheme,
+    /// The islands, popovers and the notch they come out of.
+    pub island_bg: Color,
+    pub hover_bg: Color,
+    pub pressed_bg: Color,
+    pub separator: Color,
+    /// Behind the current option of a switcher (the active workspace): the current thing is
+    /// marked with light, not a hue.
+    pub switcher_mark: Color,
+    /// A divider between items in an island.
+    pub divider: Color,
+    /// Markdown: behind code, and the bar beside a quote.
+    pub code_bg: Color,
+    pub quote_bar: Color,
+    /// Code is content, so it's colored (D-65): soft hues, all about as light, so none of them
+    /// shouts and none reads as a signal. Comments and punctuation sit back.
+    pub code_plain: Color,
+    pub code_keyword: Color,
+    pub code_type: Color,
+    pub code_function: Color,
+    pub code_string: Color,
+    pub code_number: Color,
+    pub code_comment: Color,
+    pub code_punctuation: Color,
+    /// A code block's line numbers, and the marks in a diff's margin.
+    pub code_gutter: Color,
+    /// Behind a diff's added and removed lines: the signal colors, faint, so the code on them
+    /// reads.
+    pub diff_added_bg: Color,
+    pub diff_removed_bg: Color,
+    pub diff_added: Color,
+    pub diff_removed: Color,
+    /// A timeline's mark under way: the faint halo around its ring.
+    pub rail_halo: Color,
+    /// A done mark and a note: on the line, a little stronger than it.
+    pub rail_done: Color,
+    /// A check box at rest: the ink of the countdown.
+    pub check_ring: Color,
+    /// The bar across the top of a notification that shows its time left on screen.
+    pub countdown: Color,
+    /// Behind the list row in use, like the current option of a switcher but softer, since a row
+    /// is bigger.
+    pub selected_bg: Color,
+    /// A text button at rest in a popover, so it reads as a button and not a label. Keycaps and
+    /// the tabs' track are filled with it too.
+    pub button_bg: Color,
+    /// What's drawn on the accent fill: a prominent button's text or icon, a toggle's knob when
+    /// on.
+    pub on_accent: Color,
+    /// A prominent button's fill, a toggle's pill when on, a picked check box: the ink's color.
+    pub accent_fill: Color,
+    /// The empty part of a slider, toggle or meter.
+    pub track: Color,
+    pub meter_track: Color,
+    /// A text field: its background, edge, focused edge, placeholder text and selection.
+    pub field_bg: Color,
+    pub field_border: Color,
+    pub field_focus: Color,
+    pub placeholder: Color,
+    pub selection: Color,
+    /// A badge's outline.
+    pub badge_border: Color,
+    /// A scrolling list's scrollbar.
+    pub scroller: Color,
+    /// The mark behind the current tab: a little stronger than a selected row's fill, since it
+    /// sits on the track.
+    pub tab_mark: Color,
+    /// The ink, by [`Tone`].
+    pub normal: Color,
+    pub dim: Color,
+    pub accent: Color,
+    pub warning: Color,
+    pub critical: Color,
+    pub good: Color,
+}
+
+impl Palette {
+    /// The palette of the theme iced draws with: how widgets that draw themselves, and style
+    /// functions, find it.
+    pub fn of(theme: &Theme) -> &'static Palette {
+        match theme {
+            Theme::Light => &LIGHT,
+            _ => &DARK,
+        }
+    }
+
+    pub fn tone(&self, tone: Tone) -> Color {
+        match tone {
+            Tone::Normal => self.normal,
+            Tone::Dim => self.dim,
+            Tone::Accent => self.accent,
+            Tone::Warning => self.warning,
+            Tone::Critical => self.critical,
+            Tone::Good => self.good,
+        }
+    }
+
+    pub fn keycap_bg(&self) -> Color {
+        self.button_bg
+    }
+
+    pub fn tab_track(&self) -> Color {
+        self.button_bg
+    }
+}
+
+/// The overlays: white at `alpha` on the dark scheme's islands, black on the light one's.
+const fn white(alpha: f32) -> Color {
+    Color::from_rgba(1.0, 1.0, 1.0, alpha)
+}
+
+const fn black(alpha: f32) -> Color {
+    Color::from_rgba(0.0, 0.0, 0.0, alpha)
+}
+
+const fn grey(value: f32) -> Color {
+    Color::from_rgb(value, value, value)
+}
+
+/// Black islands and white ink.
+pub static DARK: Palette = Palette {
+    scheme: Scheme::Dark,
+    island_bg: Color::BLACK,
+    hover_bg: white(0.08),
+    pressed_bg: white(0.14),
+    separator: white(0.10),
+    switcher_mark: white(0.14),
+    divider: white(0.18),
+    code_bg: white(0.07),
+    quote_bar: white(0.18),
+    code_plain: Color::from_rgb8(0xD8, 0xDA, 0xE0),
+    code_keyword: Color::from_rgb8(0xC7, 0xAE, 0xF0),
+    code_type: Color::from_rgb8(0x9F, 0xD3, 0xDC),
+    code_function: Color::from_rgb8(0xE9, 0xD7, 0xA6),
+    code_string: Color::from_rgb8(0xB7, 0xD2, 0xA6),
+    code_number: Color::from_rgb8(0xE8, 0xB8, 0x8F),
+    code_comment: Color::from_rgb8(0x6C, 0x74, 0x80),
+    code_punctuation: Color::from_rgb8(0x8B, 0x8F, 0x98),
+    code_gutter: Color::from_rgb8(0x4A, 0x4A, 0x4A),
+    diff_added_bg: Color::from_rgba(0.188, 0.820, 0.345, 0.12),
+    diff_removed_bg: Color::from_rgba(1.0, 0.271, 0.227, 0.12),
+    diff_added: Color::from_rgb8(0x30, 0xD1, 0x58),
+    diff_removed: Color::from_rgb8(0xFF, 0x45, 0x3A),
+    rail_halo: white(0.12),
+    rail_done: grey(0.33),
+    check_ring: white(0.35),
+    countdown: white(0.35),
+    selected_bg: white(0.10),
+    button_bg: white(0.08),
+    on_accent: Color::BLACK,
+    accent_fill: Color::WHITE,
+    track: white(0.14),
+    meter_track: white(0.10),
+    field_bg: white(0.06),
+    field_border: white(0.10),
+    field_focus: white(0.50),
+    placeholder: white(0.30),
+    selection: white(0.25),
+    badge_border: white(0.18),
+    scroller: white(0.20),
+    tab_mark: white(0.16),
+    // White ink at 94 % and 50 %: brightness, not hue, sets the hierarchy. Written as the grey it
+    // makes on a black island, so overlapping strokes in an icon don't show seams.
+    normal: grey(0.94),
+    dim: grey(0.50),
+    // The thing to notice is the brightest thing there.
+    accent: Color::WHITE,
+    // Signals: vivid, because they're the only color on screen.
+    warning: Color::from_rgb8(0xFF, 0xB0, 0x20),
+    critical: Color::from_rgb8(0xFF, 0x45, 0x3A),
+    good: Color::from_rgb8(0x30, 0xD1, 0x58),
+};
+
+/// The mirror: white islands and black ink, every overlay black at the alpha the dark one is
+/// white. Hues that sit on the island get darker, so they read on white.
+pub static LIGHT: Palette = Palette {
+    scheme: Scheme::Light,
+    island_bg: Color::WHITE,
+    hover_bg: black(0.06),
+    pressed_bg: black(0.11),
+    separator: black(0.10),
+    switcher_mark: black(0.10),
+    divider: black(0.16),
+    code_bg: black(0.05),
+    quote_bar: black(0.16),
+    code_plain: Color::from_rgb8(0x2A, 0x2D, 0x33),
+    code_keyword: Color::from_rgb8(0x7A, 0x4F, 0xC4),
+    code_type: Color::from_rgb8(0x1F, 0x7A, 0x88),
+    code_function: Color::from_rgb8(0x8A, 0x66, 0x10),
+    code_string: Color::from_rgb8(0x4A, 0x7A, 0x32),
+    code_number: Color::from_rgb8(0xA8, 0x5A, 0x1F),
+    code_comment: Color::from_rgb8(0x90, 0x97, 0xA0),
+    code_punctuation: Color::from_rgb8(0x6E, 0x72, 0x79),
+    code_gutter: Color::from_rgb8(0xB8, 0xB8, 0xB8),
+    diff_added_bg: Color::from_rgba(0.141, 0.541, 0.239, 0.12),
+    diff_removed_bg: Color::from_rgba(0.843, 0.0, 0.082, 0.10),
+    diff_added: Color::from_rgb8(0x24, 0x8A, 0x3D),
+    diff_removed: Color::from_rgb8(0xD7, 0x00, 0x15),
+    rail_halo: black(0.10),
+    rail_done: grey(0.67),
+    check_ring: black(0.35),
+    countdown: black(0.35),
+    selected_bg: black(0.07),
+    button_bg: black(0.06),
+    on_accent: Color::WHITE,
+    accent_fill: Color::BLACK,
+    track: black(0.12),
+    meter_track: black(0.08),
+    field_bg: black(0.04),
+    field_border: black(0.12),
+    field_focus: black(0.50),
+    placeholder: black(0.35),
+    selection: black(0.18),
+    badge_border: black(0.18),
+    scroller: black(0.22),
+    tab_mark: black(0.12),
+    // Black ink at 88 % and 50 %, written as the grey it makes on a white island.
+    normal: grey(0.12),
+    dim: grey(0.50),
+    accent: Color::BLACK,
+    // Signals, deep enough to read on white.
+    warning: Color::from_rgb8(0xC2, 0x5E, 0x00),
+    critical: Color::from_rgb8(0xD7, 0x00, 0x15),
+    good: Color::from_rgb8(0x24, 0x8A, 0x3D),
+};
