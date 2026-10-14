@@ -1826,7 +1826,7 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
   - Without a notch, the grown edge bumps down in a narrow bump where the drop leaves (`EDGE_PULL`, `EDGE_PULL_WIDTH`), and dents up in a wide one where it lands (`EDGE_DENT`, `EDGE_DENT_WIDTH`).
   - With nothing grown, nothing moves.
 
-  Each rides `REACT`. The host numbers each kick (`zones::Kick`), as it numbers nudges. The island says when the drop lands (`on_landed`), at the moment it would have splatted, with the same look-ahead.
+  Each rides `REACT`. The host numbers each kick (`zones::Kick`), as it numbers nudges. The notch reacts at the same moment the drop bounces: the island says when the neck lets go of the drop or catches it (`on_neck`), and the next frame squishes the notch. *(At first the notch pinched as soon as the dormer was asked to open, before the drop had come out, and flattened only once the drop had shrunk away into it. Both read as late or early next to the drop. The user asked for them to happen as the ball leaves and touches.)*
 - The ball is squeezed by `DROP_SQUISH` as it sets off to unfold. The island's own splat is left out, since it vanishes as it lands.
 
 **Why:** the notch-wide shape read as a copy of the notch sliding out of it, not as something coming out of it. A drop reads as made of the same black stuff as the notch, which is the point of drawing the notch at all. D-75 and D-81 grew the notch and the edge to have pixels to squish, and nothing squished them until now.

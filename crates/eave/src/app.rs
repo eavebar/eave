@@ -1400,11 +1400,15 @@ fn handle_dormer(bar: &mut Bar, event: dormer::Event) -> Task<Message> {
                 None => bar.dormer = Some(Session::new(top)),
             }
             bar.refresh_dormer();
-            bar.kick_notch(zones::Kick::Pinch);
             send(hooks)
         }
-        Event::Landed => {
-            bar.kick_notch(zones::Kick::Flatten);
+        // What it comes out of reacts the moment the drop leaves it or touches it again.
+        Event::Neck(caught) => {
+            bar.kick_notch(if caught {
+                zones::Kick::Flatten
+            } else {
+                zones::Kick::Pinch
+            });
             Task::none()
         }
         Event::Query(query) => {
@@ -1752,7 +1756,7 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         width: style::PANEL_WIDE_WIDTH,
         placement: Placement::Centered { top: session.top },
         drop: Some(dormer_drop(&bar.screen)),
-        on_landed: Some(Message::Dormer(Event::Landed)),
+        on_neck: Some(Box::new(|caught| Message::Dormer(Event::Neck(caught)))),
         on_key: Some(Box::new(|key| {
             use keyboard::key::Named;
             match key {
@@ -1920,7 +1924,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         placement: Placement::Below,
         on_key: None,
         drop: None,
-        on_landed: None,
+        on_neck: None,
     }
 }
 
@@ -1992,7 +1996,7 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
         placement: Placement::Below,
         on_key: None,
         drop: None,
-        on_landed: None,
+        on_neck: None,
     }
 }
 
@@ -2891,11 +2895,12 @@ mod tests {
     #[test]
     fn the_notch_pinches_as_the_dormer_leaves_and_flattens_as_it_lands() {
         let (mut bar, _) = acting_bar();
-        assert_eq!(bar.notch_kick, None);
         dormer(&mut bar, dormer::Event::Opened(200.0));
+        assert_eq!(bar.notch_kick, None, "not before the drop leaves");
+        dormer(&mut bar, dormer::Event::Neck(false));
         assert_eq!(bar.notch_kick, Some((1, zones::Kick::Pinch)));
         let _ = update(&mut bar, Message::KeyPressed);
-        dormer(&mut bar, dormer::Event::Landed);
+        dormer(&mut bar, dormer::Event::Neck(true));
         assert_eq!(bar.notch_kick, Some((2, zones::Kick::Flatten)));
     }
 

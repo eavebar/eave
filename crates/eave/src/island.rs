@@ -115,8 +115,9 @@ pub struct Popover<'a, M> {
     /// that falls out on a neck, which pinches off, and the ball unfolds into the panel. Closing
     /// runs it back.
     pub drop: Option<f32>,
-    /// Sent as a drop lands back where it came out, if given: where a popover would splat.
-    pub on_landed: Option<M>,
+    /// Sent as a drop's neck lets go of it (false) or catches it back (true), if given: the moment
+    /// it leaves where it comes out of, and touches it again.
+    pub on_neck: Option<Box<dyn Fn(bool) -> M + 'a>>,
 }
 
 /// Turns a key into a message, or leaves it alone.
@@ -452,8 +453,9 @@ struct PopoverMotion {
     /// How many of a drop's stops ([`Motion::stops`]) it has been most of the way to this way of
     /// the morph: it heads for the next.
     via: usize,
-    /// Whether a drop just landed, and nobody's been told yet.
-    landed: bool,
+    /// Whether a drop's neck just let go of it (false) or caught it (true), and nobody's been
+    /// told yet.
+    touched: Option<bool>,
     /// Whether a drop's neck joined it to where it comes out, last frame.
     joined: bool,
     /// Whether an opening drop has bounced as it arrived.
@@ -480,7 +482,7 @@ impl Default for PopoverMotion {
             closed: false,
             squished: false,
             via: 0,
-            landed: false,
+            touched: None,
             joined: false,
             arrived: false,
             items: Spring::new(1.0, FADE),
@@ -813,10 +815,8 @@ impl Motion {
                     && landing < theme::SQUISH_LAND
                 {
                     popover.squished = true;
-                    // A drop vanishes as it lands: what it lands in reacts instead.
-                    if ball.is_some() {
-                        popover.landed = true;
-                    } else {
+                    // A drop vanishes as it lands: it reacted as its neck caught it instead.
+                    if ball.is_none() {
                         self.stretch_y.velocity = -react(theme::SPLAT_FLATTEN);
                         self.stretch_x.velocity = react(theme::SPLAT_WIDEN);
                     }
@@ -939,7 +939,8 @@ impl Motion {
         });
     }
 
-    /// Bounces a drop as its neck lets go of it (down, opening) or catches it (up, closing).
+    /// Bounces a drop as its neck lets go of it (down, opening) or catches it (up, closing), and
+    /// notes it for the host, so what it comes out of reacts on the same frame.
     fn watch_neck(&mut self) {
         if self.drop.is_none() || !self.popover.present {
             return;
@@ -950,8 +951,10 @@ impl Motion {
         let popover = &mut self.popover;
         let was = std::mem::replace(&mut popover.joined, joined);
         if was && !joined && popover.open {
+            popover.touched = Some(false);
             self.bounce(1.0);
         } else if !was && joined && !popover.open {
+            popover.touched = Some(true);
             self.bounce(-1.0);
         }
     }
@@ -1929,10 +1932,10 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         if let Some(popover) = &self.popover {
             // After stepping: the frame the shape lands on is the last, and gives back its room.
             report(motion, popover, shell);
-            if std::mem::take(&mut motion.popover.landed)
-                && let Some(on_landed) = &popover.on_landed
+            if let Some(joined) = motion.popover.touched.take()
+                && let Some(on_neck) = &popover.on_neck
             {
-                shell.publish(on_landed.clone());
+                shell.publish(on_neck(joined));
             }
             if motion.closing_done() {
                 shell.publish(popover.on_closed.clone());
@@ -2380,7 +2383,11 @@ mod tests {
         assert!(round_again, "it folds back into a ball");
         assert!(caught, "the neck catches it again");
         assert!(lifted < -1.0, "and pulls it up: {lifted}");
-        assert!(motion.popover.landed, "it says when it lands");
+        assert_eq!(
+            motion.popover.touched,
+            Some(true),
+            "it says when it's caught"
+        );
         assert_eq!(motion.edges.rect(), home);
         assert!(motion.closing_done());
     }
