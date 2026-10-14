@@ -26,6 +26,8 @@ pub enum Event {
     Run(usize),
     /// Its island placed it.
     Placed(Rectangle),
+    /// Folding back, it landed where it came out of.
+    Landed,
     /// Its island finished turning back.
     Closed,
 }

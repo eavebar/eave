@@ -27,13 +27,14 @@ use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::alignment::Horizontal;
 use iced::keyboard::{self, key};
-use iced::widget::canvas::{Cache, Path};
+use iced::widget::canvas::{Cache, Frame, Path};
 use iced::{
     Color, Element, Event, Length, Padding, Point, Rectangle, Size, Transformation, Vector, window,
 };
 
 use crate::field::AnyFocused;
 use crate::jelly::{self, Jelly, Side};
+use crate::neck;
 use crate::spring::{FADE, HAND, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
 use crate::squircle::{self, CornerShape, squircle_corners, warp};
 use crate::squish::{self, Squish};
@@ -86,6 +87,8 @@ pub struct Toggle<'a, M> {
 
 /// The toggle's key among the items' keys: no item has it.
 const TOGGLE: u64 = u64::MAX;
+/// How round a drop has to be still to hang on its neck: nearly a ball.
+const NECK_ROUND: f32 = 0.95;
 
 /// What an island turns into while it's a popover.
 pub struct Popover<'a, M> {
@@ -109,6 +112,13 @@ pub struct Popover<'a, M> {
     /// Turns a key the panel's content left alone into a message, if given: the dormer's arrows
     /// pick a row while its field keeps the rest.
     pub on_key: Option<OnKey<'a, M>>,
+    /// Comes out as a drop instead of growing out of the island, if given: from this far down the
+    /// surface, under the island's middle (D-86). At rest it's a dot there. It swells into a ball
+    /// that falls out on a neck, which pinches off, and the ball unfolds into the panel. Closing
+    /// runs it back.
+    pub drop: Option<f32>,
+    /// Sent as a drop lands back where it came out, if given: where a popover would splat.
+    pub on_landed: Option<M>,
 }
 
 /// Turns a key into a message, or leaves it alone.
@@ -254,6 +264,8 @@ struct State {
     shape: Cache,
     /// Whether `shape` was last built bent by the jelly.
     shape_bent: Cell<bool>,
+    /// The corners `shape` was last built with: a drop's round off as it unfolds.
+    shape_corners: Cell<[CornerShape; 4]>,
     /// The popover panel's widget state, while there is one.
     panel: Option<Tree>,
     /// Whether the pointer is over the island, which shows the toggle.
@@ -306,6 +318,8 @@ struct Motion {
     /// narrower or shorter), on top of its edges.
     stretch_x: Spring,
     stretch_y: Spring,
+    /// How far down the surface a popover that comes out as a drop does it ([`Popover::drop`]).
+    drop: Option<f32>,
     /// The newest nudge already played, once the island has been laid out.
     seen: Option<u64>,
     /// The fastest the island has slid as a whole in the push going on, signed (negative is
@@ -335,6 +349,7 @@ impl Default for Motion {
             pace: 1.0,
             stretch_x: Spring::new(0.0, REACT),
             stretch_y: Spring::new(0.0, REACT),
+            drop: None,
             seen: None,
             pushed: 0.0,
             pushing: 0.0,
@@ -433,6 +448,11 @@ struct PopoverMotion {
     closed: bool,
     /// Whether this way of the morph has had its squish (opening) or splat (closing).
     squished: bool,
+    /// How many of a drop's stops ([`Motion::stops`]) it has been most of the way to this way of
+    /// the morph: it heads for the next.
+    via: usize,
+    /// Whether a drop just landed, and nobody's been told yet.
+    landed: bool,
     /// How much the island's items show: they make way for the panel.
     items: Spring,
     /// How much the panel's content shows.
@@ -454,6 +474,8 @@ impl Default for PopoverMotion {
             reported: None,
             closed: false,
             squished: false,
+            via: 0,
+            landed: false,
             items: Spring::new(1.0, FADE),
             panel: Spring::new(0.0, FADE),
             key: None,
@@ -626,12 +648,15 @@ impl Motion {
         items: impl Iterator<Item = (u64, f32)>,
         popover: Option<bool>,
     ) {
-        // A new island grows out of a sliver at its center.
+        // A new island grows out of a sliver at its center. A drop starts as a dot.
         if self.island.is_none() {
-            let sliver = Rectangle::new(
-                Point::new(island.center_x(), island.y),
-                Size::new(0.0, island.height),
-            );
+            let sliver = match self.drop {
+                Some(_) => self.home(island),
+                None => Rectangle::new(
+                    Point::new(island.center_x(), island.y),
+                    Size::new(0.0, island.height),
+                ),
+            };
             self.edges = Edges::at(sliver);
         }
         self.island = Some(island);
@@ -666,9 +691,10 @@ impl Motion {
                 if open && !popover_state.open {
                     popover_state.closed = false;
                 }
-                // Turning around squishes again.
+                // Turning around squishes again, and a drop goes by its ball again.
                 if open != popover_state.open {
                     popover_state.squished = false;
+                    popover_state.via = 0;
                 }
                 popover_state.open = open;
             }
@@ -716,19 +742,30 @@ impl Motion {
         let Some(island) = self.island else {
             return;
         };
+        let home = self.home(island);
+        let ball = self.ball(island);
+        let (out, back) = (self.stops(island, true), self.stops(island, false));
+        let (stops_out, stops_back) = (slice(&out), slice(&back));
         let popover = &mut self.popover;
         match (popover.opening(), popover.rect) {
             (Some(panel), _) => {
-                self.edges.aim(panel);
+                // A drop swells where it comes out and falls as a ball first, heading on to each
+                // next stop once it's most of the way to one.
+                let heading = pass(&self.edges, &mut popover.via, home, stops_out).unwrap_or(panel);
+                self.edges.aim(heading);
                 // Squeezed in from the sides as it sets off, then eases back: a squish on the
-                // way, nothing to hit when it gets there.
-                if !popover.squished {
+                // way, nothing to hit when it gets there. A drop sets off from its ball.
+                if !popover.squished && heading == panel {
                     popover.squished = true;
-                    self.stretch_x.velocity = -react(theme::SQUISH_OPEN * panel.width);
+                    let squeeze = match ball {
+                        Some(_) => theme::DROP_SQUISH,
+                        None => theme::SQUISH_OPEN * panel.width,
+                    };
+                    self.stretch_x.velocity = -react(squeeze);
                 }
                 popover.items.target = 0.0;
                 popover.panel.target = if popover.items.value < REST_DISTANCE
-                    && self.edges.progress(island, panel) > 0.5
+                    && self.edges.progress(ball.unwrap_or(island), panel) > 0.5
                 {
                     1.0
                 } else {
@@ -736,20 +773,37 @@ impl Motion {
                 };
             }
             (None, Some(panel)) if popover.present => {
-                self.edges.aim(island);
+                // A drop folds back into its ball and rises into where it came out first, the
+                // same stops the other way. Not while it's open and waiting for room: that waits
+                // at home.
+                let heading = if popover.open {
+                    home
+                } else {
+                    pass(&self.edges, &mut popover.via, panel, stops_back).unwrap_or(home)
+                };
+                self.edges.aim(heading);
                 // Splats against the top as it lands. Not while it's open and waiting for room.
                 // Where its bottom will be by the time a splat kicked now peaks.
                 let mut ahead = self.edges.bottom;
                 ahead.advance(REACT.peak_time());
-                let landing = ahead.value - (island.y + island.height);
-                if !popover.open && !popover.squished && landing < theme::SQUISH_LAND {
+                let landing = ahead.value - (home.y + home.height);
+                if !popover.open
+                    && !popover.squished
+                    && heading == home
+                    && landing < theme::SQUISH_LAND
+                {
                     popover.squished = true;
-                    self.stretch_y.velocity = -react(theme::SPLAT_FLATTEN);
-                    self.stretch_x.velocity = react(theme::SPLAT_WIDEN);
+                    // A drop vanishes as it lands: what it lands in reacts instead.
+                    if ball.is_some() {
+                        popover.landed = true;
+                    } else {
+                        self.stretch_y.velocity = -react(theme::SPLAT_FLATTEN);
+                        self.stretch_x.velocity = react(theme::SPLAT_WIDEN);
+                    }
                 }
                 popover.panel.target = 0.0;
                 popover.items.target = if popover.panel.value < REST_DISTANCE
-                    && self.edges.progress(panel, island) > 0.5
+                    && self.edges.progress(panel, home) > 0.5
                 {
                     1.0
                 } else {
@@ -757,11 +811,77 @@ impl Motion {
                 };
             }
             _ => {
-                self.edges.aim(island);
+                self.edges.aim(home);
                 popover.items.target = 1.0;
                 popover.panel.target = 0.0;
             }
         }
+    }
+
+    /// Where the shape rests: the island, or for a drop, a dot where it comes out.
+    fn home(&self, island: Rectangle) -> Rectangle {
+        match self.drop {
+            Some(y) => Rectangle::new(Point::new(island.center_x(), y), Size::ZERO),
+            None => island,
+        }
+    }
+
+    /// Where a drop goes by between home and the panel, in the order it goes out (`out`) or back:
+    /// swelling into a ball at where it comes out, half in it, then that ball fallen out of it.
+    /// None for anything else.
+    fn stops(&self, island: Rectangle, out: bool) -> Option<[Rectangle; 2]> {
+        let (Some(y), Some(ball)) = (self.drop, self.ball(island)) else {
+            return None;
+        };
+        let swell = Rectangle {
+            y: y - ball.height / 2.0,
+            ..ball
+        };
+        Some(if out { [swell, ball] } else { [ball, swell] })
+    }
+
+    /// The ball a drop goes by, on its way out and back: under where it comes out.
+    fn ball(&self, island: Rectangle) -> Option<Rectangle> {
+        let size = theme::DROP_BALL;
+        self.drop.map(|y| {
+            Rectangle::new(
+                Point::new(island.center_x() - size / 2.0, y + theme::DROP_FALL),
+                Size::new(size, size),
+            )
+        })
+    }
+
+    /// How round a drop is, from 0 to 1: a ball until it heads for the panel, then less and less
+    /// the closer it gets. 0 for anything else.
+    fn roundness(&self) -> f32 {
+        let Some(island) = self.island else {
+            return 0.0;
+        };
+        match (self.ball(island), self.popover.rect) {
+            (Some(ball), Some(panel)) => 1.0 - self.edges.progress(ball, panel),
+            (Some(_), None) => 1.0,
+            (None, _) => 0.0,
+        }
+    }
+
+    /// The neck between where a drop comes out and the drawn `shape`, while that's still a ball
+    /// close enough to it ([`neck::bridge`]).
+    fn neck(&self, shape: Rectangle) -> Option<[[Point; 4]; 2]> {
+        let (Some(y), Some(island)) = (self.drop, self.island) else {
+            return None;
+        };
+        if self.roundness() < NECK_ROUND {
+            return None;
+        }
+        let root = neck::Circle {
+            center: Point::new(island.center_x(), y - theme::NECK_ROOT),
+            radius: theme::NECK_ROOT,
+        };
+        let ball = neck::Circle {
+            center: shape.center(),
+            radius: shape.width.min(shape.height) / 2.0,
+        };
+        neck::bridge(root, ball)
     }
 
     /// Takes in where the popover's panel goes, and whether the surface is tall enough for it.
@@ -783,7 +903,10 @@ impl Motion {
     fn reach(&self) -> Option<Rectangle> {
         let rect = self.popover.rect?;
         let edges = &self.edges;
-        let destination = self.popover.opening().or(self.island);
+        let destination = self
+            .popover
+            .opening()
+            .or(self.island.map(|island| self.home(island)));
         let there = destination.is_none_or(|to| {
             let at = edges.rect();
             [
@@ -1097,6 +1220,24 @@ fn place(
     Rectangle::new(Point::new(x, island.y), Size::new(width, height))
 }
 
+/// What's in `stops`, if there are any.
+fn slice(stops: &Option<[Rectangle; 2]>) -> &[Rectangle] {
+    stops.as_ref().map_or(&[], |stops| stops.as_slice())
+}
+
+/// The stop to head for next among `stops`, after `from`: the one after each the shape has been
+/// most of the way to, counted in `via`. `None` once past them all.
+fn pass(edges: &Edges, via: &mut usize, from: Rectangle, stops: &[Rectangle]) -> Option<Rectangle> {
+    while let Some(&stop) = stops.get(*via) {
+        let before = if *via == 0 { from } else { stops[*via - 1] };
+        if edges.progress(before, stop) <= theme::DROP_WAYPOINT {
+            return Some(stop);
+        }
+        *via += 1;
+    }
+    None
+}
+
 /// Where a [`Placement::Centered`] popover goes: as tall as the panel, in the middle of the
 /// surface's width, with its top at `top`.
 fn centered(panel: Size, surface_width: f32, top: f32) -> Rectangle {
@@ -1193,6 +1334,23 @@ fn draw_island<M>(
     if state.shape_bent.replace(bent) || bent {
         state.shape.clear();
     }
+    // A drop is a ball, and rounds off into the panel's corners as it unfolds (D-86).
+    let corners = match motion.drop {
+        Some(_) => {
+            let round = motion.roundness();
+            let half = shape.width.min(shape.height) / 2.0;
+            own_corners.map(|corner| {
+                CornerShape::new(
+                    corner.radius + (half - corner.radius).max(0.0) * round,
+                    corner.smoothing * (1.0 - round),
+                )
+            })
+        }
+        None => own_corners,
+    };
+    if state.shape_corners.replace(corners) != corners {
+        state.shape.clear();
+    }
 
     // What's drawn: the shape, reaching on to the edges it's attached to.
     let body = Rectangle::new(
@@ -1204,10 +1362,20 @@ fn draw_island<M>(
     );
     renderer.with_translation(motion.offset(), |renderer| {
         renderer.with_transformation(transformation, |renderer| {
+            // The neck, under the ball it hangs, from what's above: only while they're joined.
+            if let Some(curves) = motion.neck(shape) {
+                let path = neck::path(curves);
+                // From the surface's origin, as far as the neck reaches.
+                let far = curves.as_flattened().iter().fold(Size::ZERO, |far, point| {
+                    Size::new(far.width.max(point.x), far.height.max(point.y))
+                });
+                let mut frame = Frame::new(renderer, Size::new(far.width + 1.0, far.height + 1.0));
+                frame.fill(&path, theme::ISLAND_BG);
+                renderer.draw_geometry(frame.into_geometry());
+            }
             let frame_size = Size::new(body.width + 2.0 * room.x, body.height + 2.0 * room.y);
             let geometry = state.shape.draw(renderer, frame_size, |frame| {
                 let size = body.size();
-                let corners = own_corners;
                 let outline = Rectangle::new(Point::ORIGIN + room, size);
                 // The jelly bends the shape itself: its sides are where they'd be without the
                 // reach, and what reaches past one moves with it.
@@ -1384,6 +1552,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             motion: Motion::default(),
             shape: Cache::new(),
             shape_bent: Cell::new(false),
+            shape_corners: Cell::new([CornerShape::SQUARE; 4]),
             panel: None,
             hovered: false,
             toggle_shown: false,
@@ -1641,6 +1810,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             motion.nudge(request, None);
         }
         motion.swap(self.popover.as_ref().map(|popover| popover.key));
+        motion.drop = self.popover.as_ref().and_then(|popover| popover.drop);
         // A hidden toggle isn't arranged, so it isn't drawn, and fades in when it shows.
         let positions = self
             .keys
@@ -1692,6 +1862,11 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         if let Some(popover) = &self.popover {
             // After stepping: the frame the shape lands on is the last, and gives back its room.
             report(motion, popover, shell);
+            if std::mem::take(&mut motion.popover.landed)
+                && let Some(on_landed) = &popover.on_landed
+            {
+                shell.publish(on_landed.clone());
+            }
             if motion.closing_done() {
                 shell.publish(popover.on_closed.clone());
             }
@@ -2085,6 +2260,57 @@ mod tests {
         motion.arrange(island, [(1, 10.0)].into_iter(), Some(open));
         motion.place_panel(panel, fits);
         motion.aim();
+    }
+
+    #[test]
+    fn a_drop_falls_as_a_ball_on_a_neck_then_unfolds_and_comes_back_the_same_way() {
+        let island = rect(100.0, 120.0);
+        let mut motion = Motion {
+            drop: Some(40.0),
+            ..Motion::default()
+        };
+        motion.arrange(island, [(1, 110.0)].into_iter(), None);
+        run(&mut motion, Instant::now(), |_| {});
+        let home = Rectangle::new(Point::new(160.0, 40.0), Size::ZERO);
+        assert_eq!(
+            motion.edges.rect(),
+            home,
+            "at rest, a dot where it comes out"
+        );
+
+        let panel = Rectangle::new(Point::new(10.0, 200.0), Size::new(300.0, 200.0));
+        popover(&mut motion, true, panel, true);
+        let (mut necked, mut neck_unfolding, mut content_early) = (false, false, false);
+        run(&mut motion, Instant::now(), |motion| {
+            let shape = motion.shape();
+            if motion.neck(shape).is_some() {
+                necked = true;
+                neck_unfolding |= motion.popover.via == 2;
+            }
+            content_early |= motion.popover.via < 2 && motion.popover.panel.value > 0.01;
+        });
+        assert!(necked, "it hangs on a neck on its way out");
+        assert!(!neck_unfolding, "it pinches off before it unfolds");
+        assert!(!content_early, "the content waits for the ball to unfold");
+        assert_eq!(motion.edges.rect(), panel);
+        assert_eq!(
+            motion.roundness(),
+            0.0,
+            "unfolded, it has the panel's corners"
+        );
+        assert!(motion.neck(motion.shape()).is_none(), "pinched off");
+
+        popover(&mut motion, false, panel, true);
+        let (mut round_again, mut necked_again) = (false, false);
+        run(&mut motion, Instant::now(), |motion| {
+            round_again |= motion.roundness() > 0.99 && motion.edges.rect().width > 20.0;
+            necked_again |= motion.neck(motion.shape()).is_some();
+        });
+        assert!(round_again, "it folds back into a ball");
+        assert!(necked_again, "the neck joins up again");
+        assert!(motion.popover.landed, "it says when it lands");
+        assert_eq!(motion.edges.rect(), home);
+        assert!(motion.closing_done());
     }
 
     #[test]

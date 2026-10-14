@@ -149,6 +149,39 @@ pub const SPLAT_WIDEN: f32 = 3.5;
 /// A closing popover splats as it lands, so the splat peaks as the shape arrives: when its bottom
 /// edge will be this close to its island's, in logical pixels, by the time REACT peaks.
 pub const SQUISH_LAND: f32 = 1.0;
+
+// The dormer comes out of the notch (or the top edge) as a drop (D-86): a dot at its middle
+// swells into a ball, falls out of it on a neck of black that pinches off, and unfolds into the
+// panel. Closing runs it back, and the notch flattens as the ball lands in it.
+
+/// How wide the ball is, in logical pixels. It swells half out of where it comes out first.
+pub const DROP_BALL: f32 = 26.0;
+/// How far below where it comes out the ball's top goes before it unfolds into the panel: far
+/// enough that the neck has pinched off by then.
+pub const DROP_FALL: f32 = 36.0;
+/// How far, from 0 to 1, the shape gets to the ball before it heads on: to the panel opening, or
+/// back in closing. The morph is close to critical, so heading on early keeps it one motion.
+pub const DROP_WAYPOINT: f32 = 0.7;
+/// How much the ball is squeezed in from the sides as it sets off to unfold, and taller by the
+/// bulge, in logical pixels.
+pub const DROP_SQUISH: f32 = 4.0;
+/// The circle the neck grows from, inside the notch or the edge, its bottom where the drop comes
+/// out.
+pub const NECK_ROOT: f32 = 10.0;
+/// How far the neck stretches before it pinches off: the root's radius and this many of the
+/// ball's, between their centers.
+pub const NECK_REACH: f32 = 2.2;
+/// How far the notch pinches in from each side as the drop leaves it, and flattens as it lands back,
+/// in logical pixels. Never past its grown room (D-75): it doesn't shrink smaller than it is.
+pub const NOTCH_PINCH: f32 = 4.0;
+pub const NOTCH_FLATTEN: f32 = 3.0;
+/// Without a notch, the grown top edge (D-81) does it where the drop comes out: pulled down in a
+/// narrow bump as it leaves, dented up in a wide one, no further than its grown room, as it lands.
+/// How deep, and how wide end to end, in logical pixels.
+pub const EDGE_PULL: f32 = 4.0;
+pub const EDGE_PULL_WIDTH: f32 = 48.0;
+pub const EDGE_DENT: f32 = 3.0;
+pub const EDGE_DENT_WIDTH: f32 = 140.0;
 /// How wide a nudge's bump in an island's edge is, end to end.
 pub const NUDGE_BUMP_WIDTH: f32 = 176.0;
 /// The furthest the outline reaches out of the island: it stays inside `EDGE_GAP` above and at
