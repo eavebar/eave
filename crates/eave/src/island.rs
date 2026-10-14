@@ -938,7 +938,10 @@ impl Motion {
     fn awaits_spout(&self) -> bool {
         self.drop.is_some()
             && self.waited < SPOUT_PATIENCE
-            && self.spout.as_ref().is_some_and(|spout| spout.get().is_none())
+            && self
+                .spout
+                .as_ref()
+                .is_some_and(|spout| spout.get().is_none())
     }
 
     /// Where a drop goes by between home and the panel, in the order it goes out (`out`) or back:

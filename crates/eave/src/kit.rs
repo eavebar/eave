@@ -53,12 +53,21 @@ pub fn node<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage
 /// it, its sliders and main button take that color: the content's, never one a plugin picked
 /// (D-61).
 pub fn panel<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage> {
+    in_panel(node, icons, Place::Panel)
+}
+
+/// A dialog's content: a panel's, with more room to scroll in (D-88).
+pub fn dialog<'a>(node: Node<AnyMessage>, icons: &Icons) -> Element<'a, AnyMessage> {
+    in_panel(node, icons, Place::Dialog)
+}
+
+fn in_panel<'a>(node: Node<AnyMessage>, icons: &Icons, place: Place) -> Element<'a, AnyMessage> {
     let content = large_cover(node.kind())
         .and_then(|url| icons.covers.get(url))
         .and_then(|cover| cover.as_ref()?.color());
     let ctx = Ctx {
         content,
-        ..Ctx::new(Place::Panel)
+        ..Ctx::new(place)
     };
     render(node, ctx, icons)
 }
@@ -968,6 +977,8 @@ pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
 enum Place {
     Bar,
     Panel,
+    /// A panel in the middle of the screen, taller.
+    Dialog,
 }
 
 /// How text is set: as a label, a little heavier, or large.
@@ -1031,7 +1042,7 @@ impl Ctx {
     }
 
     fn panel(&self) -> bool {
-        self.place == Place::Panel
+        matches!(self.place, Place::Panel | Place::Dialog)
     }
 }
 
@@ -1526,7 +1537,11 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 scroll
             };
             container(Glide::new(scroll).bottom(bottom))
-                .max_height(theme::SCROLL_MAX_HEIGHT)
+                .max_height(if ctx.place == Place::Dialog {
+                    theme::DIALOG_SCROLL_MAX_HEIGHT
+                } else {
+                    theme::SCROLL_MAX_HEIGHT
+                })
                 .into()
         }
         Kind::Badge {

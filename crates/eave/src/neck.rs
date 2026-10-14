@@ -249,7 +249,10 @@ mod tests {
         assert!(neck.joined());
         // Where it meets the ball, it's around the ball's middle, not the root's.
         let (left, right) = neck.rows.last().unwrap().1.unwrap();
-        assert!(((left + right) / 2.0 - 120.0).abs() < 0.5, "{left}..{right}");
+        assert!(
+            ((left + right) / 2.0 - 120.0).abs() < 0.5,
+            "{left}..{right}"
+        );
         // Up at the root, it never reaches past the root's spread.
         let (_, right) = neck.rows[0].1.unwrap();
         assert!(right <= ROOT.x + ROOT.spread);

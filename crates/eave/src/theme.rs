@@ -217,6 +217,10 @@ pub const PANEL_WIDTH: f32 = 320.0;
 pub const PANEL_WIDE_WIDTH: f32 = 480.0;
 /// The tallest a [`eave_api::ui::scroll`] grows in a popover before it scrolls.
 pub const SCROLL_MAX_HEIGHT: f32 = 520.0;
+/// A widget's dialog, in the middle of the screen (D-88): wider than a wide popover, and its
+/// scrolls grow taller.
+pub const DIALOG_WIDTH: f32 = 640.0;
+pub const DIALOG_SCROLL_MAX_HEIGHT: f32 = 600.0;
 /// Markdown: behind code, the bar beside a quote, and the room between blocks.
 pub const CODE_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.07);
 pub const QUOTE_BAR: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
