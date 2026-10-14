@@ -1806,7 +1806,7 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 
 ---
 
-## D-86: Every notification has an icon; workspaces' app icons are optional
+## D-87: Every notification has an icon; workspaces' app icons are optional
 
 **Status:** accepted (2026-10-14). Amends [D-38](#d-38-app-icons-found-and-drawn-by-the-host) and [D-85](#d-85-notification-cards-fixed-slots-pictures-choices-stacks).
 
