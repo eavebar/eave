@@ -278,7 +278,10 @@ mod tests {
         assert_eq!(Event::parse("garbage"), None);
         assert_eq!(Event::parse("fullscreen>>2"), None);
         assert_eq!(Event::parse("fullscreen>>1"), Some(Event::Fullscreen(true)));
-        assert_eq!(Event::parse("fullscreen>>0"), Some(Event::Fullscreen(false)));
+        assert_eq!(
+            Event::parse("fullscreen>>0"),
+            Some(Event::Fullscreen(false))
+        );
         assert_eq!(
             Event::parse("configreloaded>>"),
             Some(Event::ConfigReloaded)

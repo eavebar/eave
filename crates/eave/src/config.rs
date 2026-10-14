@@ -45,6 +45,19 @@
 //!
 //! `islands` rounds the islands' corners that face neither a screen corner nor the notch (D-73),
 //! also in physical pixels. `"auto"`, the default, takes the notch's, then the screen's.
+//!
+//! Two more say when the bar and the notifications show (D-88):
+//!
+//! ```toml
+//! bar = { show = "always", fullscreen = "hide", peek = true }
+//! notifications = { fullscreen = "critical" }
+//! ```
+//!
+//! `bar.show` is `"always"` or `"hover"`: hidden above the screen until the pointer touches the
+//! top edge, and keeping no room for itself. `bar.fullscreen` is the same on a workspace with a
+//! fullscreen window, `"hide"`, `"hover"` or `"show"`. `bar.peek` brings a hidden bar out for a
+//! moment when the workspace changes. `notifications.fullscreen` is `"show"`, `"critical"` (only
+//! critical ones) or `"hold"`: the rest wait, without running out, until fullscreen ends.
 
 use std::path::{Path, PathBuf};
 
@@ -153,6 +166,55 @@ pub struct Islands {
     pub smoothing: Option<f32>,
 }
 
+/// When the bar shows (D-88).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bar {
+    /// Outside fullscreen.
+    pub show: Showing,
+    /// On a workspace with a fullscreen window.
+    pub fullscreen: Showing,
+    /// A hidden bar comes out for a moment when the workspace changes.
+    pub peek: bool,
+}
+
+impl Default for Bar {
+    fn default() -> Self {
+        Self {
+            show: Showing::Always,
+            fullscreen: Showing::Never,
+            peek: true,
+        }
+    }
+}
+
+/// Whether the bar shows on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Showing {
+    Always,
+    /// Hidden until the pointer touches the top edge.
+    Hover,
+    /// Hidden. Notifications, the dormer and peeks still bring it out.
+    Never,
+}
+
+/// When notifications show (D-88).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Notifications {
+    pub fullscreen: Held,
+}
+
+/// Which notifications wait for fullscreen to end.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Held {
+    /// None: they all show.
+    None,
+    /// All but the critical ones.
+    #[default]
+    Uncritical,
+    /// All of them.
+    All,
+}
+
 /// What draws the bar (D-67).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Renderer {
@@ -181,6 +243,8 @@ pub struct Config {
     pub notch: Notch,
     pub screen: Screen,
     pub islands: Islands,
+    pub bar: Bar,
+    pub notifications: Notifications,
     pub warnings: Vec<String>,
 }
 
@@ -257,6 +321,12 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
     }
     if let Some(value) = table.remove("islands") {
         config.islands = islands(value, &mut config.warnings);
+    }
+    if let Some(value) = table.remove("bar") {
+        config.bar = bar(value, &mut config.warnings);
+    }
+    if let Some(value) = table.remove("notifications") {
+        config.notifications = notifications(value, &mut config.warnings);
     }
 
     for zone in Zone::ALL {
@@ -579,9 +649,124 @@ fn islands(value: toml::Value, warnings: &mut Vec<String>) -> Islands {
     islands
 }
 
+/// `bar = { show = "always", fullscreen = "hide", peek = true }`.
+fn bar(value: toml::Value, warnings: &mut Vec<String>) -> Bar {
+    let mut bar = Bar::default();
+    let toml::Value::Table(table) = value else {
+        warnings.push("`bar` must be a table, like { show = \"hover\" }, ignoring it".into());
+        return bar;
+    };
+    for (key, value) in &table {
+        let name = value.as_str();
+        match key.as_str() {
+            "show" => match name {
+                Some("always") => bar.show = Showing::Always,
+                Some("hover") => bar.show = Showing::Hover,
+                _ => warnings
+                    .push("`bar.show` must be \"always\" or \"hover\", using \"always\"".into()),
+            },
+            "fullscreen" => match name {
+                Some("show") => bar.fullscreen = Showing::Always,
+                Some("hover") => bar.fullscreen = Showing::Hover,
+                Some("hide") => bar.fullscreen = Showing::Never,
+                _ => warnings.push(
+                    "`bar.fullscreen` must be \"hide\", \"hover\" or \"show\", using \"hide\""
+                        .into(),
+                ),
+            },
+            "peek" => match value {
+                toml::Value::Boolean(peek) => bar.peek = *peek,
+                _ => warnings.push("`bar.peek` must be true or false, using true".into()),
+            },
+            _ => warnings.push(format!(
+                "`bar` takes show, fullscreen and peek, ignoring `{key}`"
+            )),
+        }
+    }
+    bar
+}
+
+/// `notifications = { fullscreen = "critical" }`.
+fn notifications(value: toml::Value, warnings: &mut Vec<String>) -> Notifications {
+    let mut notifications = Notifications::default();
+    let toml::Value::Table(table) = value else {
+        warnings.push(
+            "`notifications` must be a table, like { fullscreen = \"show\" }, ignoring it".into(),
+        );
+        return notifications;
+    };
+    for (key, value) in &table {
+        if key != "fullscreen" {
+            warnings.push(format!(
+                "`notifications` takes fullscreen, ignoring `{key}`"
+            ));
+            continue;
+        }
+        notifications.fullscreen = match value.as_str() {
+            Some("show") => Held::None,
+            Some("critical") => Held::Uncritical,
+            Some("hold") => Held::All,
+            _ => {
+                warnings.push(
+                    "`notifications.fullscreen` must be \"show\", \"critical\" or \"hold\", \
+                     using \"critical\""
+                        .into(),
+                );
+                Held::Uncritical
+            }
+        };
+    }
+    notifications
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bar_always_shows_but_hides_in_fullscreen_unless_it_says_otherwise() {
+        let plain = parse("").unwrap();
+        assert_eq!(plain.bar, Bar::default());
+        assert_eq!(
+            (plain.bar.show, plain.bar.fullscreen, plain.bar.peek),
+            (Showing::Always, Showing::Never, true)
+        );
+        assert_eq!(plain.notifications.fullscreen, Held::Uncritical);
+
+        let set = parse(
+            "bar = { show = \"hover\", fullscreen = \"show\", peek = false }\n\
+             notifications = { fullscreen = \"hold\" }",
+        )
+        .unwrap();
+        assert!(set.warnings.is_empty());
+        assert_eq!(
+            set.bar,
+            Bar {
+                show: Showing::Hover,
+                fullscreen: Showing::Always,
+                peek: false
+            }
+        );
+        assert_eq!(set.notifications.fullscreen, Held::All);
+        let hover = parse("bar = { fullscreen = \"hover\" }").unwrap();
+        assert_eq!(hover.bar.fullscreen, Showing::Hover);
+        let show = parse("notifications = { fullscreen = \"show\" }").unwrap();
+        assert_eq!(show.notifications.fullscreen, Held::None);
+    }
+
+    #[test]
+    fn odd_bar_and_notification_settings_are_warned_about() {
+        let odd = parse(
+            "bar = { show = \"never\", fullscreen = true, peek = \"yes\", side = \"top\" }\n\
+             notifications = { fullscreen = \"mute\", sound = false }",
+        )
+        .unwrap();
+        assert_eq!(odd.bar, Bar::default());
+        assert_eq!(odd.notifications, Notifications::default());
+        assert_eq!(odd.warnings.len(), 6);
+        assert_eq!(parse("bar = \"hover\"").unwrap().warnings.len(), 1);
+        assert_eq!(parse("notifications = false").unwrap().warnings.len(), 1);
+    }
 
     #[test]
     fn widgets_can_live_in_the_dormer_alone() {
