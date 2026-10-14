@@ -1332,6 +1332,8 @@ The icons are theme names (`battery-caution`, `battery-full-charged`). `notify =
 - RSS: 15.7 → 16.2 MB, for 19 frames drawn at 32 px and the PNG decoding.
 - binary: 10,448,384 → 10,448,544 bytes; the frames are ~380 bytes each.
 
+Those numbers are tiny-skia's. On the GPU, which renders by default since D-67, a loop costs more per frame: see [D-99](#d-99-what-continuous-animation-costs-measured-no-change).
+
 ## D-65: Code is content: colored code, diffs and timelines
 
 **Status:** accepted (2026-10-13). Amends [D-61](#d-61-black-and-white-and-color-only-as-a-signal): code joins covers as content that brings its own color. *Amended by [D-92](#d-92-light-and-dark-the-palette-mirrors): the light scheme has its own, deeper code hues.*
@@ -2211,3 +2213,32 @@ The settings are grouped by the thing they're about, not by situation, because e
 | this, + `essential` and `update` under `[[dormer]]` | | ~18.4–18.5 MB | 0 |
 
 The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` and 630 KB for `update`, mostly zbus, serde and iced code instantiated anew for each plugin, as with `appearance` (D-92). A bar built by eave-build has only what config.toml uses. The plugins' RSS is the session bus connection and two unit subscriptions.
+
+---
+
+## D-99: What continuous animation costs (measured, no change)
+
+**Status:** measurement (2026-10-14). Nothing changed; it informs D-64 and D-67.
+
+**Question:** could eave-claude's mascot, or an icon, animate all the time? D-64 kept the mascot still at rest because "every frame redraws the whole surface". D-66 found that overstated for tiny-skia, which repaints only what changed. But iced_wgpu, the default since D-67, has no damage tracking. Every frame clears, renders and presents the whole surface.
+
+**How:** a bench-only branch (deleted) added two env knobs, `EAVE_BENCH_SPRITE_FPS` (replacing `SPRITE_FRAME`) and `EAVE_BENCH_GULP_FPS` (capping `gulp`'s rate). It ran a second bar from the user's config, without eave-claude and notifications, plus a bench widget: the mascot's question sprite looping with every frame different, or `gulp(icon(Battery))`. Each run had 10 s of warm-up, then 60 s measured: eave's and Hyprland's CPU from `/proc/<pid>/stat`. On tiny-skia, `EAVE_FRAMES` confirmed each run reached its rate. Asahi, M1 Pro (8 cores), 120 Hz, scale 2, the user working meanwhile. Battery power was measured too but swamped by that work (13–22 W), so it's left out.
+
+**Measured** (% of one core):
+
+| fps | GPU sprite: eave / Hyprland | GPU icon: eave / Hyprland | CPU sprite: eave / Hyprland | CPU icon: eave / Hyprland |
+|---|---|---|---|---|
+| none | 0.2–0.4 / 1.8–2.1 | | 0.2–0.7 / 1.1–3.4 | |
+| 4 | 0.9 / 0.9 | 1.0 / 1.7 | 0.5 / 4.6 | 0.3 / 3.1 |
+| 10 | 2.3 / 3.4 | 2.0 / 2.5 | 1.6 / 6.2 | 0.9 / 3.5 |
+| 30 | 5.1 / 4.6 | 5.3 / 5.2 | 1.0 / 4.8 | 3.0 / 5.9 |
+| 60 | 9.9 / 9.6 | 10.3 / 9.5 | 0.8 / 4.8 | 4.3 / 8.9 |
+| 120 | 18.4 / 15.3 | 18.3 / 14.9 | 1.3 / 5.0 | 8.6 / 14.5 |
+
+**What it says:**
+- On the GPU a frame costs the same whatever moves: ~1.5 ms of eave's CPU and ~1.3 ms of Hyprland's. The cost is the frame rate, not the size of what animates.
+- On tiny-skia a small sprite is nearly free at any rate (~0.1 ms a frame). A swelling icon costs ~0.7 ms a frame at 120 fps, because its paths are redrawn every frame. Hyprland stayed flat for the sprite but rose with the icon, which isn't explained. It may be noise from the user's work.
+- **A loop at the sprite's 4 fps is cheap on both renderers:** under 1% of one core. The mascot could loop all day.
+- **30 fps or more for good is not:** ~10% of one core on the GPU, 50–100× the bar at rest, and it wakes the CPU and GPU 30–120 times a second, which this didn't measure on battery. Keep fast motion to bursts.
+
+**Damage for the GPU?** Not pursued. eave's ~1.5 ms likely isn't pixels (0.3 Mpx is nothing to a GPU, and tiny-skia walks the same tree for ~0.1 ms). It's probably fixed per-frame work: iced_wgpu preparing layers and text, encoding, submitting, acquiring a frame. Damage would mostly relieve Hyprland, and wgpu exposes neither buffer age nor present-with-damage, so it means patching wgpu too. **Next step if this comes back:** `perf record` the GPU bar at 60 fps to see where eave's 1.5 ms goes. If it's iced_wgpu redoing text or layers every frame, caching that is a far smaller patch.
