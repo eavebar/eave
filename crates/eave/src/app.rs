@@ -1668,11 +1668,11 @@ fn dormer_view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         .into()
 }
 
-/// Where the dormer comes out, from the surface's top: the bottom of the notch as the hardware has
-/// it, which is black whatever the bar draws, or the bottom of the grown top edge.
+/// Where the dormer comes out, from the surface's top: the bottom of the notch as the bar draws it,
+/// grown, or the bottom of the grown top edge. Its neck flows out of that.
 fn dormer_drop(screen: &notch::Screen) -> f32 {
     match screen.notch {
-        Some(notch) => screen.notch_top(notch) + notch.height - notch.grow[1] - screen.inset[0],
+        Some(notch) => screen.notch_top(notch) + notch.height - screen.inset[0],
         None => screen.grow,
     }
 }

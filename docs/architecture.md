@@ -120,7 +120,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread
   src/cover.rs             covers: a file or https URL → cropped, rounded 32 and 256 px bitmaps, off the UI thread
   src/dormer.rs            the dormer's list: what widgets offer, ranked for what's typed, the selection and recent picks
-  src/neck.rs              the neck the dormer's drop hangs on: a metaball bridge between two circles
+  src/neck.rs              the neck the dormer's drop hangs on: the smooth union of the notch's bottom and the drop, row by row
   src/theme.rs             every color, size and font
   src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay, switching popovers mid-morph, the collapse chevron on hover
   src/squish.rs            how squished the items being drawn are, set by their island

@@ -1811,9 +1811,15 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 **Status:** accepted (2026-10-14). Supersedes how [D-84](#d-84-the-dormer-actions-widgets-declare-found-by-typing)'s island moves.
 
 **What:** the dormer no longer comes out of the top as a notch-wide shape. It comes out as a drop, and what it comes out of squishes.
-- **Its island is a dot** where it comes out. With a notch, that's the bottom middle of the hardware's notch, without the grown `below` (D-75), which is black whatever the bar draws. Without a notch, it's the bottom of the grown top edge (D-81). `island::Popover::drop` says how far down the surface that is.
-- **Stops on the way:** the shape's edges ride `MORPH` from the dot through two stops: first a ball (`DROP_BALL`) swelling half out of where it comes out, then the same ball fallen `DROP_FALL` below it. After that, they head for the panel. They head on to the next stop once they're `DROP_WAYPOINT` of the way to one, so it's one motion, not three. Closing runs through the same stops backwards. The corners are a circle's while it's a ball, and blend into the panel's as it unfolds. The content waits for the unfolding, as it waits for any popover's morph.
-- **The neck:** while the ball is round and close enough, a bridge of black joins it to a circle (`NECK_ROOT`) hidden in the notch or the edge. It is the classic metaball bridge between two circles (`neck.rs`): the circles' tangent points, joined by cubic curves. It thins as the ball falls, and pinches off past the root's radius plus `NECK_REACH` of the ball's, before the ball unfolds. On the way back it joins up again as the ball rises.
+- **Its island is a dot** where it comes out. With a notch, that's the bottom middle of the notch as the bar draws it, grown (D-75). Without a notch, it's the bottom of the grown top edge (D-81). `island::Popover::drop` says how far down the surface that is.
+- **Stops on the way:** the shape's edges ride `MORPH` from the dot through two stops: first a ball (`DROP_BALL`) swelling half out of where it comes out, then the same ball fallen `DROP_FALL` below it. After that, they head for the panel. They head on to the next stop once they're `DROP_WAYPOINT` (0.4) of the way to one, while the shape is still quick, so it never slows down on the way and moves as one motion. *(It was 0.7 at first: the shape all but stopped at each stop, and next to the other morphs it felt halting.)* Closing runs through the same stops backwards. The corners are a circle's while it's a ball, and blend into the panel's as it unfolds. The content waits for the unfolding, as it waits for any popover's morph.
+- **The neck** (`neck.rs`) is the smooth union of the line along the bottom of where it comes out and the drawn shape: the polynomial smooth minimum of their distances, blending over `NECK_BLEND` (36 px). Both are symmetric about the middle, and the field only grows away from it along a row. So each half-pixel row is one span, found by bisection, no wider than `NECK_SPREAD`, and the outline is the spans' ends. A drop just under the notch sits in a wide, smooth bell, about three times its width at the root. The bell narrows as the drop falls, thins to a waist and pinches off (about half `NECK_BLEND` away), leaving a drip on the notch that draws back in. On the way back, it catches the drop again. The blend shrinks with the drop while it's smaller than its ball, so a dot has none. *(The first version bridged two circles with the classic metaball curves. The bridge was narrow from the start, so the ball seemed to slide out of a slot instead of growing out of the notch.)*
+- **Bounces** that the user liked on workspace switches: a lurch on `REACT` (`DROP_BOUNCE`, 3 px), with the sides leaning and the side it goes toward bulging, on the jelly.
+  - Down, as the neck lets go of it.
+  - Down again, as it falls into place as the panel. A look-ahead, as with the splat, makes it peak on arrival.
+  - Up, as the neck catches it on the way back.
+
+  The neck is drawn where the drop is, moved, but flows from where it comes out, which stays put.
 - **What it comes out of squishes,** within what it's grown by, so it never gets smaller than the hardware's:
   - As the dormer opens, the notch pinches in from each side (up to `NOTCH_PINCH`, a little taller by `BULGE`).
   - As the drop lands back, the notch flattens (up to `NOTCH_FLATTEN`, a little wider).
@@ -1827,11 +1833,12 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 
 **Alternatives:**
 - a clean ball, without the neck: cheaper, but it pops out instead of pulling away.
+- tracing the union's outline with marching squares: no need, since each row is one span.
 - squishing the notch from the island, drawing a notch of its own while the dormer is there: two shapes in one island, and the notch drawn twice.
 - one waypoint (straight from the dot to a fallen ball): the ball left the notch as it swelled, so the neck never had a ball to hold.
 
 **Cost:** no dependency. Built and drawn only while it moves:
-- the neck: one path a frame, while the ball hangs on it;
+- the neck: about 150 rows of 18 field samples and one path a frame, while the drop is within two blends of the notch;
 - the notch or edge path: rebuilt each frame while it squishes, cached again at rest;
 - the stops: no allocation.
 

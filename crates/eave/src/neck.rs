@@ -1,148 +1,235 @@
-//! The neck between the notch and the dormer's drop (D-86): a bridge of black between two
-//! circles, the root hidden in the notch and the ball coming out of it, curving in at the waist
-//! like a drop of something thick. It thins as they part and is gone past a few radii: the drop
-//! has pinched off. The bridge is the classic metaball one: the circles' tangent points, joined by
-//! cubic curves whose handles follow each circle's tangent there.
-
-use std::f32::consts::{FRAC_PI_2, PI};
+//! The neck between the notch and the dormer's drop (D-86): black that flows between the bottom of
+//! the notch (or the grown edge) and the drop, like something thick. It's the smooth union of the
+//! two: everywhere the line's distance and the shape's are close, the union swells out past both,
+//! so a drop just below the notch sits in a wide, smooth fillet, which narrows as it falls, thins
+//! to a waist and pinches off, leaving a drip on the notch that draws back in.
+//!
+//! Both are symmetric about the drop's middle, and the union's field only grows away from it along
+//! a row, so each row of the neck is one span, found by bisection. The outline is the spans' ends,
+//! top to bottom down the right, and back up the left.
 
 use iced::widget::canvas::Path;
-use iced::{Point, Vector};
+use iced::{Point, Rectangle};
 
-use crate::theme;
+/// How far apart the rows are, in logical pixels: under a physical pixel at scale 2.
+const ROW: f32 = 0.5;
+/// How many halvings find a span's end: well under a hundredth of a pixel across `spread`.
+const HALVINGS: u32 = 16;
 
-/// A circle: its center and radius.
+/// Where the neck flows from, and how.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Circle {
-    pub center: Point,
-    pub radius: f32,
+pub struct Root {
+    /// The bottom of what it hangs from, from the surface's top.
+    pub y: f32,
+    /// The drop's middle, across.
+    pub x: f32,
+    /// How far each way from the middle the neck may reach along the root: the fillet flattens
+    /// into it out there. Short of the notch's lower corners.
+    pub spread: f32,
+    /// How far apart the root and the shape still flow together, in logical pixels: the wider,
+    /// the wider and softer the fillet, and the further it stretches before it pinches off.
+    pub blend: f32,
 }
 
-/// How far toward the other circle each end of the neck reaches round its own: 0 grips at the
-/// nearest points, 1 at the widest the two circles' common tangents allow.
-const SPREAD: f32 = 0.5;
-/// How long the curves' handles are, before they're cut down while the circles are close.
-const HANDLE: f32 = 2.4;
+/// The neck's rows, top to bottom: each row's height, and how far its span reaches from the
+/// middle each way, if it has one.
+pub struct Neck {
+    root: Root,
+    rows: Vec<(f32, Option<f32>)>,
+}
 
-/// The bridge's outline: from the root's one side, down to the ball, across it and back up the
-/// other side, as `[from, handle, handle, to]` for each of the two curves. `None` while either is
-/// empty, while one holds the other, or once they're further apart than the root's radius and
-/// `NECK_REACH` of the ball's.
-pub fn bridge(root: Circle, ball: Circle) -> Option<[[Point; 4]; 2]> {
-    let (r1, r2) = (root.radius, ball.radius);
-    let d = root.center.distance(ball.center);
-    if r1 <= 0.0 || r2 <= 0.0 || d <= (r1 - r2).abs() || d > r1 + r2 * theme::NECK_REACH {
+impl Neck {
+    /// The neck between `root` and `shape`, rounded `radius` at its corners, down to the shape's
+    /// bottom or a blend's depth into it, whichever is higher. `None` while they're too far apart
+    /// to touch.
+    pub fn new(root: Root, shape: Rectangle, radius: f32) -> Option<Self> {
+        let blend = root.blend;
+        if blend <= 0.0 || shape.width <= 0.0 || shape.height <= 0.0 {
+            return None;
+        }
+        if shape.y - root.y > 2.0 * blend {
+            return None;
+        }
+        let bottom = (shape.y + blend).min(shape.y + shape.height);
+        let center = shape.center();
+        let half = (shape.width / 2.0, shape.height / 2.0);
+        let radius = radius.clamp(0.0, half.0.min(half.1));
+        let field = |x: f32, y: f32| {
+            let line = y - root.y;
+            let shape = rounded_box(x, y - center.y, half, radius);
+            smooth_min(line, shape, blend)
+        };
+        // From half a row under the root: on it, every row reaches all the way along it.
+        let top = root.y + ROW / 2.0;
+        let count = ((bottom - top) / ROW).ceil().max(0.0) as usize + 1;
+        let rows = (0..count)
+            .map(|row| {
+                let y = (top + row as f32 * ROW).min(bottom);
+                (y, span(|x| field(x, y), root.spread))
+            })
+            .collect();
+        Some(Self { root, rows })
+    }
+
+    /// Whether it still joins the root to the shape: no row along it is empty.
+    pub fn joined(&self) -> bool {
+        self.rows.iter().all(|(_, span)| span.is_some())
+    }
+
+    /// Its outline, to fill: a piece for each run of rows with spans. The piece at the top reaches
+    /// a pixel up into what it hangs from, as wide as its first row, so no seam shows between them.
+    pub fn path(&self) -> Option<Path> {
+        if self.rows.iter().all(|(_, span)| span.is_none()) {
+            return None;
+        }
+        let x = self.root.x;
+        Some(Path::new(|builder| {
+            let mut start = 0;
+            while start < self.rows.len() {
+                let run = self.rows[start..]
+                    .iter()
+                    .take_while(|(_, span)| span.is_some())
+                    .count();
+                if run == 0 {
+                    start += 1;
+                    continue;
+                }
+                let rows = &self.rows[start..start + run];
+                let spans = rows.iter().map(|&(y, span)| (y, span.unwrap_or_default()));
+                if start == 0 {
+                    let first = rows[0].1.unwrap_or_default();
+                    builder.move_to(Point::new(x - first, self.root.y - 1.0));
+                    builder.line_to(Point::new(x + first, self.root.y - 1.0));
+                    for (y, half) in spans.clone() {
+                        builder.line_to(Point::new(x + half, y));
+                    }
+                } else {
+                    for (index, (y, half)) in spans.clone().enumerate() {
+                        let at = Point::new(x + half, y);
+                        if index == 0 {
+                            builder.move_to(at);
+                        } else {
+                            builder.line_to(at);
+                        }
+                    }
+                }
+                for (y, half) in spans.rev() {
+                    builder.line_to(Point::new(x - half, y));
+                }
+                builder.close();
+                start += run;
+            }
+        }))
+    }
+}
+
+/// How far from the middle, up to `spread`, a row's `field` stays inside (0 or less): it only
+/// grows away from the middle. `None` if even the middle is outside.
+fn span(field: impl Fn(f32) -> f32, spread: f32) -> Option<f32> {
+    if field(0.0) > 0.0 {
         return None;
     }
-    // How far round each circle the overlap already reaches.
-    let (u1, u2) = if d < r1 + r2 {
-        (
-            ((r1 * r1 + d * d - r2 * r2) / (2.0 * r1 * d))
-                .clamp(-1.0, 1.0)
-                .acos(),
-            ((r2 * r2 + d * d - r1 * r1) / (2.0 * r2 * d))
-                .clamp(-1.0, 1.0)
-                .acos(),
-        )
-    } else {
-        (0.0, 0.0)
-    };
-    let toward = Vector::new(ball.center.x - root.center.x, ball.center.y - root.center.y);
-    let between = toward.y.atan2(toward.x);
-    let widest = ((r1 - r2) / d).clamp(-1.0, 1.0).acos();
-    let a1 = between + u1 + (widest - u1) * SPREAD;
-    let a2 = between - u1 - (widest - u1) * SPREAD;
-    let a3 = between + PI - u2 - (PI - u2 - widest) * SPREAD;
-    let a4 = between - PI + u2 + (PI - u2 - widest) * SPREAD;
-    let on = |circle: Circle, angle: f32| {
-        circle.center + Vector::new(angle.cos(), angle.sin()) * circle.radius
-    };
-    let (p1, p2, p3, p4) = (on(root, a1), on(root, a2), on(ball, a3), on(ball, a4));
-    // Shorter handles while the circles are close, so the waist doesn't bulge past them.
-    let total = r1 + r2;
-    let length = (SPREAD * HANDLE).min(p1.distance(p3) / total) * (2.0 * d / total).min(1.0);
-    let handle = |from: Point, angle: f32, radius: f32| {
-        from + Vector::new(angle.cos(), angle.sin()) * (radius * length)
-    };
-    let h1 = handle(p1, a1 - FRAC_PI_2, r1);
-    let h2 = handle(p2, a2 + FRAC_PI_2, r1);
-    let h3 = handle(p3, a3 + FRAC_PI_2, r2);
-    let h4 = handle(p4, a4 - FRAC_PI_2, r2);
-    Some([[p1, h1, h3, p3], [p4, h4, h2, p2]])
+    if field(spread) <= 0.0 {
+        return Some(spread);
+    }
+    let (mut inside, mut outside) = (0.0, spread);
+    for _ in 0..HALVINGS {
+        let middle = (inside + outside) / 2.0;
+        if field(middle) <= 0.0 {
+            inside = middle;
+        } else {
+            outside = middle;
+        }
+    }
+    Some((inside + outside) / 2.0)
 }
 
-/// The bridge as a path to fill. Its ends are straight across each circle, inside it: the ball
-/// is drawn over them, and the root is in the notch.
-pub fn path(curves: [[Point; 4]; 2]) -> Path {
-    let [[p1, h1, h3, p3], [p4, h4, h2, p2]] = curves;
-    Path::new(|builder| {
-        builder.move_to(p1);
-        builder.bezier_curve_to(h1, h3, p3);
-        builder.line_to(p4);
-        builder.bezier_curve_to(h4, h2, p2);
-        builder.close();
-    })
+/// The smooth union of two distances: their smaller one, pulled in where they're within `blend`
+/// of each other (the polynomial smooth minimum).
+fn smooth_min(a: f32, b: f32, blend: f32) -> f32 {
+    let h = (blend - (a - b).abs()).max(0.0) / blend;
+    a.min(b) - h * h * blend / 4.0
+}
+
+/// How far `(x, y)`, from its middle, is outside a box `half` across and down from its middle,
+/// rounded `radius` at its corners. Negative inside.
+fn rounded_box(x: f32, y: f32, half: (f32, f32), radius: f32) -> f32 {
+    let qx = x.abs() - (half.0 - radius);
+    let qy = y.abs() - (half.1 - radius);
+    let outside = qx.max(0.0).hypot(qy.max(0.0));
+    outside + qx.max(qy).min(0.0) - radius
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iced::Size;
 
-    fn circle(y: f32, radius: f32) -> Circle {
-        Circle {
-            center: Point::new(100.0, y),
-            radius,
-        }
+    const ROOT: Root = Root {
+        y: 0.0,
+        x: 100.0,
+        spread: 60.0,
+        blend: 36.0,
+    };
+
+    /// A ball 26 across, its top `gap` below the root.
+    fn ball(gap: f32) -> Rectangle {
+        Rectangle::new(Point::new(87.0, gap), Size::new(26.0, 26.0))
     }
 
-    /// How wide the bridge is halfway down: between its two curves at t = ½.
-    fn waist(curves: [[Point; 4]; 2]) -> f32 {
-        let mid = |[a, b, c, d]: [Point; 4]| {
-            Point::new(
-                (a.x + 3.0 * b.x + 3.0 * c.x + d.x) / 8.0,
-                (a.y + 3.0 * b.y + 3.0 * c.y + d.y) / 8.0,
-            )
-        };
-        mid(curves[0]).distance(mid(curves[1]))
+    fn neck(gap: f32) -> Neck {
+        Neck::new(ROOT, ball(gap), 13.0).expect("close enough")
+    }
+
+    /// How wide it is at its narrowest, between the root and the ball's top.
+    fn waist(neck: &Neck, gap: f32) -> f32 {
+        neck.rows
+            .iter()
+            .filter(|(y, _)| *y <= gap)
+            .map(|(_, span)| span.unwrap_or(0.0))
+            .fold(f32::INFINITY, f32::min)
     }
 
     #[test]
-    fn the_neck_is_symmetric_about_the_line_between_them() {
-        let [[p1, h1, h3, p3], [p4, h4, h2, p2]] =
-            bridge(circle(0.0, 10.0), circle(30.0, 13.0)).expect("close enough for a neck");
-        for (a, b) in [(p1, p2), (h1, h2), (h3, h4), (p3, p4)] {
-            assert!((a.y - b.y).abs() < 1e-3, "{a:?} {b:?}");
-            assert!(((a.x - 100.0) + (b.x - 100.0)).abs() < 1e-3, "{a:?} {b:?}");
-        }
-    }
-
-    #[test]
-    fn the_neck_thins_as_they_part_then_pinches_off() {
-        let root = circle(0.0, 10.0);
+    fn a_close_drop_sits_in_a_wide_fillet_that_narrows_as_it_falls() {
         let mut last = f32::INFINITY;
-        for y in [22.0, 26.0, 30.0, 34.0, 38.0] {
-            let width = waist(bridge(root, circle(y, 13.0)).unwrap());
-            assert!(width < last, "thinner at {y}: {width} after {last}");
+        for gap in [1.0, 3.0, 5.0, 7.0] {
+            let neck = neck(gap);
+            assert!(neck.joined(), "joined at {gap}");
+            let width = waist(&neck, gap);
+            assert!(width < last, "narrower at {gap}: {width} after {last}");
             last = width;
         }
-        let reach = 10.0 + 13.0 * theme::NECK_REACH;
-        assert!(bridge(root, circle(reach + 0.5, 13.0)).is_none());
+        // Right under the root it flattens into it: a wide bell, three times the ball's width.
+        assert!(neck(1.0).rows[0].1.unwrap() > 3.0 * 13.0);
     }
 
     #[test]
-    fn nothing_while_one_holds_the_other_or_either_is_empty() {
-        assert!(bridge(circle(0.0, 10.0), circle(2.0, 3.0)).is_none());
-        assert!(bridge(circle(0.0, 10.0), circle(20.0, 0.0)).is_none());
+    fn it_pinches_off_leaving_a_drip_then_lets_go() {
+        let pinched = (1..40)
+            .map(|gap| gap as f32)
+            .find(|&gap| !neck(gap).joined())
+            .expect("pinches off");
+        assert!(pinched > 5.0 && pinched < ROOT.blend, "at {pinched}");
+        assert!(neck(pinched).path().is_some(), "a drip stays a moment");
+        assert!(Neck::new(ROOT, ball(2.0 * ROOT.blend + 1.0), 13.0).is_none());
     }
 
     #[test]
-    fn the_neck_stays_between_the_circles() {
-        let (root, ball) = (circle(0.0, 10.0), circle(34.0, 13.0));
-        for curve in bridge(root, ball).unwrap() {
-            for point in curve {
-                assert!((87.0..=113.0).contains(&point.x), "{point:?}");
-                assert!((-10.0..=47.0).contains(&point.y), "{point:?}");
-            }
-        }
+    fn it_never_reaches_past_its_spread() {
+        let neck = neck(0.0);
+        assert!(
+            neck.rows
+                .iter()
+                .all(|(_, span)| span.is_none_or(|half| half <= ROOT.spread))
+        );
+    }
+
+    #[test]
+    fn the_field_is_the_shapes_far_from_the_root() {
+        assert_eq!(rounded_box(0.0, 0.0, (13.0, 13.0), 13.0), -13.0);
+        assert!((rounded_box(20.0, 0.0, (13.0, 13.0), 13.0) - 7.0).abs() < 1e-4);
+        assert_eq!(smooth_min(50.0, 2.0, 20.0), 2.0);
+        assert!(smooth_min(5.0, 5.0, 20.0) < 5.0);
     }
 }
