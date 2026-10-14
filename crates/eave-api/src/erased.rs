@@ -7,7 +7,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-pub use crate::effect::PopoverRequest;
+pub use crate::effect::{DialogRequest, PopoverRequest};
 use crate::ui::{Action, Item, Notice, Panel};
 use crate::{Effect, NudgeRequest, Subscription, Task, Widget};
 
@@ -43,6 +43,7 @@ pub trait ErasedWidget {
     fn subscription(&self) -> Subscription<AnyMessage>;
     fn item(&self) -> Item<AnyMessage>;
     fn popover(&self) -> Option<Panel<AnyMessage>>;
+    fn dialog(&self) -> Option<Panel<AnyMessage>>;
     fn notices(&self) -> Vec<Notice<AnyMessage>>;
     fn actions(&self) -> Vec<Action<AnyMessage>>;
 }
@@ -54,11 +55,18 @@ impl<W: Widget> ErasedWidget for W {
             debug_assert!(false, "message routed to the wrong widget");
             return Effect::none();
         };
-        let (task, popover, nudge) = Widget::update(self, message).into_parts();
+        let effect = Widget::update(self, message);
+        let dialog = effect.dialog_request();
+        let (task, popover, nudge) = effect.into_parts();
         let effect = Effect::task(task.map(AnyMessage::new));
         let effect = match popover {
             Some(PopoverRequest::Open) => effect.open_popover(),
             Some(PopoverRequest::Close) => effect.close_popover(),
+            None => effect,
+        };
+        let effect = match dialog {
+            Some(DialogRequest::Open) => effect.open_dialog(),
+            Some(DialogRequest::Close) => effect.close_dialog(),
             None => effect,
         };
         match nudge {
@@ -81,6 +89,10 @@ impl<W: Widget> ErasedWidget for W {
 
     fn popover(&self) -> Option<Panel<AnyMessage>> {
         Widget::popover(self).map(|panel| panel.map(&AnyMessage::new))
+    }
+
+    fn dialog(&self) -> Option<Panel<AnyMessage>> {
+        Widget::dialog(self).map(|panel| panel.map(&AnyMessage::new))
     }
 
     fn notices(&self) -> Vec<Notice<AnyMessage>> {
@@ -152,6 +164,38 @@ mod tests {
         assert_eq!(parts.title, "Mute");
         assert_eq!(parts.keywords, ["sound"]);
         assert_eq!(parts.message.downcast::<u8>(), Some(7));
+    }
+
+    #[test]
+    fn dialogs_survive_erasure() {
+        struct Talking;
+        impl Widget for Talking {
+            type Config = crate::NoConfig;
+            type Message = u8;
+            fn new(_: Self::Config) -> (Self, Task<u8>) {
+                (Talking, Task::none())
+            }
+            fn update(&mut self, message: u8) -> Effect<u8> {
+                match message {
+                    0 => Effect::none().open_dialog(),
+                    _ => Effect::none().close_dialog().open_popover(),
+                }
+            }
+            fn item(&self) -> Item<u8> {
+                Item::new(crate::ui::empty())
+            }
+            fn dialog(&self) -> Option<Panel<u8>> {
+                Some(Panel::new(crate::ui::label("Hello")))
+            }
+        }
+
+        let mut talking = Talking;
+        let effect = ErasedWidget::update(&mut talking, AnyMessage::new(0u8));
+        assert_eq!(effect.dialog_request(), Some(DialogRequest::Open));
+        let effect = ErasedWidget::update(&mut talking, AnyMessage::new(1u8));
+        assert_eq!(effect.dialog_request(), Some(DialogRequest::Close));
+        assert_eq!(effect.into_parts().1, Some(PopoverRequest::Open));
+        assert!(ErasedWidget::dialog(&talking).is_some());
     }
 
     #[test]

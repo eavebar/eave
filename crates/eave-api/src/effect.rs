@@ -6,12 +6,20 @@ use crate::Task;
 pub struct Effect<M> {
     task: Task<M>,
     popover: Option<PopoverRequest>,
+    dialog: Option<DialogRequest>,
     nudge: Option<NudgeRequest>,
 }
 
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PopoverRequest {
+    Open,
+    Close,
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogRequest {
     Open,
     Close,
 }
@@ -53,6 +61,7 @@ impl<M> Effect<M> {
         Self {
             task: Task::none(),
             popover: None,
+            dialog: None,
             nudge: None,
         }
     }
@@ -61,6 +70,7 @@ impl<M> Effect<M> {
         Self {
             task,
             popover: None,
+            dialog: None,
             nudge: None,
         }
     }
@@ -83,6 +93,22 @@ impl<M> Effect<M> {
 
     pub fn close_popover(mut self) -> Self {
         self.popover = Some(PopoverRequest::Close);
+        self
+    }
+
+    /// Opens this widget's dialog: its panel in the middle of the screen, for what needs more room
+    /// than a popover. Ignored if the widget has no dialog.
+    ///
+    /// The host picks where it comes from: out of what was just acted on (the popover, which folds
+    /// away, the item, a notification or the dormer), or out of the top of the screen, and it goes
+    /// back there when it closes. Opening it closes any popover and the dormer.
+    pub fn open_dialog(mut self) -> Self {
+        self.dialog = Some(DialogRequest::Open);
+        self
+    }
+
+    pub fn close_dialog(mut self) -> Self {
+        self.dialog = Some(DialogRequest::Close);
         self
     }
 
@@ -109,6 +135,13 @@ impl<M> Effect<M> {
     #[doc(hidden)]
     pub fn into_parts(self) -> (Task<M>, Option<PopoverRequest>, Option<NudgeRequest>) {
         (self.task, self.popover, self.nudge)
+    }
+
+    /// The dialog request, read before [`Effect::into_parts`], which leaves it out to keep its
+    /// shape.
+    #[doc(hidden)]
+    pub fn dialog_request(&self) -> Option<DialogRequest> {
+        self.dialog
     }
 }
 
