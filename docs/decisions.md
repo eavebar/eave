@@ -1864,3 +1864,21 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 - a `-symbolic` lookup tinted like `symbol`: still depends on the theme having it.
 - the battery plugin sending an `x-eave-*` hint: other apps' device notifications (a volume OSD, a VPN) would still show letters.
 
+## D-88: Shortcuts are named on rows; the host draws and binds them
+
+**Status:** accepted (2026-10-14). Amends [D-36](#d-36-popovers-take-the-keyboard-while-open) and [D-41](#d-41-text-fields-in-popovers).
+
+**What:**
+- eave-api 0.1.8 adds `ui::Key` (a character, Enter, Space, Tab, the arrows; no Escape), `ui::Shortcut` built with `shortcut(key)` and `.ctrl()`, `.alt()`, `.shift()`, `.logo()`, a `keys(shortcut)` node that draws it as keycaps, and `list_item(..).shortcut(..)`.
+- A row's shortcut is drawn as keycaps at its end, after its trailing node, and presses the row (its `on_press`) while its popover is open. Popovers only have the keyboard while open (D-36), so that's all "only when focused" takes.
+- `popover_view` collects the shortcuts of the panel's rows, skipping rows inside `tabs` (only one page shows), and gives the island an `on_key` that matches the key and exactly the modifiers held. A letter matches in either case.
+- A shortcut with no Ctrl, Alt or Super gives way while a text field in the panel has the focus, so typing `1` in a field types it. The island now finds out whether a field has the focus before asking `on_key`, and tells it.
+- A modifier pressed alone no longer closes a popover: it may start `Ctrl+K`.
+- The first user is eave-claude: the first ten sessions get `1` to `9` and `0`.
+
+**Why:** the plugin names the key once, and the host both shows it and binds it, so the hint can't say one key while another works. Plugins never see key events, which keeps the vocabulary closed (D-13). Esc stays the host's: it always closes.
+
+**Alternatives:**
+- a `Panel::on_key` that hands plugins raw keys: they'd draw their own hints, or none, and every plugin would match keys its own way.
+- `iced::keyboard::Key` in the API: ties eave-api to iced's types and lets plugins bind keys the host can't draw.
+- keys on buttons too: no use for it yet; a row is what the keyboard picks among.

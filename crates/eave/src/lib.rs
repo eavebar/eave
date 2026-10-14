@@ -27,6 +27,7 @@ mod meter;
 mod neck;
 mod notch;
 mod pip;
+mod shortcut;
 mod slider;
 mod slot;
 mod spring;

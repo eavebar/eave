@@ -27,6 +27,7 @@ use crate::cover::{self, Cover};
 use crate::dormer::{self, Recent, Session, Source};
 use crate::island::{self, Island, Placement, Toggle};
 use crate::notch::{self, Notch, Place, Side};
+use crate::shortcut;
 use crate::slot::Slot;
 use crate::squircle::CornerShape;
 use crate::zones::{self, Zones};
@@ -1763,7 +1764,7 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         drop: Some(dormer_drop(&bar.screen)),
         on_neck: Some(Box::new(|caught| Message::Dormer(Event::Neck(caught)))),
         sag: Some(bar.notch_sag.clone()),
-        on_key: Some(Box::new(|key| {
+        on_key: Some(Box::new(|key, _, _| {
             use keyboard::key::Named;
             match key {
                 keyboard::Key::Named(Named::ArrowDown | Named::Tab) => {
@@ -1909,16 +1910,29 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
     let id = popover.instance;
     // A widget can stop offering its popover while it closes: the island morphs back empty.
     let mut width = style::PANEL_WIDTH;
+    let mut keys = Vec::new();
     let content: Element<'_, AnyMessage> =
         match bar.find(id).and_then(|instance| instance.widget.popover()) {
             Some(panel) => {
                 if panel.is_wide() {
                     width = style::PANEL_WIDE_WIDTH;
                 }
-                kit::panel(panel.into_node(), &bar.icons)
+                let node = panel.into_node();
+                shortcut::collect(&node, &mut keys);
+                kit::panel(node, &bar.icons)
             }
             None => Space::new().into(),
         };
+    // The rows' shortcuts press them; one that types gives way to a focused field (D-88).
+    let on_key: Option<island::OnKey<'_, Message>> = (!keys.is_empty()).then(|| {
+        Box::new(move |key: &keyboard::Key, modifiers, typing| {
+            keys.iter()
+                .find(|(keys, _)| {
+                    !(typing && shortcut::types(keys)) && shortcut::matches(keys, key, modifiers)
+                })
+                .map(|(_, message)| Message::Widget(id, message.clone()))
+        }) as island::OnKey<'_, Message>
+    });
     island::Popover {
         key: id,
         content: content.map(move |message| Message::Widget(id, message)),
@@ -1928,7 +1942,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         on_hover: None,
         width,
         placement: Placement::Below,
-        on_key: None,
+        on_key,
         drop: None,
         on_neck: None,
         sag: None,
