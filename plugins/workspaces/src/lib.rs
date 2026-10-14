@@ -1,6 +1,7 @@
-//! Hyprland workspaces that have windows in them, plus the one you are on. Each shows its name
-//! and the icons of its apps: two at most, then `+n` for the windows they leave out. Resting the
-//! pointer on one shows an icon for every window. The ones you aren't on are dimmed. Click one to
+//! Hyprland workspaces that have windows in them, plus the one you are on. Each shows its name,
+//! and with `icons` on, the icons of its apps: two at most, then `+n` for the windows they leave
+//! out, and resting the pointer on one shows an icon for every window. The ones you aren't on are
+//! dimmed. Click one to
 //! go there, right-click it for a list of its windows, scroll to move between them. Switching
 //! nudges the island the way it went, over as long as Hyprland's own workspace animation takes.
 
@@ -22,10 +23,13 @@ pub fn register(registry: &mut Registry) {
 pub struct Config {
     /// Workspaces 1 to `persistent` are always shown, even when empty or not open.
     persistent: u32,
+    /// Each workspace shows its apps' icons beside its name.
+    icons: bool,
 }
 
 pub struct Workspaces {
     persistent: u32,
+    icons: bool,
     /// Sorted by id. Special workspaces (negative ids) are left out.
     shown: Vec<Shown>,
     /// What Hyprland has open, from which `shown` is derived.
@@ -90,6 +94,7 @@ impl Widget for Workspaces {
     fn new(config: Config) -> (Self, Task<Message>) {
         let mut workspaces = Self {
             persistent: config.persistent,
+            icons: config.icons,
             shown: Vec::new(),
             open: Vec::new(),
             windows: Vec::new(),
@@ -168,7 +173,7 @@ impl Widget for Workspaces {
             return Item::hidden();
         }
         let buttons = self.shown.iter().map(|workspace| {
-            let (collapsed, expanded) = workspace.views();
+            let (collapsed, expanded) = workspace.views(self.icons);
             let content = match expanded {
                 Some(expanded) => ui::expand(collapsed, expanded),
                 None => collapsed,
@@ -262,9 +267,12 @@ impl Widget for Workspaces {
 impl Shown {
     /// What it shows normally, and what it shows when the pointer rests on it, if that's more:
     /// the name and one icon per app, two at most, with `+n` for the windows they leave out; and
-    /// the name and one icon per window.
-    fn views(&self) -> (Node<Message>, Option<Node<Message>>) {
+    /// the name and one icon per window. Without `icons`, just the name.
+    fn views(&self, icons: bool) -> (Node<Message>, Option<Node<Message>>) {
         let name = || ui::label(self.name.clone());
+        if !icons {
+            return (name(), None);
+        }
         let mut apps: Vec<&String> = Vec::new();
         for class in &self.classes {
             if !apps.contains(&class) {
@@ -450,7 +458,11 @@ mod tests {
     use super::*;
 
     fn bar(persistent: u32) -> Workspaces {
-        Workspaces::new(Config { persistent }).0
+        Workspaces::new(Config {
+            persistent,
+            icons: true,
+        })
+        .0
     }
 
     #[test]
@@ -667,7 +679,7 @@ mod tests {
     }
 
     fn views(workspace: &Shown) -> (String, Option<String>) {
-        let (collapsed, expanded) = workspace.views();
+        let (collapsed, expanded) = workspace.views(true);
         (describe(collapsed), expanded.map(describe))
     }
 
@@ -699,6 +711,25 @@ mod tests {
             views(&workspaces.shown[2]),
             ("3 [foot] +1".into(), Some("3 [foot] [foot]".into()))
         );
+    }
+
+    #[test]
+    fn without_icons_only_the_name_shows() {
+        let mut workspaces = bar(1);
+        event(&mut workspaces, open("a", "1", "kitty"));
+        event(&mut workspaces, open("b", "1", "firefox"));
+        event(&mut workspaces, open("c", "1", "slack"));
+        let (collapsed, expanded) = workspaces.shown[0].views(false);
+        assert_eq!(describe(collapsed), "1");
+        assert!(expanded.is_none());
+    }
+
+    #[test]
+    fn icons_are_off_unless_asked_for() {
+        let config: Config = toml::Table::new().try_into().unwrap();
+        assert!(!config.icons);
+        let config: Config = toml::from_str("icons = true").unwrap();
+        assert!(config.icons);
     }
 
     #[test]
