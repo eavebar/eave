@@ -356,6 +356,8 @@ struct Motion {
     push_y: Spring,
     /// The outline, which a nudge pokes and which smooths the poke out by itself.
     jelly: Jelly,
+    /// The shelves an up or down nudge holds out of the top and the bottom (D-105).
+    shelves: [ShelfMotion; 2],
     /// How much slower than usual the last nudge plays: the push springs and the jelly run on
     /// time divided by it. 1 unless the nudge said how long it should last.
     pace: f32,
@@ -399,6 +401,7 @@ impl Default for Motion {
             push_x: Spring::new(0.0, REACT),
             push_y: Spring::new(0.0, REACT),
             jelly: Jelly::default(),
+            shelves: [ShelfMotion::default(); 2],
             pace: 1.0,
             stretch_x: Spring::new(0.0, REACT),
             stretch_y: Spring::new(0.0, REACT),
@@ -411,6 +414,58 @@ impl Default for Motion {
             pushed: 0.0,
             pushing: 0.0,
             last: None,
+        }
+    }
+}
+
+/// A shelf held out of the top or the bottom by up or down nudges (D-105): how far out it is,
+/// where it starts and ends from the island's left, and until when it's held. Each nudge while
+/// it's held only holds it longer, so a stream of them keeps it out, still, and it goes back once,
+/// `NUDGE_HOLD` after the last.
+#[derive(Debug, Clone, Copy)]
+struct ShelfMotion {
+    depth: Spring,
+    from: Spring,
+    to: Spring,
+    until: Option<Instant>,
+}
+
+impl Default for ShelfMotion {
+    fn default() -> Self {
+        Self {
+            depth: Spring::new(0.0, REACT),
+            from: Spring::new(0.0, REACT),
+            to: Spring::new(0.0, REACT),
+            until: None,
+        }
+    }
+}
+
+impl ShelfMotion {
+    /// Holds it out from `from` to `to` until `until`. Out of nothing, it starts there; already
+    /// out, it slides over.
+    fn hold(&mut self, from: f32, to: f32, until: Instant) {
+        if self.depth.target == 0.0 && self.depth.value.abs() < REST_DISTANCE {
+            self.from = Spring::new(from, REACT);
+            self.to = Spring::new(to, REACT);
+        } else {
+            self.from.target = from;
+            self.to.target = to;
+        }
+        self.depth.target = theme::NUDGE_SHELF * theme::REACT_SIZE;
+        self.until = Some(until);
+    }
+
+    fn release(&mut self) {
+        self.until = None;
+        self.depth.target = 0.0;
+    }
+
+    fn shelf(&self) -> jelly::Shelf {
+        jelly::Shelf {
+            depth: self.depth.value,
+            from: self.from.value,
+            to: self.to.value,
         }
     }
 }
@@ -582,13 +637,14 @@ impl Motion {
         self.inset.target = 0.0;
     }
 
-    /// Plays the nudges it hasn't seen yet, with where each item's center is across the island.
-    /// A new island only notes them: they happened before it. A held island, or one with a
-    /// popover, lets them pass.
+    /// Plays the nudges it hasn't seen yet, with where each item starts across the surface and
+    /// how wide it is. A new island only notes them: they happened before it. A held island, or
+    /// one with a popover, lets them pass.
     fn nudges<N: Into<NudgeRequest>>(
         &mut self,
         nudges: impl IntoIterator<Item = (u64, (u64, N))>,
-        center: impl Fn(u64) -> Option<f32>,
+        span: impl Fn(u64) -> Option<(f32, f32)>,
+        now: Instant,
     ) {
         let seen = self.seen;
         let mut newest = seen.unwrap_or(0);
@@ -599,7 +655,7 @@ impl Motion {
                 && !self.popover.present
             {
                 let request = nudge.into();
-                self.nudge(request, center(key));
+                self.nudge(request, span(key), now);
                 self.kick(key, request.nudge);
             }
         }
@@ -607,20 +663,19 @@ impl Motion {
     }
 
     /// Sets the island off: sideways as a whole, or up or down half a pixel. Its outline leans into
-    /// it, swelling on the side it's going toward and flattening on the side it's leaving, and up
-    /// or down the edge over the item (at `center`) bulges. The springs and the jelly bring it
-    /// back. A nudge that says how long it lasts plays the same motion stretched out to that.
-    fn nudge(&mut self, request: NudgeRequest, center: Option<f32>) {
+    /// it, swelling on the side it's going toward and flattening on the side it's leaving. Up or
+    /// down, the edge over the item (at `span`, its left and width) holds a shelf out until the
+    /// nudges stop: one that comes while it's held only holds it longer (D-105). The springs and
+    /// the jelly bring it back. A nudge that says how long it lasts plays the same motion
+    /// stretched out to that.
+    fn nudge(&mut self, request: NudgeRequest, span: Option<(f32, f32)>, now: Instant) {
         let NudgeRequest { nudge, lasting } = request;
         // The springs run on time slowed by the pace, so the same kicks go just as far, slower.
         self.pace = lasting.map_or(1.0, |lasting| {
             (lasting.as_secs_f32() / REACT.settle_time().as_secs_f32()).clamp(0.5, 5.0)
         });
         let (push, lift) = (react(theme::NUDGE_PUSH), react(theme::NUDGE_LIFT));
-        let (lean, bump) = (
-            jelly::poke(theme::JELLY_LEAN),
-            jelly::poke(theme::JELLY_BUMP),
-        );
+        let lean = jelly::poke(theme::JELLY_LEAN);
         // From −1 at the start of a side to 1 at its end, eased at both.
         let lean_toward_end = move |along: f32| lean * (std::f32::consts::PI * (along - 0.5)).sin();
         match nudge {
@@ -633,27 +688,26 @@ impl Motion {
             }
             Nudge::Up | Nudge::Down => {
                 let (way, edge) = if nudge == Nudge::Up {
-                    (-1.0, Side::Top)
+                    (-1.0, 0)
                 } else {
-                    (1.0, Side::Bottom)
+                    (1.0, 1)
                 };
+                // The other edge lets go of its shelf: the change went the other way.
+                self.shelves[1 - edge].release();
+                let held = self.shelves[edge].until.is_some();
+                if let (Some((x, width)), Some(island)) = (span, self.island) {
+                    let from = x - island.x;
+                    self.shelves[edge].hold(from, from + width, now + theme::NUDGE_HOLD);
+                }
+                // Held already: it stays out, and the island doesn't lurch again.
+                if held {
+                    return;
+                }
                 self.push_y.velocity = way * lift;
                 // Down the sides runs top to bottom, so going up swells the top.
                 for side in [Side::Left, Side::Right] {
                     self.jelly.kick(side, |along| way * lean_toward_end(along));
                 }
-                let (Some(center), Some(island)) = (center, self.island) else {
-                    return;
-                };
-                if island.width < 1.0 {
-                    return;
-                }
-                let at = (center - island.x) / island.width;
-                let half = theme::NUDGE_BUMP_WIDTH / 2.0 / island.width;
-                self.jelly.kick(edge, |along| {
-                    let from = ((along - at) / half).clamp(-1.0, 1.0);
-                    bump * 0.5 * (1.0 + (std::f32::consts::PI * from).cos())
-                });
             }
         }
     }
@@ -1105,6 +1159,11 @@ impl Motion {
                 .iter_mut()
                 .flat_map(|item| [&mut item.x, &mut item.shown]),
         )
+        .chain(
+            self.shelves
+                .iter_mut()
+                .flat_map(|shelf| [&mut shelf.depth, &mut shelf.from, &mut shelf.to]),
+        )
     }
 
     /// The springs a nudge moves, which run at its pace.
@@ -1136,6 +1195,7 @@ impl Motion {
     /// Advances to `now`. Returns whether another frame is needed.
     fn step(&mut self, now: Instant) -> bool {
         self.aim();
+        self.let_shelves_go(now);
         if self.at_rest() {
             self.let_go_of_grab();
             self.last = None;
@@ -1165,11 +1225,29 @@ impl Motion {
             self.springs().for_each(Spring::settle);
             self.paced().for_each(Spring::settle);
             self.jelly.settle();
+            self.jelly.shelves = self.shelves.map(|shelf| shelf.shelf());
             self.let_go_of_grab();
             self.last = None;
             return false;
         }
+        self.jelly.shelves = self.shelves.map(|shelf| shelf.shelf());
         true
+    }
+
+    /// Lets the shelves go whose hold is up, and all of them while a popover is out.
+    fn let_shelves_go(&mut self, now: Instant) {
+        let popover = self.popover.present;
+        for shelf in &mut self.shelves {
+            if popover || shelf.until.is_some_and(|until| now >= until) {
+                shelf.release();
+            }
+        }
+    }
+
+    /// When a held shelf is up, if one is: nothing moves till then, so no frames are needed
+    /// before it.
+    fn wake(&self) -> Option<Instant> {
+        self.shelves.iter().filter_map(|shelf| shelf.until).min()
     }
 
     /// Forgets where it was grabbed, once it's let go and back in place.
@@ -2002,7 +2080,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
                 nudge,
                 lasting: Some(theme::COLLAPSE_SQUASH),
             };
-            motion.nudge(request, None);
+            motion.nudge(request, None, Instant::now());
         }
         motion.swap(self.popover.as_ref().map(|popover| popover.key));
         motion.drop = self.popover.as_ref().and_then(|popover| popover.drop);
@@ -2029,13 +2107,17 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             positions,
             self.popover.as_ref().map(|popover| popover.open),
         );
-        motion.nudges(self.nudges.iter().copied(), |key| {
-            self.keys
-                .iter()
-                .zip(layout.children())
-                .find(|(k, _)| **k == key)
-                .map(|(_, child)| child.bounds().center_x())
-        });
+        motion.nudges(
+            self.nudges.iter().copied(),
+            |key| {
+                self.keys
+                    .iter()
+                    .zip(layout.children())
+                    .find(|(k, _)| **k == key)
+                    .map(|(_, child)| (child.bounds().x, child.bounds().width))
+            },
+            Instant::now(),
+        );
 
         match event {
             // Watched whether or not an item handled it: the island reacts to every press on it.
@@ -2078,6 +2160,8 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         }
         if !motion.at_rest() {
             shell.request_redraw();
+        } else if let Some(wake) = motion.wake() {
+            shell.request_redraw_at(wake);
         }
     }
 
@@ -2379,12 +2463,19 @@ mod tests {
 
     const FRAME: Duration = Duration::from_millis(16);
 
-    /// Steps frame by frame until the motion asks for no more; returns the frames taken.
+    /// Steps frame by frame until the motion asks for no more, waking when it asks to be woken;
+    /// returns the frames taken.
     fn run(motion: &mut Motion, start: Instant, mut each: impl FnMut(&Motion)) -> usize {
         let mut now = start;
         for frame in 0..1000 {
             if !motion.step(now) {
-                return frame;
+                match motion.wake() {
+                    Some(wake) => {
+                        now = now.max(wake);
+                        continue;
+                    }
+                    None => return frame,
+                }
             }
             each(motion);
             now += FRAME;
@@ -2975,9 +3066,9 @@ mod tests {
         }
     }
 
-    /// Where `settled` puts each item's center: 30 px wide, at 10, 50, 90…
-    fn center(key: u64) -> Option<f32> {
-        Some(25.0 + 40.0 * (key - 1) as f32)
+    /// Where `settled` puts each item: 30 px wide, at 10, 50, 90…
+    fn span(key: u64) -> Option<(f32, f32)> {
+        Some((10.0 + 40.0 * (key - 1) as f32, 30.0))
     }
 
     /// How far a reaction going out `peak` goes, with every reaction's size.
@@ -2993,9 +3084,9 @@ mod tests {
     /// An island at rest that has already noted the nudges so far.
     fn nudged(nudges: &[(u64, (u64, Nudge))]) -> Motion {
         let mut motion = settled(rect(0.0, 200.0), &[1, 2]);
-        motion.nudges([(1, (1, Nudge::Up))], center);
+        motion.nudges([(1, (1, Nudge::Up))], span, Instant::now());
         assert!(motion.at_rest(), "a new island doesn't replay old nudges");
-        motion.nudges(nudges.iter().copied(), center);
+        motion.nudges(nudges.iter().copied(), span, Instant::now());
         motion
     }
 
@@ -3016,7 +3107,7 @@ mod tests {
         assert!(near(furthest, theme::NUDGE_PUSH, 0.2), "{furthest}");
         assert_eq!(motion.offset(), Vector::ZERO);
         // Already played.
-        motion.nudges([(2, (2, Nudge::Right))], center);
+        motion.nudges([(2, (2, Nudge::Right))], span, Instant::now());
         assert!(motion.at_rest());
     }
 
@@ -3029,7 +3120,7 @@ mod tests {
                 lasting,
             };
             let mut motion = nudged(&[]);
-            motion.nudges([(2, (2, request))], center);
+            motion.nudges([(2, (2, request))], span, Instant::now());
             let (mut furthest, mut peak_at, mut frame): (f32, usize, usize) = (0.0, 0, 0);
             let frames = run(&mut motion, Instant::now(), |motion| {
                 frame += 1;
@@ -3047,44 +3138,123 @@ mod tests {
     }
 
     #[test]
-    fn a_nudge_down_bulges_the_bottom_under_its_item_then_flattens() {
-        // Wide enough that the far end is well clear of the bump.
+    fn a_nudge_down_holds_a_flat_shelf_under_its_item_then_lets_it_go() {
+        // Wide enough that the far end is well clear of the shelf.
         let mut motion = settled(rect(0.0, 400.0), &[1, 2]);
-        motion.nudges([(1, (1, Nudge::Up))], center);
-        motion.nudges([(2, (2, Nudge::Down))], center);
+        motion.nudges([(1, (1, Nudge::Up))], span, Instant::now());
+        let start = Instant::now();
+        motion.nudges([(2, (2, Nudge::Down))], span, start);
         let shape = motion.shape();
-        let (mut furthest, mut lowest, mut wider): (f32, f32, f32) = (0.0, 0.0, 0.0);
-        let mut item: f32 = 0.0;
-        run(&mut motion, Instant::now(), |motion| {
-            let jelly = &motion.jelly;
-            let under = jelly.value(Side::Bottom, 65.0 / 400.0);
+        let depth = size(theme::NUDGE_SHELF);
+        let (mut furthest, mut lowest, mut wider, mut item): (f32, f32, f32, f32) =
+            (0.0, 0.0, 0.0, 0.0);
+        let mut held = false;
+        run(&mut motion, start, |motion| {
+            let shelf = motion.jelly.shelves[1];
+            let under = shelf.at(65.0);
             furthest = furthest.max(under);
-            // As much as the feel rebounds, the far end can swing out past it.
-            let rebound = 1.3 * REACT.overshoot() * size(theme::JELLY_BUMP);
-            assert!(
-                under >= jelly.value(Side::Bottom, 0.9) - 0.05 - rebound,
-                "it's under the item: {under} {}",
-                jelly.value(Side::Bottom, 0.9)
-            );
+            // Flat across the item, from 50 to 80.
+            assert!((shelf.at(52.0) - under).abs() < 1e-4, "flat: {shelf:?}");
+            assert!((shelf.at(78.0) - under).abs() < 1e-4, "flat: {shelf:?}");
+            assert_eq!(shelf.at(300.0), 0.0, "and nothing far from it");
+            assert_eq!(motion.jelly.shelves[0].depth, 0.0, "only the bottom");
+            held |= motion.jelly.at_rest() && (under - depth).abs() < 0.01;
             lowest = lowest.max(motion.offset().y);
-            wider = wider.max(jelly.value(Side::Right, 1.0));
+            wider = wider.max(motion.jelly.value(Side::Right, 1.0));
             item = item.max(motion.squish_at(shape, 65.0).1);
         });
+        assert!(held, "it rests out while it's held");
+        assert!(
+            (furthest - depth).abs() < 0.2 * depth,
+            "out as far as a shelf: {furthest}"
+        );
         assert!(
             near(lowest, theme::NUDGE_LIFT, 0.25),
             "the island moves as far as a lift: {lowest}"
         );
-        assert!(near(furthest, theme::JELLY_BUMP, 0.25), "{furthest}");
         assert!(
             wider > size(theme::JELLY_LEAN) / 3.0,
             "the bottom widens: {wider}"
         );
         assert!(
-            near(item, theme::JELLY_BUMP / 2.0, 0.5),
-            "the item rides half the bump: {item}"
+            (item - depth / 2.0).abs() < 0.25 * depth,
+            "the item rides half the shelf: {item}"
         );
         assert!(motion.jelly.is_flat());
         assert_eq!(motion.offset(), Vector::ZERO);
+    }
+
+    #[test]
+    fn a_shelf_eases_into_the_edge_without_a_crease() {
+        let shelf = jelly::Shelf {
+            depth: 2.0,
+            from: 100.0,
+            to: 130.0,
+        };
+        let slope = |x: f32| (shelf.at(x + 0.01) - shelf.at(x - 0.01)) / 0.02;
+        let end = 100.0 - theme::NUDGE_SHOULDER;
+        assert_eq!(shelf.at(end - 1.0), 0.0);
+        assert!(slope(end + 0.02).abs() < 0.01, "it leaves the edge flat");
+        assert!(slope(99.98).abs() < 0.01, "and meets its top flat");
+        assert!(slope(100.0 - theme::NUDGE_SHOULDER / 2.0) > 0.05, "rising between");
+        assert_eq!(shelf.at(115.0), 2.0);
+    }
+
+    #[test]
+    fn a_stream_of_nudges_keeps_the_shelf_out_and_lets_it_go_once() {
+        let mut motion = nudged(&[]);
+        let start = Instant::now();
+        let depth = size(theme::NUDGE_SHELF);
+        let mut now = start;
+        let mut lurches = 0;
+        let mut out_since: Option<Instant> = None;
+        // A nudge every 90 ms for a second, like scrolling the volume.
+        for frame in 0..62 {
+            if frame % 6 == 0 && frame < 60 {
+                let before = motion.push_y.velocity;
+                let number = 2 + frame / 6;
+                motion.nudges([(2, (number, Nudge::Down))], span, now);
+                if motion.push_y.velocity != before {
+                    lurches += 1;
+                }
+            }
+            motion.step(now);
+            let out = motion.jelly.shelves[1].at(65.0);
+            if out > 0.95 * depth {
+                out_since.get_or_insert(now);
+            }
+            if let Some(since) = out_since
+                && now < start + Duration::from_millis(900)
+            {
+                assert!(
+                    out > 0.9 * depth,
+                    "no dip between nudges, {:?} in: {out}",
+                    now - since
+                );
+            }
+            now += FRAME;
+        }
+        assert_eq!(lurches, 1, "only the first nudge lurches the island");
+        // It goes back once the nudges stop.
+        let mut last = depth;
+        run(&mut motion, now, |motion| {
+            let out = motion.jelly.shelves[1].at(65.0);
+            assert!(out <= last + 0.05 * depth, "straight back: {last} → {out}");
+            last = out;
+        });
+        assert!(motion.jelly.is_flat());
+    }
+
+    #[test]
+    fn a_nudge_the_other_way_swaps_the_shelf_over() {
+        let mut motion = nudged(&[]);
+        let now = Instant::now();
+        motion.nudges([(2, (2, Nudge::Up))], span, now);
+        assert!(motion.shelves[0].until.is_some());
+        motion.nudges([(2, (3, Nudge::Down))], span, now);
+        assert!(motion.shelves[0].until.is_none(), "the top lets go");
+        assert_eq!(motion.shelves[0].depth.target, 0.0);
+        assert!(motion.shelves[1].until.is_some(), "the bottom holds");
     }
 
     #[test]
@@ -3133,14 +3303,14 @@ mod tests {
         );
 
         let mut motion = nudged(&[(2, (2, Nudge::Up))]);
-        let (mut top, mut bulge): (f32, f32) = (0.0, 0.0);
+        let (mut top, mut shelf): (f32, f32) = (0.0, 0.0);
         run(&mut motion, Instant::now(), |motion| {
             top = top.max(motion.jelly.value(Side::Left, 0.0));
-            bulge = bulge.max(motion.jelly.value(Side::Top, 65.0 / 200.0));
+            shelf = shelf.max(motion.jelly.shelves[0].at(65.0));
         });
         assert!(
-            top > size(theme::JELLY_LEAN) / 3.0 && bulge > 0.75 * size(theme::JELLY_BUMP),
-            "the top widens and bulges: {top} {bulge}"
+            top > size(theme::JELLY_LEAN) / 3.0 && shelf > 0.75 * size(theme::NUDGE_SHELF),
+            "the top widens and holds a shelf out: {top} {shelf}"
         );
     }
 
@@ -3168,7 +3338,7 @@ mod tests {
         assert_eq!(motion.item(2, 50.0), (0.0, 1.0), "and back");
         assert_eq!(motion.kicked(2), Squish::NONE, "unsquished");
 
-        // Up and down bump the edge instead.
+        // Up and down hold a shelf out instead.
         let motion = nudged(&[(2, (2, Nudge::Up))]);
         assert_eq!(motion.items[1].kick.velocity, 0.0);
     }
@@ -3177,7 +3347,7 @@ mod tests {
     fn a_held_island_lets_nudges_pass() {
         let mut motion = nudged(&[]);
         motion.press(Point::new(10.0, 10.0));
-        motion.nudges([(1, (2, Nudge::Left)), (2, (3, Nudge::Up))], center);
+        motion.nudges([(1, (2, Nudge::Left)), (2, (3, Nudge::Up))], span, Instant::now());
         assert_eq!(motion.push_x.velocity, 0.0);
         assert!(motion.jelly.at_rest());
         assert_eq!(motion.seen, Some(3));

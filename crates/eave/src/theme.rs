@@ -128,11 +128,18 @@ pub const REVEAL_SHOWN: Duration = Duration::from_millis(2000);
 /// nudge, keeps it out for [`REVEAL_SHOWN`].
 pub const REVEAL_EDGE: u32 = 2;
 pub const HIDE_AFTER: Duration = Duration::from_millis(400);
-/// How far a nudge pokes the jelly out, in logical pixels. The bump: the edge over the nudged
-/// item, going up or down. The lean: the end (or edge) the island is going toward swells and the
-/// one it's leaving flattens, each way.
+/// How far a poke takes the jelly out, in logical pixels. The bump: the edge a drop bounces
+/// toward. The lean: the end (or edge) a nudged island is going toward swells and the one it's
+/// leaving flattens, each way.
 pub const JELLY_BUMP: f32 = 2.0;
 pub const JELLY_LEAN: f32 = 1.5;
+/// An up or down nudge holds a shelf out of the edge over its item (D-105): flat across the item,
+/// `NUDGE_SHELF` out (`REACT_SIZE` included), its ends easing back into the edge over
+/// `NUDGE_SHOULDER` each. It rides REACT out, stays while nudges keep coming, and rides it back
+/// `NUDGE_HOLD` after the last one.
+pub const NUDGE_SHELF: f32 = 3.0;
+pub const NUDGE_SHOULDER: f32 = 28.0;
+pub const NUDGE_HOLD: Duration = Duration::from_millis(250);
 /// A pushed island (one sliding as a whole, because a neighbor made room for itself) piles up at
 /// the end it's pushed from: that end of its top and bottom edges is poked out to `PUSH_LEAN`,
 /// every frame for as long as it slides at `PUSH_FULL_SPEED` or more (less, slower), working up
@@ -194,8 +201,6 @@ pub const EDGE_PULL: f32 = 4.0;
 pub const EDGE_PULL_WIDTH: f32 = 48.0;
 pub const EDGE_DENT: f32 = 3.0;
 pub const EDGE_DENT_WIDTH: f32 = 140.0;
-/// How wide a nudge's bump in an island's edge is, end to end.
-pub const NUDGE_BUMP_WIDTH: f32 = 176.0;
 /// The furthest the outline reaches out of the island: it stays inside `EDGE_GAP` above and at
 /// the sides, and `DRAG_ROOM` below.
 pub const NUDGE_BUMP_ROOM: f32 = 4.0;

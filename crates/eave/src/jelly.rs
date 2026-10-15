@@ -6,6 +6,10 @@
 //! Each spring is how far out (or, negative, in) its piece of the edge is, in logical pixels. The
 //! ring has a fixed number of them, spread over the shape's size, so it keeps working while the
 //! shape morphs.
+//!
+//! On top of the ring, the top and bottom can each hold a shelf out (D-105): a flat stretch of the
+//! edge pushed out under an item, easing back into the edge at both ends. The island moves the
+//! shelf; the jelly only draws it, with the ring, inside the same room.
 
 use iced::{Point, Rectangle};
 
@@ -50,10 +54,49 @@ impl Side {
     }
 }
 
+impl Side {
+    fn index(self) -> usize {
+        match self {
+            Side::Top => 0,
+            Side::Right => 1,
+            Side::Bottom => 2,
+            Side::Left => 3,
+        }
+    }
+}
+
+/// A stretch of the top or bottom held out flat, `depth` out from `from` to `to` (in logical
+/// pixels from the shape's left), easing back into the edge over `NUDGE_SHOULDER` at each end.
+/// The ease is a smootherstep, flat at both of its ends: the shelf leaves the edge and meets its
+/// flat top without a crease.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Shelf {
+    pub depth: f32,
+    pub from: f32,
+    pub to: f32,
+}
+
+impl Shelf {
+    /// How far out it holds the edge at `x`, from the shape's left.
+    pub fn at(&self, x: f32) -> f32 {
+        if self.depth == 0.0 {
+            return 0.0;
+        }
+        let outside = (self.from - x).max(x - self.to).max(0.0);
+        let t = (outside / theme::NUDGE_SHOULDER).min(1.0);
+        self.depth * (1.0 - t * t * t * (t * (6.0 * t - 15.0) + 10.0))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Jelly {
     value: [f32; RING],
     velocity: [f32; RING],
+    /// The shelves on the top and the bottom, as the island last set them.
+    pub shelves: [Shelf; 2],
+    /// How far each side may go out (top, right, bottom, left): the room the island's frame has
+    /// around it, less what a wall takes away.
+    pub room: [f32; 4],
 }
 
 impl Default for Jelly {
@@ -61,6 +104,8 @@ impl Default for Jelly {
         Self {
             value: [0.0; RING],
             velocity: [0.0; RING],
+            shelves: [Shelf::default(); 2],
+            room: [theme::NUDGE_BUMP_ROOM; 4],
         }
     }
 }
@@ -118,13 +163,16 @@ impl Jelly {
             && self.velocity.iter().all(|speed| speed.abs() < REST_SPEED)
     }
 
+    /// Brings the ring to rest, flat. The shelves are the island's, and stay as they are.
     pub fn settle(&mut self) {
-        *self = Self::default();
+        self.value = [0.0; RING];
+        self.velocity = [0.0; RING];
     }
 
     /// Whether the outline is where it belongs, so the shape needs no bending.
     pub fn is_flat(&self) -> bool {
         self.value.iter().all(|value| *value == 0.0)
+            && self.shelves.iter().all(|shelf| shelf.depth == 0.0)
     }
 
     /// How far out one side is at `along` (0 to 1), smoothly between its springs.
@@ -147,11 +195,16 @@ impl Jelly {
             + (3.0 * p1 - p0 - 3.0 * p2 + p3) * t * t * t)
     }
 
-    /// How far out one side is at `along`, kept inside the room the island's frame has around
-    /// it, and from caving in past its middle.
-    fn out(&self, side: Side, along: f32, reach: f32) -> f32 {
-        self.side(side, along)
-            .clamp(-reach / 2.0, theme::NUDGE_BUMP_ROOM)
+    /// How far out one side is at `along`, its shelf included, kept inside the room it has
+    /// (`room`), and from caving in past its middle. `width` is the shape's, to place the shelf.
+    fn out(&self, side: Side, along: f32, width: f32, reach: f32) -> f32 {
+        let shelf = match side {
+            Side::Top => self.shelves[0].at(along * width),
+            Side::Bottom => self.shelves[1].at(along * width),
+            Side::Left | Side::Right => 0.0,
+        };
+        let room = self.room[side.index()].max(0.0);
+        (self.side(side, along) + shelf).clamp((-reach / 2.0).min(room), room)
     }
 
     /// Where the point `at` of the outline at rest, in a shape at `bounds`, is now. Each side
@@ -167,10 +220,11 @@ impl Jelly {
         let across = (at.x - bounds.x) / bounds.width;
         let down = (at.y - bounds.y) / bounds.height;
         let (right, bottom) = (bounds.x + bounds.width, bounds.y + bounds.height);
-        let dx = self.out(Side::Right, down, reach) * near(right - at.x)
-            - self.out(Side::Left, down, reach) * near(at.x - bounds.x);
-        let dy = self.out(Side::Bottom, across, reach) * near(bottom - at.y)
-            - self.out(Side::Top, across, reach) * near(at.y - bounds.y);
+        let width = bounds.width;
+        let dx = self.out(Side::Right, down, width, reach) * near(right - at.x)
+            - self.out(Side::Left, down, width, reach) * near(at.x - bounds.x);
+        let dy = self.out(Side::Bottom, across, width, reach) * near(bottom - at.y)
+            - self.out(Side::Top, across, width, reach) * near(at.y - bounds.y);
         Point::new(at.x + dx, at.y + dy)
     }
 
@@ -182,8 +236,8 @@ impl Jelly {
         }
         let reach = (bounds.width.min(bounds.height) / 2.0).max(1.0);
         let across = (x - bounds.x) / bounds.width;
-        let top = self.out(Side::Top, across, reach);
-        let bottom = self.out(Side::Bottom, across, reach);
+        let top = self.out(Side::Top, across, bounds.width, reach);
+        let bottom = self.out(Side::Bottom, across, bounds.width, reach);
         (
             (bounds.height + top + bottom) / bounds.height,
             (bottom - top) / 2.0,
