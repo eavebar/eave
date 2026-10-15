@@ -1,5 +1,6 @@
 //! `eave doctor` (D-96): checks what the bar depends on and says what's wrong, and what to do
-//! about it. config.toml, the widgets it names, their keys, the screen, and the systemd units.
+//! about it. config.toml, the widgets it names, their keys, the screen, hypr-eave, and the
+//! systemd units.
 //! Runs without a bar, so it helps most when the bar won't start. The `essential` plugin's Check
 //! health runs it with `--report` and shows what it wrote.
 
@@ -12,7 +13,7 @@ use eave_api::erased::ErasedWidget;
 use eave_api::ui::Action;
 use eave_hyprland::types::Monitor;
 
-use crate::config::{self, Config, Entry, Notch, Screens};
+use crate::config::{self, Config, Entry, Notch, Screens, Theme};
 use crate::{notch, shortcut};
 use report::Check;
 
@@ -65,6 +66,13 @@ async fn checks(registry: &Registry) -> Vec<Check> {
         .ok()
         .flatten();
     checks.extend(screen_checks(monitor.as_ref(), hardware, &screens));
+    // Without Hyprland there's nothing to ask, and the screen's check already says so.
+    if monitor.is_some() {
+        let glass = config
+            .as_ref()
+            .is_some_and(|config| config.theme == Theme::Glass);
+        checks.push(plugin_check(hypr_eave().await, glass));
+    }
     checks.extend(systemd_checks().await);
     checks
 }
@@ -246,6 +254,108 @@ fn screen_checks(
         ),
     });
     checks
+}
+
+/// Where eave-build installs hypr-eave (D-112), and where running.md has Hyprland load it from.
+fn plugin_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+        })?;
+    Some(base.join("eave/hypr-eave.so"))
+}
+
+/// What there is of hypr-eave, installed and in Hyprland.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HyprEave {
+    /// Not installed, not loaded.
+    None,
+    /// eave-build installed it, and Hyprland doesn't load it.
+    Installed,
+    /// Hyprland has it loaded.
+    Loaded,
+    /// Hyprland has it loaded from where eave-build installs it, and eave-build has installed
+    /// a new one there since: renamed over it, so Hyprland maps the old file, now deleted.
+    Older,
+}
+
+async fn hypr_eave() -> HyprEave {
+    let path = plugin_path();
+    let loaded = eave_hyprland::query::<Vec<eave_hyprland::types::Plugin>>("plugin list")
+        .await
+        .is_ok_and(|plugins| plugins.iter().any(|plugin| plugin.name == "hypr-eave"));
+    if !loaded {
+        let installed = path.as_deref().is_some_and(Path::exists);
+        return if installed {
+            HyprEave::Installed
+        } else {
+            HyprEave::None
+        };
+    }
+    let maps =
+        eave_hyprland::pid().and_then(|pid| std::fs::read_to_string(format!("/proc/{pid}/maps")));
+    match (path, maps) {
+        (Some(path), Ok(maps)) if maps_only_deleted(&maps, &path) => HyprEave::Older,
+        _ => HyprEave::Loaded,
+    }
+}
+
+/// Whether `maps` (a `/proc/<pid>/maps`) has `path` mapped only as a file since deleted.
+fn maps_only_deleted(maps: &str, path: &Path) -> bool {
+    let path = path.to_string_lossy();
+    let deleted = format!("{path} (deleted)");
+    let mut found = false;
+    for line in maps.lines() {
+        // The path is the last field, after the inode, and may hold spaces.
+        let Some((_, file)) = line.split_once(&format!(" {path}")) else {
+            continue;
+        };
+        if format!("{path}{file}") == deleted {
+            found = true;
+        } else if file.is_empty() {
+            return false;
+        }
+    }
+    found
+}
+
+fn plugin_check(hypr_eave: HyprEave, glass: bool) -> Check {
+    let load = "Add hl.plugin.load(os.getenv(\"HOME\") .. \"/.local/share/eave/hypr-eave.so\") \
+                to hyprland.lua, then restart Hyprland.";
+    match hypr_eave {
+        HyprEave::Loaded => Check::good(
+            "hypr-eave is loaded",
+            if glass {
+                "The islands are glass, and the pointer goes under the notch."
+            } else {
+                "The pointer goes under the notch and the grown edge."
+            },
+        ),
+        HyprEave::Older => Check::warning(
+            "Hyprland runs an older hypr-eave",
+            "eave-build has installed a new one since Hyprland loaded it. Restart Hyprland to \
+             load it.",
+        ),
+        HyprEave::Installed if glass => Check::warning(
+            "hypr-eave is built, but Hyprland doesn't load it, so the glass theme looks dark",
+            load,
+        ),
+        HyprEave::Installed => Check::warning(
+            "hypr-eave is built, but Hyprland doesn't load it",
+            format!("It puts the pointer under the notch. {load}"),
+        ),
+        HyprEave::None if glass => Check::warning(
+            "The glass theme needs hypr-eave, so it looks dark",
+            "eave-build builds it when Hyprland's headers are installed (pkg-config hyprland).",
+        ),
+        HyprEave::None => Check::good(
+            "hypr-eave isn't installed",
+            "It's optional: it puts the pointer under the notch. eave-build builds it when \
+             Hyprland's headers are installed (pkg-config hyprland).",
+        ),
+    }
 }
 
 /// The units that run the bar and rebuild and update it (running.md), and the environment the
@@ -482,6 +592,35 @@ mod tests {
             levels(&screen_checks(None, None, &screens)),
             [Level::Problem]
         );
+    }
+
+    #[test]
+    fn hypr_eave_is_checked_loaded_and_current() {
+        let level = |hypr_eave, glass| plugin_check(hypr_eave, glass).level;
+        assert_eq!(level(HyprEave::Loaded, false), Level::Good);
+        assert_eq!(level(HyprEave::Older, false), Level::Warning);
+        assert_eq!(level(HyprEave::Installed, false), Level::Warning);
+        assert!(
+            plugin_check(HyprEave::Installed, false)
+                .detail
+                .contains("hl.plugin.load")
+        );
+        assert_eq!(level(HyprEave::None, false), Level::Good);
+        assert_eq!(level(HyprEave::None, true), Level::Warning);
+    }
+
+    #[test]
+    fn a_replaced_plugin_is_mapped_deleted() {
+        let path = Path::new("/home/me/.local/share/eave/hypr-eave.so");
+        let line =
+            |file: &str| format!("fffec2770000-fffec27b8000 r-xp 00000000 103:05 5112490   {file}");
+        let old = line("/home/me/.local/share/eave/hypr-eave.so (deleted)");
+        let current = line("/home/me/.local/share/eave/hypr-eave.so");
+        let elsewhere = line("/run/user/1000/hypr-eave-1.so");
+        assert!(maps_only_deleted(&format!("{old}\n{elsewhere}"), path));
+        assert!(!maps_only_deleted(&format!("{old}\n{current}"), path));
+        assert!(!maps_only_deleted(&current, path));
+        assert!(!maps_only_deleted(&elsewhere, path));
     }
 
     #[test]

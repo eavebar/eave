@@ -2122,7 +2122,7 @@ The settings are grouped by the thing they're about, not by situation, because e
 
 ## D-96: `eave doctor` says what's wrong with the setup
 
-**Status:** accepted (2026-10-14).
+**Status:** accepted (2026-10-14). Amended (2026-10-16): it also checks hypr-eave ([D-113](#d-113-the-pointer-slides-under-the-notch)). Loaded is good. Built but not loaded is a warning, with the line for hyprland.lua. So is an older copy still loaded: Hyprland maps the installed path only as `(deleted)` in `/proc/<pid>/maps` (its pid from `hyprland.lock`), since eave-build renames a new build over it. Neither, with the glass theme, is a warning, and without it, good: the plugin is optional. A copy loaded from elsewhere counts as loaded. The binary grows 64 KB (20,934,680 → 21,000,216 bytes, aarch64; one page of text).
 
 **Problem:** what goes wrong with a bar is mostly outside it: config.toml doesn't parse and the bar keeps the old one, a widget isn't in the build yet, two actions want the same key and one silently loses it (D-91), a MacBook's notch was never measured, eave.service can't reach the compositor because systemd lacks its environment. Each of these is printed to stderr once, if at all, and read only by someone who knows to look in the journal.
 
@@ -2607,7 +2607,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 
 ## D-113: The pointer slides under the notch
 
-**Status:** accepted (2026-10-15). Amends [D-112](#d-112-glass-drawn-by-a-hyprland-plugin-that-eave-tells-whats-glass): hypr-eave is built, and spoken to, in every theme.
+**Status:** accepted (2026-10-15). Amends [D-112](#d-112-glass-drawn-by-a-hyprland-plugin-that-eave-tells-whats-glass): hypr-eave is built, and spoken to, in every theme. Amended (2026-10-16): eave-build asks Hyprland whether it loads hypr-eave, and when it doesn't, prints the `hl.plugin.load(…)` line to add, on every build. It doesn't load it itself: loading code into a running compositor, which can take the session down, stays the user's step, as does editing their Hyprland config.
 
 **What:** with `hypr-eave` loaded, the pointer goes under the notch and the grown edge the way it goes under a MacBook's physical notch: the part of it over them is hidden, the rest shows. Islands, popovers and everything else keep it on top. In every theme.
 - **eave says where** (`eave_glass_v1` version 2): a new region kind, `bezel`, for the notch and the grown edge exactly where they rest (`Bar::bezel_rects`), sent with every frame in every theme. Without the glass theme they're all eave sends: no look, no reports. The glass theme still sends them a margin wider as solid, to keep glass out; that margin would hide the pointer over an island fused to the notch, so the bezel records have none.

@@ -539,6 +539,17 @@ fn build_plugin(eave_dir: &Path) -> Result<()> {
     let target = data_dir()?.join("eave/hypr-eave.so");
     let new = source.join("hypr-eave.so");
     let bytes = std::fs::read(&new).map_err(|e| format!("{}: {e}", new.display()))?;
+    let loaded = hyprland_socket()
+        .and_then(|socket| hyprland_reply(&socket, "plugin list"))
+        .map(|reply| loads_hypr_eave(&reply))
+        .ok();
+    if loaded == Some(false) {
+        eprintln!(
+            "eave-build: Hyprland doesn't load hypr-eave. Add this to hyprland.lua, then restart \
+             Hyprland:\n  hl.plugin.load({})",
+            lua_string(&target.to_string_lossy())
+        );
+    }
     if std::fs::read(&target).is_ok_and(|old| old == bytes) {
         eprintln!("eave-build: {} is up to date", target.display());
         return Ok(());
@@ -550,12 +561,27 @@ fn build_plugin(eave_dir: &Path) -> Result<()> {
     let staging = dir.join(".hypr-eave.so.new");
     std::fs::write(&staging, &bytes).map_err(|e| format!("{}: {e}", staging.display()))?;
     std::fs::rename(&staging, &target).map_err(|e| format!("{}: {e}", target.display()))?;
-    eprintln!(
-        "eave-build: installed {}: Hyprland loads it from its config (docs/running.md), and a \
-         new one when it restarts",
-        target.display()
-    );
+    if loaded == Some(true) {
+        eprintln!(
+            "eave-build: installed {}: restart Hyprland to load the new one",
+            target.display()
+        );
+    } else {
+        eprintln!(
+            "eave-build: installed {}: Hyprland loads it from its config (docs/running.md), and \
+             a new one when it restarts",
+            target.display()
+        );
+    }
     Ok(())
+}
+
+/// Whether Hyprland's reply to `plugin list` has hypr-eave: `Plugin hypr-eave by eave:` for
+/// each one loaded, or `no plugins loaded`.
+fn loads_hypr_eave(reply: &str) -> bool {
+    reply
+        .lines()
+        .any(|line| line.trim_start().starts_with("Plugin hypr-eave by "))
 }
 
 /// References grouped by source, in order of first use. One source asked for at two revisions is
@@ -1062,6 +1088,14 @@ fn only_instance(dir: &Path) -> Option<PathBuf> {
 /// One command on Hyprland's request socket, as `hyprctl` sends it, without needing `hyprctl`.
 /// Hyprland answers `ok` on success and an error message otherwise.
 fn hyprland(path: &Path, command: &str) -> Result<()> {
+    match hyprland_reply(path, command)?.trim() {
+        "ok" => Ok(()),
+        error => Err(error.to_owned()),
+    }
+}
+
+/// One command on Hyprland's request socket, and its reply as it came.
+fn hyprland_reply(path: &Path, command: &str) -> Result<String> {
     use std::io::{Read, Write};
 
     let mut socket = std::os::unix::net::UnixStream::connect(path)
@@ -1071,10 +1105,7 @@ fn hyprland(path: &Path, command: &str) -> Result<()> {
         .write_all(command.as_bytes())
         .and_then(|()| socket.read_to_string(&mut reply))
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    match reply.trim() {
-        "ok" => Ok(()),
-        error => Err(error.to_owned()),
-    }
+    Ok(reply)
 }
 
 /// A single-quoted POSIX shell word.
@@ -1500,6 +1531,15 @@ mod tests {
             binary
         ));
         assert!(!is_bar("eave-build\n", binary, binary));
+    }
+
+    #[test]
+    fn reads_whether_hyprland_loads_hypr_eave() {
+        let loaded = "Plugin hypr-eave by eave:\n\tHandle: aaab42e99c10\n\tVersion: 0.1.0\n\
+                      \tDescription: Liquid glass behind eave's islands\n\n";
+        assert!(loads_hypr_eave(loaded));
+        assert!(!loads_hypr_eave("no plugins loaded"));
+        assert!(!loads_hypr_eave("Plugin hyprexpo by Vaxry:\n\tHandle: 1\n"));
     }
 
     #[test]
