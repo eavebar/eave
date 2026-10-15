@@ -100,8 +100,9 @@ pub struct Toggle<'a, M> {
     /// Whether the collapsible items show. When it changes, the island squashes the way they
     /// went, like a nudge.
     pub expanded: bool,
-    /// The collapsible items going away, by key: still laid out, they fade out one at a time,
-    /// the furthest from the toggle first.
+    /// The collapsible items going away, by key: they take no room, so the island closes at
+    /// once, and each stays where it was until the toggle or the edge reaches it, then goes back
+    /// into the toggle (D-110).
     pub leaving: Vec<u64>,
     /// Sent once the last of them is gone, to take them out.
     pub on_gone: Option<M>,
@@ -109,6 +110,10 @@ pub struct Toggle<'a, M> {
 
 /// The toggle's key among the items' keys: no item has it.
 const TOGGLE: u64 = u64::MAX;
+
+/// How far two items, or an item and the shape's edge, may overlap and still count as clear of
+/// each other: a rounded pixel.
+const OVERLAP: f32 = 0.5;
 
 /// What an island turns into while it's a popover.
 pub struct Popover<'a, M> {
@@ -416,6 +421,8 @@ struct Motion {
     last: Option<Instant>,
     /// Which end items come out of and go back into: the toggle's.
     from: Horizontal,
+    /// Whether the collapsible items were just shown: they come out of the toggle even one alone.
+    opening: bool,
     /// The items going away, by key.
     leaving: Vec<u64>,
     /// Whether the island said they're gone.
@@ -454,6 +461,7 @@ impl Default for Motion {
             pushing: 0.0,
             last: None,
             from: Horizontal::Right,
+            opening: false,
             leaving: Vec::new(),
             told_gone: false,
         }
@@ -582,14 +590,28 @@ struct ItemMotion {
     shown: Spring,
     /// How far its own sideways nudge moves it, on top of the island's push.
     kick: Spring,
-    /// Seconds before its fade sets off, when it comes or goes with others: one at a time.
-    wait: f32,
-    /// Where the fade heads once it does: shown (1) or gone (0).
-    want: f32,
+    /// How wide it's laid out.
+    width: f32,
+    /// Where it is in coming out with others, or going back with them (D-110).
+    cascade: Option<Cascade>,
+    /// How far it's slid toward the toggle, as it comes out of it or goes back into it.
+    slide: Spring,
+}
+
+/// An item that comes out of the toggle with others, or goes back into it: it waits for the
+/// edge to pass it, then catches up (D-110).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cascade {
+    /// Waiting to be clear of the toggle and the items beside it, and inside the shape.
+    Coming,
+    /// Shown, until the toggle, an item or the shape's edge reaches it.
+    Going,
+    /// Reached, and fading out.
+    Gone,
 }
 
 impl ItemMotion {
-    fn new(key: u64, x: f32) -> Self {
+    fn new(key: u64, x: f32, width: f32) -> Self {
         Self {
             key,
             x: Spring::new(x, MORPH),
@@ -598,18 +620,51 @@ impl ItemMotion {
                 ..Spring::new(0.0, MORPH)
             },
             kick: Spring::new(0.0, REACT),
-            wait: 0.0,
-            want: 1.0,
+            width,
+            cascade: None,
+            slide: Spring::new(0.0, FADE),
         }
     }
 
-    /// Fades to `want` after `wait` seconds.
-    fn fade(&mut self, want: f32, wait: f32) {
-        self.want = want;
-        self.wait = wait;
-        if wait <= 0.0 {
-            self.shown.target = want;
-        }
+    /// Where it's drawn across, before the jelly and the stretch.
+    fn drawn(&self) -> f32 {
+        self.x.value + self.kick.value + self.slide.value
+    }
+
+    /// Waits for the edge to pass it before it comes out.
+    fn wait(&mut self) {
+        self.cascade = Some(Cascade::Coming);
+        self.shown = Spring::new(0.0, FADE);
+    }
+
+    /// Comes out, from `toward` (the toggle's way, ±1) of where it rests.
+    fn reveal(&mut self, toward: f32) {
+        self.cascade = None;
+        self.shown = Spring {
+            target: 1.0,
+            ..Spring::new(self.shown.value, FADE)
+        };
+        self.slide = Spring {
+            target: 0.0,
+            ..Spring::new(toward * theme::CASCADE_SLIDE, FADE)
+        };
+    }
+
+    /// Goes back into the toggle, `toward` it (±1).
+    fn hide(&mut self, toward: f32) {
+        self.cascade = Some(Cascade::Gone);
+        self.shown = Spring {
+            target: 0.0,
+            ..Spring::new(self.shown.value, FADE)
+        };
+        self.slide.target = toward * theme::CASCADE_SLIDE;
+    }
+
+    /// Called back on its way out: back from where it got to.
+    fn call_back(&mut self) {
+        self.cascade = None;
+        self.shown.target = 1.0;
+        self.slide.target = 0.0;
     }
 }
 
@@ -955,10 +1010,21 @@ impl Motion {
 
     /// Takes in where layout put the island and each item (by key, with its x), and whether it has
     /// a popover and if that's open. Everything that changed starts moving there.
+    #[cfg(test)]
     fn arrange(
         &mut self,
         island: Rectangle,
         items: impl Iterator<Item = (u64, f32)>,
+        popover: Option<bool>,
+    ) {
+        self.place(island, items.map(|(key, x)| (key, x, 0.0)), popover);
+    }
+
+    /// [`Motion::arrange`], with each item's width too.
+    fn place(
+        &mut self,
+        island: Rectangle,
+        items: impl Iterator<Item = (u64, f32, f32)>,
         popover: Option<bool>,
     ) {
         // A new island grows out of a sliver at its center. A drop starts as a dot, and one that
@@ -977,37 +1043,54 @@ impl Motion {
         self.island = Some(island);
 
         let mut kept = Vec::with_capacity(self.items.len());
-        let (mut coming, mut going) = (Vec::new(), Vec::new());
-        for (key, x) in items {
+        let mut coming = Vec::new();
+        for (key, x, width) in items {
             let leaving = self.leaving.contains(&key);
             match self.items.iter().position(|item| item.key == key) {
                 Some(index) => {
                     let mut item = self.items.swap_remove(index);
-                    item.x.target = x;
-                    if leaving && item.want > 0.0 {
-                        going.push(kept.len());
-                    } else if !leaving && item.want < 1.0 {
-                        // Called back on its way out: back from where it got to.
-                        item.fade(1.0, 0.0);
+                    item.width = width;
+                    match item.cascade {
+                        // Going: it stays where it was, taking no room, while the toggle and the
+                        // edge close over it.
+                        _ if leaving => {
+                            if item.cascade.is_none() {
+                                item.cascade = Some(Cascade::Going);
+                            } else if item.cascade == Some(Cascade::Coming) {
+                                item.hide(0.0);
+                            }
+                        }
+                        Some(Cascade::Going | Cascade::Gone) => {
+                            item.x.target = x;
+                            item.call_back();
+                        }
+                        _ => item.x.target = x,
                     }
                     kept.push(item);
                 }
-                // New: in place at once, fading in.
                 None => {
-                    coming.push(kept.len());
-                    kept.push(ItemMotion::new(key, x));
+                    let mut item = ItemMotion::new(key, x, width);
+                    if leaving {
+                        item.cascade = Some(Cascade::Gone);
+                        item.shown = Spring::new(0.0, FADE);
+                    } else if key != TOGGLE {
+                        coming.push(kept.len());
+                    }
+                    kept.push(item);
                 }
             }
         }
         // Whatever is left in `self.items` is gone.
         self.items = kept;
-        // Several coming at once, like collapsible items shown, come one at a time from the
-        // toggle's end; going, they leave from the other end first. Not on a new island: it
-        // grows out with all its items.
-        if existed && coming.len() > 1 {
-            self.stagger(coming, 1.0);
+        // Collapsible items shown, or several coming at once, come out of the toggle as the edge
+        // passes them. Not on a new island: it grows out with all its items. Anything else new
+        // fades in in place.
+        if existed && (self.opening || coming.len() > 1) {
+            for index in coming {
+                self.items[index].wait();
+            }
         }
-        self.stagger(going, 0.0);
+        self.opening = false;
         if self.leaving.is_empty() {
             self.told_gone = false;
         }
@@ -1048,26 +1131,42 @@ impl Motion {
         self.aim();
     }
 
-    /// Fades the items at `indices` to `want` one after another, `STAGGER` apart: in from the
-    /// toggle's end, out from the other.
-    fn stagger(&mut self, mut indices: Vec<usize>, want: f32) {
-        let from_left = self.from == Horizontal::Left;
-        let items = &self.items;
-        indices.sort_by(|&a, &b| {
-            let (a, b) = (items[a].x.target, items[b].x.target);
-            if from_left == (want > 0.0) {
-                a.total_cmp(&b)
-            } else {
-                b.total_cmp(&a)
+    /// Lets out each item waiting to come out once it's clear, and takes each one going back
+    /// once it isn't: clear of the toggle and every other item shown, and inside the shape
+    /// (D-110). Whatever is still waiting once everything else is still goes at once.
+    fn cascade(&mut self, settled: bool) {
+        let pending =
+            |item: &ItemMotion| matches!(item.cascade, Some(Cascade::Coming | Cascade::Going));
+        if !self.items.iter().any(pending) {
+            return;
+        }
+        let toward = if self.from == Horizontal::Left {
+            -1.0
+        } else {
+            1.0
+        };
+        let (left, right) = (self.edges.left.value, self.edges.right.value);
+        let spans: Vec<_> = self
+            .items
+            .iter()
+            .filter(|item| item.shown.target > 0.5)
+            .map(|item| (item.key, item.drawn(), item.drawn() + item.width))
+            .collect();
+        for item in &mut self.items {
+            if !pending(item) {
+                continue;
             }
-        });
-        let step = theme::STAGGER.as_secs_f32();
-        for (order, index) in indices.into_iter().enumerate() {
-            let item = &mut self.items[index];
-            if want > 0.0 {
-                item.shown = Spring::new(0.0, MORPH);
+            let (from, to) = (item.x.value, item.x.value + item.width);
+            let inside = from >= left - OVERLAP && to <= right + OVERLAP;
+            let covered = spans
+                .iter()
+                .any(|&(key, a, b)| key != item.key && a < to - OVERLAP && b > from + OVERLAP);
+            let clear = inside && !covered;
+            match item.cascade {
+                Some(Cascade::Coming) if clear || settled => item.reveal(toward),
+                Some(Cascade::Going) if !clear || settled => item.hide(toward),
+                _ => {}
             }
-            item.fade(want, order as f32 * step);
         }
     }
 
@@ -1080,7 +1179,7 @@ impl Motion {
             .items
             .iter()
             .filter(|item| self.leaving.contains(&item.key))
-            .all(|item| item.want == 0.0 && item.wait <= 0.0 && item.shown.value < REST_DISTANCE);
+            .all(|item| item.cascade == Some(Cascade::Gone) && item.shown.value < REST_DISTANCE);
         self.told_gone = gone;
         gone
     }
@@ -1425,7 +1524,7 @@ impl Motion {
         .chain(
             self.items
                 .iter_mut()
-                .flat_map(|item| [&mut item.x, &mut item.shown]),
+                .flat_map(|item| [&mut item.x, &mut item.shown, &mut item.slide]),
         )
         .chain(
             self.shelves
@@ -1455,7 +1554,9 @@ impl Motion {
     }
 
     fn at_rest(&mut self) -> bool {
-        self.items.iter().all(|item| item.wait <= 0.0)
+        self.items
+            .iter()
+            .all(|item| !matches!(item.cascade, Some(Cascade::Coming | Cascade::Going)))
             && self.jelly.at_rest()
             && self.springs().all(|spring| spring.at_rest())
             && self.paced().all(|spring| spring.at_rest())
@@ -1478,14 +1579,6 @@ impl Motion {
             .min(MAX_FRAME)
             .as_secs_f32();
         self.last = Some(now);
-        for item in &mut self.items {
-            if item.wait > 0.0 {
-                item.wait -= elapsed;
-                if item.wait <= 0.0 {
-                    item.fade(item.want, 0.0);
-                }
-            }
-        }
         for spring in self.springs() {
             spring.advance(elapsed);
         }
@@ -1497,8 +1590,12 @@ impl Motion {
         self.lean_with_push(paced);
         self.jelly.advance(paced);
         self.jelly.room = self.jelly_room();
-        // The fades wait on how far the shape has come.
+        // The fades wait on how far the shape has come, and so do the items coming out of the
+        // toggle or going back into it.
         self.aim();
+        let settled = self.springs().all(|spring| spring.at_rest())
+            && self.paced().all(|spring| spring.at_rest());
+        self.cascade(settled);
         self.watch_neck();
         if self.at_rest() {
             self.springs().for_each(Spring::settle);
@@ -1645,7 +1742,7 @@ impl Motion {
     fn item(&self, key: u64, x: f32) -> (f32, f32) {
         let fade = self.popover.items.value;
         match self.items.iter().find(|item| item.key == key) {
-            Some(item) => (item.x.value + item.kick.value - x, item.shown.value * fade),
+            Some(item) => (item.drawn() - x, item.shown.value * fade),
             // Not arranged yet: new, so not shown yet.
             None => (0.0, 0.0),
         }
@@ -2139,13 +2236,20 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             .map(|(item, tree)| item.as_widget_mut().layout(tree, renderer, &limits))
             .collect();
         let widths: Vec<_> = nodes.iter().map(|node| node.size().width).collect();
-        let laid_out = nodes.len() - usize::from(hidden.is_some());
+        // A hidden toggle and the items going back into it take no room (D-110).
+        let roomless: Vec<_> = self
+            .keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| Some(index) == hidden || self.leaving.contains(key))
+            .collect();
+        let laid_out = roomless.iter().filter(|roomless| !**roomless).count();
         // A live island has as much room at its ends as above and below its tallest item, in
         // what's seen of it.
         let tallest = nodes
             .iter()
             .enumerate()
-            .filter(|&(index, _)| Some(index) != hidden)
+            .filter(|&(index, _)| !roomless[index])
             .map(|(_, node)| node.size().height)
             .reduce(f32::max);
         let padding = match (self.live, tallest) {
@@ -2156,7 +2260,13 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             }
             (true, None) => f32::from(theme::LIVE_ISLAND_PADDING),
         };
-        let slots = slots(&widths, &self.groups);
+        let groups: Vec<_> = self
+            .groups
+            .iter()
+            .zip(&roomless)
+            .map(|(group, roomless)| group.filter(|_| !roomless))
+            .collect();
+        let slots = slots(&widths, &groups);
         let mut x = padding;
         let children: Vec<_> = nodes
             .into_iter()
@@ -2164,7 +2274,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             .enumerate()
             .map(|(index, (node, slot))| {
                 let size = node.size();
-                if Some(index) == hidden {
+                if roomless[index] {
                     return node.move_to(Point::new(x, ((height - size.height) / 2.0).round()));
                 }
                 let at = Point::new(
@@ -2300,7 +2410,8 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
                 .zip(layout.children())
                 .enumerate()
             {
-                if is_hidden(self.toggle, index, shown) {
+                if is_hidden(self.toggle, index, shown) || self.leaving.contains(&self.keys[index])
+                {
                     continue;
                 }
                 item.as_widget_mut().update(
@@ -2334,6 +2445,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         let squash = state.expanded.is_some() && expanded != state.expanded;
         state.expanded = expanded;
         let motion = &mut state.motion;
+        motion.opening |= squash && self.expanded;
         if squash && motion.press.is_none() && !motion.popover.present {
             let out = if self.toggle_side == Horizontal::Left {
                 Nudge::Left
@@ -2376,8 +2488,8 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             .zip(layout.children())
             .enumerate()
             .filter(|(index, _)| !is_hidden(self.toggle, *index, shown))
-            .map(|(_, (key, child))| (*key, child.bounds().x));
-        motion.arrange(
+            .map(|(_, (key, child))| (*key, child.bounds().x, child.bounds().width));
+        motion.place(
             own,
             positions,
             self.popover.as_ref().map(|popover| popover.open),
@@ -2463,7 +2575,9 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             .zip(&tree.children)
             .zip(layout.children())
             .enumerate()
-            .filter(|(index, _)| !is_hidden(self.toggle, *index, shown))
+            .filter(|(index, _)| {
+                !is_hidden(self.toggle, *index, shown) && !self.leaving.contains(&self.keys[*index])
+            })
             .map(|(_, ((item, tree), layout))| {
                 item.as_widget()
                     .mouse_interaction(tree, layout, cursor, viewport, renderer)
@@ -2780,68 +2894,93 @@ mod tests {
         motion
     }
 
-    #[test]
-    fn items_shown_together_come_one_at_a_time_from_the_toggle() {
-        let island = rect(0.0, 200.0);
-        let mut motion = settled(island, &[1]);
-        // The toggle on the left: the nearest the left comes first.
-        motion.from = Horizontal::Left;
-        let positions = [(1, 10.0), (2, 50.0), (3, 90.0), (4, 130.0)];
-        motion.arrange(rect(0.0, 300.0), positions.into_iter(), None);
-        let wait = |motion: &Motion, key| {
-            motion
-                .items
-                .iter()
-                .find(|item| item.key == key)
-                .unwrap()
-                .wait
-        };
-        assert_eq!(wait(&motion, 2), 0.0);
-        assert!(wait(&motion, 2) < wait(&motion, 3) && wait(&motion, 3) < wait(&motion, 4));
-        assert!(!motion.at_rest(), "waiting is moving");
-
-        // Shown at once: the first sets off, the last hasn't yet.
-        let start = Instant::now();
-        motion.step(start);
-        motion.step(start + FRAME);
-        assert!(motion.item(2, 50.0).1 > 0.0);
-        assert_eq!(motion.item(4, 130.0).1, 0.0);
-        run(&mut motion, start + 2 * FRAME, |_| {});
-        assert_eq!(motion.item(4, 130.0).1, 1.0);
+    fn find(motion: &Motion, key: u64) -> &ItemMotion {
+        motion.items.iter().find(|item| item.key == key).unwrap()
     }
 
     #[test]
-    fn items_going_leave_from_the_far_end_and_say_when_they_are_gone() {
-        let island = rect(0.0, 300.0);
-        let mut motion = settled(island, &[1, 2, 3]);
-        motion.from = Horizontal::Right;
-        motion.leaving = vec![1, 2];
-        let positions = [(1, 10.0), (2, 50.0), (3, 90.0)];
-        motion.arrange(island, positions.into_iter(), None);
-        let item = |motion: &Motion, key| {
-            motion
-                .items
-                .iter()
-                .find(|item| item.key == key)
-                .unwrap()
-                .wait
-        };
-        assert!(
-            item(&motion, 1) < item(&motion, 2),
-            "the toggle on the right: the leftmost goes first"
-        );
-        assert!(!motion.gone());
+    fn items_shown_together_come_out_as_the_toggle_passes_them() {
+        let mut motion = Motion::default();
+        let before = [(1, 10.0, 30.0), (TOGGLE, 50.0, 20.0)];
+        motion.place(rect(0.0, 80.0), before.into_iter(), None);
         run(&mut motion, Instant::now(), |_| {});
-        assert_eq!(motion.item(1, 10.0).1, 0.0);
-        assert_eq!(motion.item(3, 90.0).1, 1.0, "the rest stay");
+
+        // Shown: the toggle on the right slides out, and the island grows with it.
+        motion.opening = true;
+        let after = [
+            (1, 10.0, 30.0),
+            (2, 50.0, 30.0),
+            (3, 90.0, 30.0),
+            (TOGGLE, 130.0, 20.0),
+        ];
+        motion.place(rect(0.0, 160.0), after.into_iter(), None);
+        assert!(!motion.at_rest(), "waiting is moving");
+        let mut shown_at = [None; 2];
+        let mut frame = 0;
+        run(&mut motion, Instant::now(), |motion| {
+            frame += 1;
+            for (index, key) in [2, 3].into_iter().enumerate() {
+                let item = find(motion, key);
+                if shown_at[index].is_none() && item.shown.target > 0.0 {
+                    shown_at[index] = Some(frame);
+                    let toggle = find(motion, TOGGLE).drawn();
+                    assert!(
+                        toggle >= item.x.value + item.width - OVERLAP,
+                        "{key} waits for the toggle to pass it: {toggle}"
+                    );
+                }
+            }
+        });
+        let [Some(near), Some(far)] = shown_at else {
+            panic!("both came out: {shown_at:?}");
+        };
+        assert!(near < far, "the nearer first: {near} then {far}");
+        assert_eq!(motion.item(3, 90.0), (0.0, 1.0));
+    }
+
+    #[test]
+    fn items_going_close_with_the_island_and_say_when_they_are_gone() {
+        let mut motion = Motion::default();
+        let all = [
+            (1, 10.0, 30.0),
+            (2, 50.0, 30.0),
+            (3, 90.0, 30.0),
+            (TOGGLE, 130.0, 20.0),
+        ];
+        motion.place(rect(0.0, 160.0), all.into_iter(), None);
+        run(&mut motion, Instant::now(), |_| {});
+
+        // Hidden: they take no room, so the island closes at once, and they stay put.
+        motion.leaving = vec![2, 3];
+        let closed = [
+            (1, 10.0, 30.0),
+            (2, 50.0, 30.0),
+            (3, 50.0, 30.0),
+            (TOGGLE, 50.0, 20.0),
+        ];
+        motion.place(rect(0.0, 80.0), closed.into_iter(), None);
+        assert_eq!(motion.edges.right.target, 80.0);
+        assert_eq!(find(&motion, 3).x.target, 90.0, "it stays where it was");
+        assert!(!motion.gone());
+        let mut hidden = Vec::new();
+        run(&mut motion, Instant::now(), |motion| {
+            for key in [2, 3] {
+                if find(motion, key).cascade == Some(Cascade::Gone) && !hidden.contains(&key) {
+                    hidden.push(key);
+                }
+            }
+        });
+        assert_eq!(hidden, [3, 2], "the toggle reaches the nearer first");
+        assert_eq!(motion.item(2, 50.0).1, 0.0);
+        assert_eq!(motion.item(1, 10.0), (0.0, 1.0), "the rest stay");
         assert!(motion.gone());
         assert!(!motion.gone(), "said once");
 
         // Called back on their way out: they come back.
         motion.leaving.clear();
-        motion.arrange(island, positions.into_iter(), None);
+        motion.place(rect(0.0, 160.0), all.into_iter(), None);
         run(&mut motion, Instant::now(), |_| {});
-        assert_eq!(motion.item(1, 10.0).1, 1.0);
+        assert_eq!(motion.item(3, 90.0), (0.0, 1.0));
     }
 
     #[test]
