@@ -334,8 +334,9 @@ fn form_icon(form: Form) -> Icon {
 }
 
 impl Volume {
-    /// The output's or input's page: its mute button, slider and level, then the devices to
-    /// choose from when there's more than one, or the only one's name.
+    /// The output's or input's page: its mute button, slider and level, the `output` or `input`
+    /// bay about the device in use (D-94), then the devices to choose from when there's more than
+    /// one, or the only one's name.
     fn group(&self, direction: Direction, device: &Device) -> ui::Node<Message> {
         let (devices, default, target, toggle) = match direction {
             Direction::Output => (
@@ -360,7 +361,14 @@ impl Volume {
                 muted: device.muted,
             },
         };
-        let mut lines = vec![self.control(icon, toggle, target, device.volume, device.muted)];
+        let bay = match direction {
+            Direction::Output => "output",
+            Direction::Input => "input",
+        };
+        let mut lines = vec![
+            self.control(icon, toggle, target, device.volume, device.muted),
+            ui::bay(bay, device.name.clone()),
+        ];
         if devices.len() == 1 {
             lines.push(ui::label(device.description.clone()).tone(Tone::Dim));
         } else {

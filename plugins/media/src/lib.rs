@@ -269,6 +269,8 @@ impl Widget for Media {
             ui::button(ui::icon(play_pause), Message::PlayPause).prominent(),
             ui::button(ui::icon(Icon::Next), Message::Next),
         ])));
+        // What parts show about this player, by its bus name (D-94).
+        lines.push(ui::bay("player", player.bus_name.clone()));
         if self.players.len() > 1 {
             lines.push(ui::section("Players"));
             let rows = self.players.iter().map(|other| {
