@@ -1819,7 +1819,7 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 **What:** the dormer no longer comes out of the top as a notch-wide shape. It comes out as a drop, and what it comes out of squishes.
 - **Its island is a dot** where it comes out. With a notch, that's the bottom middle of the notch as the bar draws it, grown (D-75). Without a notch, it's the bottom of the grown top edge (D-81). `island::Popover::drop` says how far down the surface that is.
 - **Stops on the way:** the shape's edges ride `MORPH` from the dot through two stops: first a ball (`DROP_BALL`) swelling half out of where it comes out, then the same ball fallen `DROP_FALL` below it. After that, they head for the panel. They head on to the next stop once they're `DROP_WAYPOINT` (0.4) of the way to one, while the shape is still quick, so it never slows down on the way and moves as one motion. *(It was 0.7 at first: the shape all but stopped at each stop, and next to the other morphs it felt halting.)* Closing runs through the same stops backwards. The corners are a circle's while it's a ball, and blend into the panel's as it unfolds. The content waits for the unfolding, as it waits for any popover's morph.
-- **The neck** (`neck.rs`) is the smooth union of the line along the bottom of where it comes out and the drawn shape: the polynomial smooth minimum of their distances, blending over `NECK_BLEND` (56 px; 36 at first, widened at the user's ask for a rounder start). Both are symmetric about the middle, and the field only grows away from it along a row. So each half-pixel row is one span, found by bisection, no wider than `NECK_SPREAD`, and the outline is the spans' ends. A drop just under the notch sits in a wide, smooth bell, about four and a half times its width at the root. The bell narrows as the drop falls, thins to a waist and pinches off (about half `NECK_BLEND` away), leaving a drip on the notch that draws back in. On the way back, it catches the drop again. The blend shrinks with the drop while it's smaller than its ball, so a dot has none. *(The first version bridged two circles with the classic metaball curves. The bridge was narrow from the start, so the ball seemed to slide out of a slot instead of growing out of the notch.)*
+- **The neck** (`neck.rs`, `pour.rs` since [D-112](#d-114-every-morph-pours)) is the smooth union of the line along the bottom of where it comes out and the drawn shape: the polynomial smooth minimum of their distances, blending over `NECK_BLEND` (56 px; 36 at first, widened at the user's ask for a rounder start). Both are symmetric about the middle, and the field only grows away from it along a row. So each half-pixel row is one span, found by bisection, no wider than `NECK_SPREAD`, and the outline is the spans' ends. A drop just under the notch sits in a wide, smooth bell, about four and a half times its width at the root. The bell narrows as the drop falls, thins to a waist and pinches off (about half `NECK_BLEND` away), leaving a drip on the notch that draws back in. On the way back, it catches the drop again. The blend shrinks with the drop while it's smaller than its ball, so a dot has none. *(The first version bridged two circles with the classic metaball curves. The bridge was narrow from the start, so the ball seemed to slide out of a slot instead of growing out of the notch.)*
 - **Bounces** that the user liked on workspace switches: a lurch on `REACT` (`DROP_BOUNCE`, 3 px), with the sides leaning and the side it goes toward bulging, on the jelly. It's paced like a nudge that says how long it lasts, to `DROP_BOUNCE_LASTING` (420 ms). *(At first it played at `REACT`'s own pace, about 200 ms, which the user found too fast.)*
   - Down, as the neck lets go of it.
   - Down again, as it falls into place as the panel. A look-ahead, as with the splat, makes it peak on arrival.
@@ -2640,3 +2640,36 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 - While the notch is dragged, the pointer is under it too.
 - Something drawn above eave, such as a notification over the notch, covers the pointer as it always did.
 
+
+---
+
+## D-114: Every morph pours
+
+**Status:** accepted (2026-10-15). Builds on [D-111](#d-111-one-skin); the dormer's stops (D-86) stand.
+
+**Problem:** after D-111 the outline gave, but a morph was still a box growing into another box. Nothing said a popover came *out of* its island.
+
+**What:** every morph has a tongue (`Edges::tongue`, `Motion::tongue`). Along the way the shape changes most, the tongue's end going out runs on ahead of the shape (`LEAD`, `TONGUE_LEAD` 0.6 of `MORPH`'s swing) and its end coming in hangs on behind (`LAG`, `TONGUE_LAG` 1.8). Across, it's half the shape (`TONGUE_WIDTH`), about its middle. It's drawn under the shape, joined to it by a fillet: the smooth union of the two (`pour.rs`, which the dormer's neck became), `POUR_BLEND` (24 px) wide once the tongue is `POUR_FULL` (24 px) out, and less before. So:
+- **A popover opening** pours down out of its island: a tongue runs on ahead of the growing shape, which follows it down and fills out.
+- **Closing**, the shape drains back up into the island and lands as before (D-111), with the tongue hanging under it, drawn up last.
+- **An island growing or shrinking** sideways does the same along its width. A shape sliding along as a whole (both ends going the same way) has no tongue.
+- **A dialog** pours out of its island toward the middle, and the dormer's drop has its tongue on top of its neck and stops.
+- The frame (layout, hits, content, the skin) is the shape, as before. The tongue is drawn only: content never shows in it. At rest it's inside the shape and nothing of it is drawn or computed.
+- **Glass** ([D-112](#d-112-glass-drawn-by-a-hyprland-plugin-that-eave-tells-whats-glass)): while a tongue is out, the box round it and the shape is told to hypr-eave as the island is, glass or opaque, so the tongue and its fillet turn to glass with it.
+
+The fillet's rows are only where it can be: within a blend of either one's top or bottom, inside what the two reach together, so where their edges line up the union doesn't swell out past both. Each row's span is found by bisection each way from a point inside it, since a tongue can be off the shape's middle.
+
+**Alternatives:**
+- **The island stays, the panel pours out from under it** (built first, on this branch): a sliver under the island grew into the panel, its top last, joined to the island by a fillet, and covered the island at the end. The user found it read as a second box appearing and then the first one going: the island has to move with the morph.
+- **Lead and follow on the frame itself** (the edges along the way on a quicker spring): still a box at every frame.
+- **A metaball over the whole shape:** one field for everything, contoured every frame: the outline, the content's clip and the skin would all come from it, at many times the cost.
+
+**The feel: flow.** Three variants were built on branches, differing only in these numbers, and run on the user's screen, as D-83 and D-111 were. The user picked flow (the numbers above):
+
+| Feel | `TONGUE_LEAD` | `TONGUE_LAG` | `TONGUE_WIDTH` | `POUR_BLEND` |
+|---|---|---|---|---|
+| subtle | 0.75 | 1.4 | 0.6 | 16 |
+| **flow** (taken) | 0.6 | 1.8 | 0.5 | 24 |
+| gooey | 0.45 | 2.4 | 0.4 | 36 |
+
+**Cost:** no dependency; four springs per island. While a tongue is out, each frame draws it and builds its fillet: about 170 rows of two bisections, ~80 µs in release on the M1 Pro. At rest nothing. **Measured** (Asahi aarch64, release, tiny-skia, the user's config, 10 s idle after 10 s, two runs): binary 20,868,800 bytes, as on main at D-111. RSS 23.6 MB (23.5 on main at D-111). Idle CPU 1 tick over 10 s. CPU while morphing wasn't measured end to end. x86_64 wasn't built (no cross pkg-config here); nothing in this change is arch-specific.

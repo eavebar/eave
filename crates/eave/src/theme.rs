@@ -204,6 +204,19 @@ pub const SKIN_ROOM: f32 = 10.0;
 /// as it gets there, so it arrives at speed and what it carries goes into the skin. Anything but a
 /// popover opening, which eases in.
 pub const LAND_PAST: f32 = 0.2;
+/// Every morph flows (D-114). A tongue of the shape runs on ahead where it grows and hangs on
+/// behind where it shrinks, joined to it by a fillet, so a shape pours into its new place instead
+/// of growing as a box: out of an island and down into a popover, and back up into it.
+/// - Along the way the shape changes most, the tongue's growing end swings in `TONGUE_LEAD` of
+///   `MORPH`'s time, and its shrinking end in `TONGUE_LAG` of it.
+/// - Across, it's `TONGUE_WIDTH` of the shape, about its middle.
+/// - The fillet blends `POUR_BLEND` logical pixels once the tongue is `POUR_FULL` out of the
+///   shape, and less before, so it comes and goes with the tongue.
+pub const TONGUE_LEAD: f32 = 0.6;
+pub const TONGUE_LAG: f32 = 1.8;
+pub const TONGUE_WIDTH: f32 = 0.5;
+pub const POUR_BLEND: f32 = 24.0;
+pub const POUR_FULL: f32 = 24.0;
 /// A drop bounces as it falls into place so the bounce peaks as it arrives: when its bottom will be
 /// this close to where it's going, in logical pixels, by the time REACT peaks.
 pub const DROP_LAND: f32 = 1.0;

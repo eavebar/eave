@@ -39,8 +39,8 @@ use crate::field::AnyFocused;
 use crate::glass;
 use crate::hand::{self, rubber_band};
 use crate::jelly::{self, Jelly, Side};
-use crate::neck;
-use crate::spring::{FADE, HAND, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
+use crate::pour;
+use crate::spring::{FADE, HAND, LAG, LEAD, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
 use crate::squircle::{self, CornerShape, squircle_corners, warp};
 use crate::squish::{self, Squish};
 use crate::theme::{self, Palette};
@@ -539,6 +539,11 @@ struct Edges {
     goal: [f32; 4],
     /// Whether they land on it, stopping dead, rather than ease into it.
     hits: bool,
+    /// The tongue's edges (left, top, right, bottom), heading where the edges go (D-114). Only
+    /// the two along the way the shape changes most are its own; across, it's the shape's.
+    tongue: [Spring; 4],
+    /// Whether that way is up and down.
+    vertical: bool,
 }
 
 impl Edges {
@@ -550,6 +555,8 @@ impl Edges {
             bottom: Spring::new(rect.y + rect.height, MORPH),
             goal: edges_of(rect),
             hits: false,
+            tongue: edges_of(rect).map(|edge| Spring::new(edge, MORPH)),
+            vertical: true,
         }
     }
 
@@ -564,6 +571,28 @@ impl Edges {
         }
         self.goal = goal;
         self.hits = hits;
+        // The tongue runs along the way the shape changes most: its end going out runs on ahead,
+        // its end coming in hangs on behind. A shape sliding along as a whole has none.
+        let values = [self.left, self.top, self.right, self.bottom].map(|edge| edge.value);
+        let travel =
+            |a: usize, b: usize| (goal[a] - values[a]).abs().max((goal[b] - values[b]).abs());
+        self.vertical = travel(1, 3) >= travel(0, 2);
+        let along = if self.vertical { [1, 3] } else { [0, 2] };
+        let sliding =
+            (goal[along[0]] - values[along[0]]) * (goal[along[1]] - values[along[1]]) > 0.0;
+        for (i, spring) in self.tongue.iter_mut().enumerate() {
+            spring.target = goal[i];
+            let outward = if i < 2 {
+                goal[i] < values[i]
+            } else {
+                goal[i] > values[i]
+            };
+            spring.feel = match (along.contains(&i) && !sliding, outward) {
+                (false, _) => MORPH,
+                (true, true) => LEAD,
+                (true, false) => LAG,
+            };
+        }
         let [left, top, right, bottom] = self.springs_mut();
         let [goal_left, goal_top, goal_right, goal_bottom] = goal;
         // Up and down, a shape always lands against the top, which hangs from the bar.
@@ -1395,21 +1424,83 @@ impl Motion {
         )
     }
 
-    /// The neck between where a drop comes out and the drawn `shape` ([`neck::Neck`]), while
+    /// The neck between where a drop comes out and the drawn `shape` ([`pour::Pour`]), while
     /// they're close enough to flow together. It blends less while the drop is smaller than its
     /// ball, so a dot coming out or going in has hardly any.
-    fn neck(&self, shape: Rectangle) -> Option<neck::Neck> {
+    fn neck(&self, shape: Rectangle) -> Option<pour::Pour> {
         let (Some(y), Some(island)) = (self.drop, self.island) else {
             return None;
         };
         let size = (shape.width.min(shape.height) / theme::DROP_BALL).min(1.0);
-        let root = neck::Root {
+        let from = pour::From::Line {
             y: y + self.sag(),
             x: island.center_x(),
             spread: theme::NECK_SPREAD,
-            blend: theme::NECK_BLEND * size,
         };
-        neck::Neck::new(root, shape, self.drop_corner(shape).radius)
+        let radius = self.drop_corner(shape).radius;
+        pour::Pour::new(from, theme::NECK_BLEND * size, shape, radius)
+    }
+
+    /// The morph's tongue (D-114), drawn `shape`: where it runs on ahead of the shape or hangs on
+    /// behind it, `TONGUE_WIDTH` of it across, about its middle. `None` while it's inside it.
+    fn tongue(&self, shape: Rectangle) -> Option<Rectangle> {
+        let edges = &self.edges;
+        let [left, top, right, bottom] = edges.tongue.map(|spring| spring.value);
+        let rect = if edges.vertical {
+            let width = shape.width * theme::TONGUE_WIDTH;
+            Rectangle::new(
+                Point::new(shape.center_x() - width / 2.0, top),
+                Size::new(width, bottom - top),
+            )
+        } else {
+            let height = shape.height * theme::TONGUE_WIDTH;
+            Rectangle::new(
+                Point::new(left, shape.center_y() - height / 2.0),
+                Size::new(right - left, height),
+            )
+        };
+        let out = [
+            shape.x - rect.x,
+            shape.y - rect.y,
+            rect.x + rect.width - (shape.x + shape.width),
+            rect.y + rect.height - (shape.y + shape.height),
+        ]
+        .into_iter()
+        .fold(0.0_f32, f32::max);
+        (rect.width >= 1.0 && rect.height >= 1.0 && out >= 0.5).then_some(rect)
+    }
+
+    /// How round the tongue `rect` is at its corners: as the shape's, or all round if it's thinner.
+    fn tongue_corner(&self, rect: Rectangle, shape: Rectangle) -> CornerShape {
+        let corner = match self.drop {
+            Some(_) => self.drop_corner(shape),
+            None => self.corner,
+        };
+        CornerShape::new(
+            corner.radius.min(rect.width.min(rect.height) / 2.0),
+            corner.smoothing,
+        )
+    }
+
+    /// The fillet joining the tongue `rect` to the drawn `shape` ([`pour::Pour`]): wider the
+    /// further it's out of it, up to `POUR_BLEND`.
+    fn tongue_pour(&self, rect: Rectangle, shape: Rectangle) -> Option<pour::Pour> {
+        let out = [
+            shape.x - rect.x,
+            shape.y - rect.y,
+            rect.x + rect.width - (shape.x + shape.width),
+            rect.y + rect.height - (shape.y + shape.height),
+        ]
+        .into_iter()
+        .fold(0.0_f32, f32::max);
+        let blend = theme::POUR_BLEND * (out / theme::POUR_FULL).min(1.0);
+        let radius = self.tongue_corner(rect, shape).radius;
+        let body = match self.drop {
+            Some(_) => self.drop_corner(shape).radius,
+            None => self.corner.radius,
+        };
+        let from = pour::From::Box { rect, radius };
+        pour::Pour::new(from, blend, shape, body)
     }
 
     /// Bounces a drop down (`way` 1) or up (−1): it lurches that way and back, its sides lean into
@@ -1515,6 +1606,7 @@ impl Motion {
             &mut self.popover.panel,
         ]
         .into_iter()
+        .chain(&mut edges.tongue)
         .chain(
             self.items
                 .iter_mut()
@@ -1931,6 +2023,41 @@ fn draw_island<M>(
     if let Some(out) = shape_out {
         out.set(shape + motion.offset());
     }
+    let fill = motion.fill(Palette::of(theme).island_bg);
+    // The morph's tongue, under the shape, and the fillet joining them (D-114).
+    if motion.island.is_some()
+        && let Some(tongue) = motion.tongue(shape)
+    {
+        let corner = motion.tongue_corner(tongue, shape);
+        let pour = motion.tongue_pour(tongue, shape);
+        let reach = pour.as_ref().map_or(Size::ZERO, pour::Pour::reach);
+        let far = Size::new(
+            (tongue.x + tongue.width + 1.0).max(reach.width),
+            (tongue.y + tongue.height + 1.0).max(reach.height),
+        );
+        renderer.with_translation(motion.offset(), |renderer| {
+            let mut frame = Frame::new(renderer, far);
+            frame.fill(
+                &squircle::squircle(tongue, corner.radius, corner.smoothing),
+                fill,
+            );
+            if let Some(path) = pour.and_then(|pour| pour.path()) {
+                frame.fill(&path, fill);
+            }
+            renderer.draw_geometry(frame.into_geometry());
+        });
+        // Glass where the shape is: the fillet is inside what the two reach together.
+        let reach = tongue.union(&shape) + motion.offset();
+        if glass
+            && !motion
+                .neck(shape + motion.offset())
+                .is_some_and(|neck| neck.joined())
+        {
+            glass::frame::island(reach, fill, motion.ink.value);
+        } else {
+            glass::frame::opaque(reach);
+        }
+    }
     if shape.width < 1.0 || shape.height < 1.0 {
         return;
     }
@@ -1968,7 +2095,6 @@ fn draw_island<M>(
     if state.shape_band.replace(band_at) != band_at {
         state.shape.clear();
     }
-    let fill = motion.fill(Palette::of(theme).island_bg);
     if state.shape_fill.replace(fill) != fill {
         state.shape.clear();
     }
@@ -2000,13 +2126,11 @@ fn draw_island<M>(
     );
     // The neck, under the drop, flowing from what's above while they're close. Where the drop is
     // drawn, moved, but not from where it flows: that stays put.
-    if let Some(path) = motion.neck(moved).and_then(|neck| neck.path()) {
-        // From the surface's origin, as far as the neck can reach.
-        let far = Size::new(
-            moved.center_x() + theme::NECK_SPREAD + 1.0,
-            moved.y + moved.height + 1.0,
-        );
-        let mut frame = Frame::new(renderer, far);
+    if let Some(neck) = motion.neck(moved)
+        && let Some(path) = neck.path()
+    {
+        // From the surface's origin, as far as the neck reaches.
+        let mut frame = Frame::new(renderer, neck.reach());
         frame.fill(&path, fill);
         renderer.draw_geometry(frame.into_geometry());
     }
@@ -3138,6 +3262,73 @@ mod tests {
         assert_eq!(motion.home(rect(100.0, 120.0)).y, 37.0);
         let ball = Rectangle::new(Point::new(147.0, 38.0), Size::new(26.0, 26.0));
         assert!(motion.neck(ball).is_some_and(|neck| neck.joined()));
+    }
+
+    /// Plays the motion to rest, and returns how far the tongue got out of the shape each way
+    /// (left, top, right, bottom) at the most, checking its fillet is somewhere.
+    fn tongue_range(motion: &mut Motion) -> [f32; 4] {
+        let mut most = [0.0f32; 4];
+        run(motion, Instant::now(), |motion| {
+            let shape = motion.shape();
+            let Some(tongue) = motion.tongue(shape) else {
+                return;
+            };
+            let out = [
+                shape.x - tongue.x,
+                shape.y - tongue.y,
+                tongue.x + tongue.width - (shape.x + shape.width),
+                tongue.y + tongue.height - (shape.y + shape.height),
+            ];
+            for side in 0..4 {
+                most[side] = most[side].max(out[side]);
+            }
+            if let Some(path) = motion
+                .tongue_pour(tongue, shape)
+                .and_then(|pour| pour.path())
+            {
+                assert!(
+                    path.raw()
+                        .iter()
+                        .flat_map(|event| [event.from(), event.to()])
+                        .all(|at| at.x.is_finite() && at.y.is_finite()),
+                    "a finite fillet"
+                );
+            }
+        });
+        assert!(motion.tongue(motion.shape()).is_none(), "none at rest");
+        most
+    }
+
+    #[test]
+    fn a_popover_pours_down_ahead_and_drains_back_up_behind() {
+        let island = rect(100.0, 120.0);
+        let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 300.0));
+        let mut motion = settled(island, &[1]);
+        popover(&mut motion, true, panel, true);
+        let out = tongue_range(&mut motion);
+        assert!(out[3] > 20.0, "runs on ahead, down: {out:?}");
+        assert!(
+            out[0] < 0.5 && out[1] < 0.5 && out[2] < 0.5,
+            "only down: {out:?}"
+        );
+        assert_eq!(motion.shape(), panel);
+
+        popover(&mut motion, false, panel, true);
+        let out = tongue_range(&mut motion);
+        assert!(out[3] > 20.0, "hangs on behind, under: {out:?}");
+        assert_eq!(motion.shape(), island);
+    }
+
+    #[test]
+    fn an_island_growing_sideways_runs_on_that_way_and_one_sliding_doesnt() {
+        let island = rect(100.0, 120.0);
+        let mut motion = settled(island, &[1]);
+        motion.arrange(rect(100.0, 260.0), [(1, 110.0)].into_iter(), None);
+        let out = tongue_range(&mut motion);
+        assert!(out[2] > 5.0, "runs on ahead, right: {out:?}");
+        motion.arrange(rect(400.0, 260.0), [(1, 410.0)].into_iter(), None);
+        let out = tongue_range(&mut motion);
+        assert!(out.iter().all(|out| *out < 0.5), "sliding: {out:?}");
     }
 
     #[test]

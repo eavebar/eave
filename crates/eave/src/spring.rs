@@ -98,6 +98,10 @@ pub(crate) const HAND: Feel = Feel::new(theme::HAND_RESPONSE, theme::HAND_DAMPIN
 pub(crate) const REACT: Feel = Feel::new(theme::REACT_RESPONSE, theme::REACT_DAMPING);
 /// Shapes and content going somewhere: settle without wobbling.
 pub(crate) const MORPH: Feel = Feel::new(theme::MORPH_RESPONSE, theme::MORPH_DAMPING);
+/// A morph's tongue (D-114): its end running on ahead where the shape grows, and its end hanging
+/// on behind where it shrinks. Critically damped, so neither swings past where it goes.
+pub(crate) const LEAD: Feel = Feel::new(theme::MORPH_RESPONSE * theme::TONGUE_LEAD, 1.0);
+pub(crate) const LAG: Feel = Feel::new(theme::MORPH_RESPONSE * theme::TONGUE_LAG, 1.0);
 /// The handover between an island's items and its popover's content: quicker than the shape, so
 /// one side is gone in time for the other to come in while the shape still moves.
 pub(crate) const FADE: Feel = Feel::new(theme::FADE_RESPONSE, theme::FADE_DAMPING);

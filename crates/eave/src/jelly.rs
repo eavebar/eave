@@ -260,6 +260,10 @@ impl Jelly {
     /// moves the points near it, fully on the side and less the further in they are, down to
     /// nothing halfway across the shape's short way. So the corners go with both their sides.
     pub fn displace(&self, bounds: Rectangle, at: Point) -> Point {
+        // A shape with no size has no outline to bend: a popover pouring out as a sliver.
+        if bounds.width < 1.0 || bounds.height < 1.0 {
+            return at;
+        }
         let reach = (bounds.width.min(bounds.height) / 2.0).max(1.0);
         let near = |distance: f32| {
             let near = (1.0 - distance / reach).clamp(0.0, 1.0);
@@ -316,6 +320,16 @@ mod tests {
             }
         }
         panic!("never came to rest");
+    }
+
+    #[test]
+    fn a_shape_with_no_size_isnt_bent() {
+        let mut jelly = Jelly::default();
+        jelly.kick(Side::Bottom, |_| 50.0);
+        jelly.advance(0.01);
+        let sliver = Rectangle::new(Point::new(10.0, 40.0), iced::Size::new(80.0, 0.0));
+        let at = Point::new(50.0, 40.0);
+        assert_eq!(jelly.displace(sliver, at), at);
     }
 
     #[test]
