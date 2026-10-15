@@ -13,6 +13,10 @@
 //! keys = { refresh = "ctrl+r", details = false }   # and this: its shortcuts' keys, by name
 //!
 //! [[right]]
+//! widget = "media"
+//! parts = ["someone/spotify"]   # and this: widgets shown in its bays, not in the bar (D-94)
+//!
+//! [[right]]
 //! divider = true   # a line before the next item
 //!
 //! [[right]]
@@ -118,6 +122,10 @@ pub struct Entry {
     pub attach: Edges,
     /// The keys the user gives its shortcuts, by name (D-91).
     pub keys: shortcut::Keys,
+    /// For a part (`parts = [...]` in another entry): that entry's index in `entries`. A part is
+    /// shown only in its owner's bays (D-94), never in a zone, so its other placement fields are
+    /// its owner's and mean nothing.
+    pub owner: Option<usize>,
     pub options: toml::Table,
 }
 
@@ -147,6 +155,8 @@ impl Entry {
                 live,
                 attach,
                 keys: _,
+                // Indices move whenever an entry is added above; the host compares owners itself.
+                owner: _,
                 options,
             } = entry;
             (
@@ -612,6 +622,8 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
                 Some(value) => keys(value, &at, &mut config.warnings),
                 None => shortcut::Keys::new(),
             };
+            let parts = options.remove("parts");
+            let owner = config.entries.len();
             config.entries.push(Entry {
                 zone,
                 widget,
@@ -622,8 +634,27 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
                 live,
                 attach,
                 keys,
+                owner: None,
                 options,
             });
+            if let Some(value) = parts {
+                let parts = self::parts(value, &at, &mut config.warnings);
+                let owner_entry = &config.entries[owner];
+                let parts: Vec<_> = parts
+                    .into_iter()
+                    .map(|(widget, keys, options)| Entry {
+                        widget,
+                        width_group: None,
+                        collapsible: false,
+                        divider: false,
+                        keys,
+                        owner: Some(owner),
+                        options,
+                        ..owner_entry.clone()
+                    })
+                    .collect();
+                config.entries.extend(parts);
+            }
             filled = true;
         }
         // Only an island at the screen's side can reach it.
@@ -662,6 +693,53 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
         .warnings
         .extend(table.keys().map(|key| format!("unknown key `{key}`")));
     Ok(config)
+}
+
+/// `parts = ["someone/airpods", { widget = "someone/spotify", client_id = "…" }]`: widgets shown in
+/// this one's bays (D-94), each a reference or a table like a zone's entry. A part's table takes
+/// its options and `keys`, and nothing else of the host's: it has no place in the bar.
+fn parts(
+    value: toml::Value,
+    at: &str,
+    warnings: &mut Vec<String>,
+) -> Vec<(String, shortcut::Keys, toml::Table)> {
+    let toml::Value::Array(items) = value else {
+        warnings.push(format!(
+            "{at}: `parts` must be a list of widgets, like `parts = [\"someone/spotify\"]`, \
+             ignoring it"
+        ));
+        return Vec::new();
+    };
+    let mut parts = Vec::new();
+    for (index, item) in items.into_iter().enumerate() {
+        let at = format!("{at}.parts[{index}]");
+        let mut options = match item {
+            toml::Value::String(widget) => {
+                parts.push((widget, shortcut::Keys::new(), toml::Table::new()));
+                continue;
+            }
+            toml::Value::Table(options) => options,
+            _ => {
+                warnings.push(format!("{at} must be a widget or a table, skipping it"));
+                continue;
+            }
+        };
+        let Some(toml::Value::String(widget)) = options.remove("widget") else {
+            warnings.push(format!("{at} has no `widget = \"name\"`, skipping it"));
+            continue;
+        };
+        let keys = match options.remove("keys") {
+            Some(value) => keys(value, &at, warnings),
+            None => shortcut::Keys::new(),
+        };
+        for key in ["width_group", "collapsible", "parts"] {
+            if options.remove(key).is_some() {
+                warnings.push(format!("{at}: a part has no `{key}`, ignoring it"));
+            }
+        }
+        parts.push((widget, keys, options));
+    }
+    parts
 }
 
 /// `keys = { chat-1 = "alt+1", chat-10 = false }`: a shortcut's name, and its key or none.
@@ -1436,6 +1514,89 @@ bar = { show = \"hover\" }
         assert!(config.entries[1].keys.is_empty());
         assert!(!config.entries[1].options.contains_key("keys"));
         assert_eq!(config.warnings.len(), 3);
+    }
+
+    #[test]
+    fn parts_follow_their_owner() {
+        let config = parse(
+            r#"
+            [[right]]
+            widget = "volume"
+            width_group = "w"
+            parts = [
+                "someone/airpods",
+                { widget = "someone/spotify", client_id = "x", keys = { liked = "ctrl+l" } },
+            ]
+            [[right]]
+            widget = "battery"
+            "#,
+        )
+        .unwrap();
+        assert!(config.warnings.is_empty(), "{:?}", config.warnings);
+        let owners: Vec<_> = config
+            .entries
+            .iter()
+            .map(|entry| (entry.widget.as_str(), entry.owner))
+            .collect();
+        assert_eq!(
+            owners,
+            [
+                ("volume", None),
+                ("someone/airpods", Some(0)),
+                ("someone/spotify", Some(0)),
+                ("battery", None),
+            ]
+        );
+        assert!(!config.entries[0].options.contains_key("parts"));
+        let spotify = &config.entries[2];
+        assert_eq!(spotify.options["client_id"].as_str(), Some("x"));
+        assert!(!spotify.options.contains_key("widget"));
+        assert!(spotify.keys.contains_key("liked"));
+        assert_eq!(spotify.width_group, None);
+        assert_eq!(config.entries[1].options, toml::Table::new());
+    }
+
+    #[test]
+    fn odd_parts_are_warned_about() {
+        let config = parse(
+            r#"
+            [[right]]
+            widget = "volume"
+            parts = [3, { client_id = "x" }, { widget = "a", parts = ["b"], collapsible = true }]
+            [[left]]
+            widget = "clock"
+            parts = "someone/spotify"
+            "#,
+        )
+        .unwrap();
+        let widgets: Vec<_> = config.entries.iter().map(|e| e.widget.as_str()).collect();
+        assert_eq!(widgets, ["clock", "volume", "a"]);
+        assert_eq!(config.warnings.len(), 5, "{:?}", config.warnings);
+    }
+
+    #[test]
+    fn a_part_is_the_same_part_whoever_its_owner_is() {
+        let config = parse(
+            r#"
+            [[left]]
+            widget = "clock"
+            [[right]]
+            widget = "media"
+            parts = ["someone/spotify"]
+            "#,
+        )
+        .unwrap();
+        let moved = parse(
+            r#"
+            [[right]]
+            widget = "media"
+            parts = ["someone/spotify"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.entries[2].owner, Some(1));
+        assert_eq!(moved.entries[1].owner, Some(0));
+        assert!(config.entries[2].same_but_keys(&moved.entries[1]));
     }
 
     fn layout(config: &Config) -> Vec<(&str, usize, bool, bool)> {
