@@ -90,7 +90,7 @@ All motion is driven by the compositor's frame callbacks, and stops asking for f
 | Hand-over | tabs' pages, alternates, a popover's pages (a list to a row's details), a calendar's months (`page`) | `TAB_FADE` / `ALTERNATE_FADE`, sliding out the old way and in the new; a `page` with a higher order comes in from the right ([D-107](decisions.md)) |
 | Count | counters, a count badge's number | `COUNTER_COUNT`, through every value in between |
 | Grow | a count badge coming and going, and its width | `MORPH_*`, about its own middle |
-| Stagger | items that come or go together: an island's collapsible items shown or hidden | each fades on `MORPH`, `STAGGER` after the one before: in from the toggle's end, out from the far end, and the island only shrinks once the last is gone ([D-108](decisions.md)) |
+| Cascade | items that come or go together: an island's collapsible items shown or hidden | the island's edge springs on `MORPH` at once; each item comes out once the chevron has passed it and goes back once it reaches it, fading and sliding `CASCADE_SLIDE` on `FADE` from or toward the chevron ([D-116](decisions.md)) |
 | Ease | toggle knob, meter fill, slider line | `TOGGLE_SLIDE`, `METER_EASE`, `SLIDER_GROW`, `SLIDER_EASE` |
 | Gulp | charging battery, something filling | `BATTERY_GULP`, `GULP`, at 30 fps |
 | Glide | a scrolling list, `scroll`, a code block | a touchpad fling slows over `SCROLL_GLIDE_DECAY` and stops below `SCROLL_GLIDE_MIN`; a wheel step eases over `SCROLL_WHEEL_EASE` |

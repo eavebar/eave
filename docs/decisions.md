@@ -2376,7 +2376,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
   - The notch squeezes in by `PRESS_INSET` when pressed, and a drag stretches it toward the pointer, most near the grab. Its top hangs from the screen and doesn't move, and it never goes in further than it's grown.
   - The grown edge's bottom is pulled down under a drag (up, no higher than its top) in a curve `2 × DRAG_REACH` wide, which follows the pointer across.
   - Hovering them keeps the plain arrow, not the pointing hand or the open hand: they're part of the screen's edge, like a physical notch, not buttons. Only a drag shows the closed hand (`Grabbing`).
-- **A click brings the dormer out** (`Dormer(Toggle)`, so a second one puts it back): on the notch, or without one, in the middle of the top, `EDGE_CLICK_WIDTH` (240 px) wide, above the islands, grown or not. A press that moves `CLICK_SLOP` (4 px) or lasts `LONG_PRESS` is a drag, not a click.
+- **A click brings the dormer out** (`Dormer(Toggle)`, so a second one puts it back; now `Dormer(Click)`, which also says the pointer is on the bar, so Hyprland's report of that second click doesn't close the dormer first and let the click open it again): on the notch, or without one, in the middle of the top, `EDGE_CLICK_WIDTH` (240 px) wide, above the islands, grown or not. A press that moves `CLICK_SLOP` (4 px) or lasts `LONG_PRESS` is a drag, not a click.
 - **Out of the island in the middle.** Without a notch, with an island in the center zone, the dormer comes out of that island's shape as a dialog comes out of what opened it (D-90), and goes back into it (`Bar::middle_island`, `Popover::home`). Of the center's islands that are drawn, it's the one nearest the middle. A dialog nothing on the bar opened does the same. With a notch, a solid bar or an empty center, both drop out of the notch or the edge as before. An edge that isn't grown has nothing to squish, so the drop comes out of the top with no squish (the user's choice).
 
 **Why:** the notch and the grown edge stand for the screen's black border (D-92), so hiding them with the bar made the screen's border come and go. Since they look like part of the screen, they should respond to the hand like everything else on the bar, and the notch is the natural place to click for the dormer, which comes out of it. With no notch, a drop out of a bare top edge, next to an island in the middle, reads as coming from nowhere: out of the island is what a dialog already does.
@@ -2417,7 +2417,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 
 ## D-108: Items that come or go together, one at a time
 
-**Status:** accepted (2026-10-15). Extends [D-55](#d-55-several-islands-per-zone-collapsible-items-and-dividers-set-in-configtoml) and [D-27](#d-27-islands-morph-when-their-content-changes).
+**Status:** accepted (2026-10-15). Extends [D-55](#d-55-several-islands-per-zone-collapsible-items-and-dividers-set-in-configtoml) and [D-27](#d-27-islands-morph-when-their-content-changes). Its timing (`STAGGER`, and the island keeping its width until the last is gone) is superseded by [D-116](#d-116-the-edge-leads-the-items-catch-up): the edge leads and the items catch up. Keeping the leaving items laid out, `Toggle::leaving`, `Collapsed` and changing your mind stand.
 
 **What:** when several items come into an island at once, like the collapsible items shown by the chevron, each fades in `STAGGER` (45 ms) after the one before. The one nearest the chevron comes first. Hiding them goes the other way: the furthest goes first, and the island keeps its width until the last is gone. Then it springs to its new width.
 - **In:** `Motion::arrange` sees several new keys at once on an island that's already there, and gives each a `wait` before its fade sets off, in order from the toggle's end (`Motion::from`). A single new item, like a reveal (D-58) or a widget's item appearing, comes in at once as before. A new island grows out with all its items, as before.
@@ -2691,3 +2691,49 @@ The fillet's rows are only where it can be: within a blend of either one's top o
 **What we give up:** layer-shell margins and exclusive zones are whole logical pixels. At a fractional scale, an inset can be off by up to half a logical pixel (under one physical pixel at 1.333). It's rounded once, from the right scale.
 
 **Cost:** one Hyprland query per scale change. Nothing at rest.
+
+---
+
+## D-116: The edge leads, the items catch up
+
+**Status:** accepted (2026-10-15). Supersedes [D-108](#d-108-items-that-come-or-go-together-one-at-a-time)'s timing.
+
+**What:** when the chevron shows or hides an island's collapsible items, the island's edge springs to its new width at once, in one `MORPH` spring, and the items follow it: each comes out of the chevron's side once the chevron has passed it, and goes back into it once the chevron reaches it.
+- **One rule, both ways** (`Motion::cascade`): an item is *clear* when it's inside the shape's edges and doesn't overlap the drawn span of the toggle or any other item that shows. An item waiting to come out (`Cascade::Coming`) comes out the first frame it's clear; one going (`Cascade::Going`) goes the first frame it isn't. Each decision is latched, so an overshoot can't flicker an item in and out. Whatever is still waiting once every spring is at rest is decided at once, so nothing waits forever.
+- **Coming out:** it fades in on `FADE` and slides `CASCADE_SLIDE` (8 px) out of the toggle's side, so an item uncovered late still catches up with the edge. Which items: the batch shown by the chevron (the island sees `expanded` turn on, so one item alone counts too), or several new at once, as in D-108. Not on a new island, which grows out with all its items.
+- **Going back:** the leaving items take no room in the island's layout, like a hidden toggle, and keep where they were drawn, so the island closes on the click while they stay put. The toggle slides over them, nearest first, and each fades and slides `CASCADE_SLIDE` toward it as it's reached. Leaving items take no clicks. `Collapsed` still comes once the last is out.
+- **The squash** (`COLLAPSE_SQUASH`) now plays while the shape moves, both ways.
+
+**Why:** the user saw D-108's items fade in all together, and a stutter on the click. Its 45 ms gaps were lost in fades ten times as long, while the island had already sprung to its full width. Closing, the squash played on the click while the shape held still until every item had faded, and only then did the island shrink: a lurch with nothing behind it, then a second motion. The user wanted each icon to come after the other in the direction the island goes, with the growth itself smooth, not in steps, and the icons catching up.
+
+**Alternatives:**
+- **A longer stagger:** a fixed gap can't know where the edge is. Too short and they come together; too long and they trail far behind the island.
+- **Growing the island one item at a time:** what the user picked at first, but it steps; one spring for the edge is smooth, and the items keep up with it.
+- **Each item sliding all the way out of the chevron:** further items would slide across nearer ones.
+
+**Cost:** no dependency. Two more fields and a spring per item, at rest unless it comes or goes. While some wait, one pass over the island's items per frame.
+
+**Measured** (Asahi aarch64, release, both renderers built in, run on tiny-skia, each alone on a session bus of its own, D-116 and D-117 together against main built in the same session, alternating runs): binary 20,868,784 bytes on both. RSS with two clocks 19.0–19.1 MB on main, 18.6–19.0 MB on the branch; with the user's config 23.2–23.6 MB on both. Idle CPU with two clocks 0–2 ticks in 10 s on both. With the user's config, idle CPU varied between runs in the same way on both: 0–14 ticks in 10 s in one set of runs, about 32–35 in another, which was something on the desktop rather than either build. Only aarch64 was built: nothing here is arch-specific.
+
+---
+
+## D-117: The bar takes the keyboard on demand while no window is focused
+
+**Status:** accepted (2026-10-15).
+
+**What:** while Hyprland has no window focused, every bar surface that isn't holding the keyboard for a popover has `KeyboardInteractivity::OnDemand` instead of `None`, so Hyprland gives it the keyboard as the pointer comes onto it. That's how a drag on an island or the notch keeps following the pointer past the bar on an empty workspace.
+- **Whether a window is focused** (`Bar::window_focused`): `activewindowv2` on socket2 says when it changes, and `activewindow` is asked once when the events come on (`HyprlandStarted`). If it can't be asked, the bar acts as if a window were focused.
+- `hand_keyboard` sets each surface to what it should be: `Exclusive` for the one with the open popover, the dormer, a dialog or a reply being typed (D-36), and `OnDemand` or `None` for the rest (`Bar::on_demand`), the one giving the keyboard back first. Once a window is focused, they all go back to `None`, so the bar never takes the focus from a window.
+
+**Why:** Hyprland keeps a held button's pointer on the surface it was pressed on only while some surface has the keyboard (`InputManager::mouseMoveUnified` checks `Desktop::focusState()->surface()` before keeping `pointerFocus`). With a window focused, the window has it, and a drag goes anywhere. On an empty workspace nothing has it, so as soon as the pointer left the bar, Hyprland gave it to the wallpaper, or to nothing, and the bar got `CursorLeft`, which lets go of the drag ([platform.md](platform.md#hyprland-interface-we-rely-on)). An `OnDemand` layer under the pointer gets the keyboard straight from `mouseMoveUnified` (`rawSurfaceFocus`), so it already has it when a press comes.
+
+**Alternatives:**
+- **Taking the keyboard (`Exclusive`) while a press is held:** tried first. A layer turning exclusive makes Hyprland take the keyboard with `takeKeyboardFocus`, which calls `releaseAllMouseButtons`, so the press ended at once and nothing could be dragged at all.
+- **Not letting go on `CursorLeft`:** the island would freeze where the pointer left, and the release would never come.
+- **Asking Hyprland where the pointer is (`cursorpos`) while dragging:** polling, which the rules forbid when the pointer has events.
+- **`OnDemand` all the time:** with `follow_mouse`, pointing at the bar would take the focus from the window under it.
+
+**Cost:** no dependency. One more socket2 event goes to `update` (a focus change), and one request on the way in. On an empty workspace, keys typed while the pointer is on the bar go to the bar, which ignores them; there's no window for them to go to anyway.
+
+**Measured** (Asahi aarch64, release, both renderers built in, run on tiny-skia, each alone on a session bus of its own, D-116 and D-117 together against main built in the same session, alternating runs): binary 20,868,784 bytes on both. RSS with two clocks 19.0–19.1 MB on main, 18.6–19.0 MB on the branch; with the user's config 23.2–23.6 MB on both. Idle CPU with two clocks 0–2 ticks in 10 s on both. With the user's config, idle CPU varied between runs in the same way on both: 0–14 ticks in 10 s in one set of runs, about 32–35 in another, which was something on the desktop rather than either build. Only aarch64 was built: nothing here is arch-specific.
+
