@@ -85,9 +85,10 @@ All motion is driven by the compositor's frame callbacks, and stops asking for f
 | Squish, splat | a popover setting off, landing back | `REACT`, on top of the morph: `SQUISH_OPEN`, `SPLAT_*` |
 | Nudge, push, jelly | a volume change, a workspace switch, a pushed neighbor | `REACT`: `NUDGE_*`, `PUSH_*`, `JELLY_*`; the outline is jelly, poked and settling. Up or down, a flat shelf over the item, its ends easing into the edge, held out while nudges keep coming and let go `NUDGE_HOLD` after the last ([D-105](decisions.md)). A push into the screen's edge bounces off it, `WALL_GAP` short, and the side that hit squashes (`WALL_*`, [D-104](decisions.md)) |
 | Mark slide | switcher, tabs | `SWITCHER_SLIDE`, eased |
-| Hand-over | tabs' pages, alternates | `TAB_FADE` / `ALTERNATE_FADE`, sliding out the old way and in the new |
+| Hand-over | tabs' pages, alternates, a popover's pages (a list to a row's details), a calendar's months (`page`) | `TAB_FADE` / `ALTERNATE_FADE`, sliding out the old way and in the new; a `page` with a higher order comes in from the right ([D-107](decisions.md)) |
 | Count | counters, a count badge's number | `COUNTER_COUNT`, through every value in between |
 | Grow | a count badge coming and going, and its width | `MORPH_*`, about its own middle |
+| Stagger | items that come or go together: an island's collapsible items shown or hidden | each fades on `MORPH`, `STAGGER` after the one before: in from the toggle's end, out from the far end, and the island only shrinks once the last is gone ([D-108](decisions.md)) |
 | Ease | toggle knob, meter fill, slider line | `TOGGLE_SLIDE`, `METER_EASE`, `SLIDER_GROW`, `SLIDER_EASE` |
 | Gulp | charging battery, something filling | `BATTERY_GULP`, `GULP`, at 30 fps |
 | Glide | a scrolling list, `scroll`, a code block | a touchpad fling slows over `SCROLL_GLIDE_DECAY` and stops below `SCROLL_GLIDE_MIN`; a wheel step eases over `SCROLL_WHEEL_EASE` |

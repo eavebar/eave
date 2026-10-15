@@ -1958,6 +1958,7 @@ The settings are grouped by the thing they're about, not by situation, because e
   - **A notification:** the same, from the island the notifications show in. That island is back meanwhile, and so are its notifications. The click goes over the bus to eave-notifications, then to the widget that sent it, which asks for its dialog. The time window covers that round trip.
   - **The dormer:** a pick that asks for a dialog turns the dormer into it. The island in the middle takes the dialog's key, the shape springs on to the new panel, the new content fades in, and it goes back into the notch.
   - **Anything later or unprompted:** the island in the middle drops it out of the notch, or the top edge, as it drops the dormer (D-86). The same island holds both (`center_view`). *(Amended by [D-106](#d-106-the-notch-and-the-edge-are-the-screens-not-the-bars): without a notch, with an island in the center zone, out of that island.)*
+  - **Its own popover, open** *(amended 2026-10-15)*: the dialog always comes out of it, whatever was touched last and however long ago, and a popover row's shortcut counts as acting on the popover, like a click on the row. Before, the shortcuts weren't counted, so pressing `1` in eave-claude's popover depended on the clock: within a second of clicking the item the chat came out of the popover, after that it dropped out of the notch like the dormer. The user saw it as random. A dialog that takes in another one, or one still going back, now also goes back to where the new one came from. One out of a popover while the dormer still folds back starts at the popover's shape, not the dormer's.
 **Why:** a chat in a 480 px popover hung from a small island reads as squeezed, and covers the bar's side. The middle of the screen is where the dormer already is. What you clicked turning into it keeps the cause and the effect one motion, the way a popover grows out of its island. A dialog out of the notch would look like the dormer for no reason.
 
 **Alternatives:**
@@ -2388,3 +2389,48 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 **Cost:** no dependency. One more widget, at rest unless pressed or squished; its paths are cached as before, and rebuilt each frame while the hand pulls them. A hidden bar's input region gains two rectangles.
 
 **Measured** (Asahi aarch64, release, both renderers built in, run on tiny-skia, each alone on a session bus of its own, D-104 to D-106 together against main rebuilt in the same session): binary 20,803,248 → 20,868,784 bytes (one more page). RSS with two clocks 18.6–19.0 MB on both; with the user's config 23.0–23.4 MB on main, 23.4–23.5 MB on the branch: unchanged within noise. Idle CPU 0 ticks over 10 s on both. On the GPU renderer, RSS 75.9–79.3 MB on both, and idle CPU 0–1 ticks, apart from runs where the volume was being changed, on main as on the branch. *(A first main binary, built at the start of the session, measured ~2 MB less; main rebuilt later measured the same as the branch, so it was the build, not the change.)* Only aarch64 was built: checking x86_64 here needs a cross sysroot for pkg-config, and nothing in this change is arch-specific.
+
+---
+
+## D-107: Pages hand over
+
+**Status:** accepted (2026-10-15).
+
+**What:** `ui::page(order, content)` says that `content` is one page of a sequence the plugin moves through, and `order` says which one. When `order` changes, the host hands over the way tabs do (D-43). The old page slides `TAB_SLIDE` away and fades out, then the new one slides and fades in from the side it's on, over `TAB_FADE` in all. A higher order comes from the right and a lower one from the left. While `order` stays the same, the content just changes. In the bar, a page is just its content.
+- **The old page is kept by the host** (`page.rs`). The plugin only sends the page it's on. Each view's content moves into the widget state with its own tree as it's diffed, and a new order keeps the old content there until it's gone. The same order is diffed in place, so a page keeps its state, like a scrolled list or a field.
+- **Turning around** mid-way goes back from what's on screen, as tabs do. A third page while the old one is still leaving lets it finish leaving.
+- **Used by** network (the list at 0; a network's details, its password and the connection at 1), bluetooth (the list at 0; a device's details and pairing at 1), and the clock's calendar (each month numbered `year * 12 + month`, both its title and its grid).
+- **The content no longer flashes black when a popover changes size.** The content of a popover waits until the shape is halfway out of the island, and that rule ran on every change of size too. It measured from the island, so a page that changed the panel's height by more than about half covered the content with the island's color until the shape got there. Once the content has shown, a change of size now only springs the shape (`PopoverMotion::out`).
+
+**Why:** a page change was the one change in a popover that didn't move: the shape sprang to the new size while the text changed in a frame, and often went black first. Only the plugin knows which page comes after which, so it says so with a number. The host turns that number into a direction.
+
+**Alternatives:**
+- **the host spotting a new page by itself**, from a fingerprint of the content or a changed `header`: it can't tell a new page from the same page changing, like the details filling in as iwd answers, and it can't tell forward from back.
+- **a key without an order**: it can say "another page" but not which way it went, and a calendar going back a month would slide the wrong way.
+- **a crossfade**: iced has no group opacity, and the host fades by covering with the island's color, so two pages crossing would cover each other where they overlap. Fading out and then in is what tabs and alternates already do.
+- **keeping the old node and drawing it again**: drawing a node needs the host's icons and palette at view time, and a fresh widget state for it would lose the old page's scroll position as it leaves. Moving the built content into the widget state keeps both.
+
+**Measured** (Asahi aarch64, release, default GPU build, the user's config, two alternating runs against main): binary 20,803,248 → 20,868,784 B (+64 KiB, one page, for D-107 and D-108 together); RSS ~79.7 MB both, within noise; CPU 6 s after start the same within noise (1.6–2.1 %, both still settling). No dependency is added, and nothing runs while no page changes. Only a page that's leaving is held, until it's gone.
+
+---
+
+## D-108: Items that come or go together, one at a time
+
+**Status:** accepted (2026-10-15). Extends [D-55](#d-55-several-islands-per-zone-collapsible-items-and-dividers-set-in-configtoml) and [D-27](#d-27-islands-morph-when-their-content-changes).
+
+**What:** when several items come into an island at once, like the collapsible items shown by the chevron, each fades in `STAGGER` (45 ms) after the one before. The one nearest the chevron comes first. Hiding them goes the other way: the furthest goes first, and the island keeps its width until the last is gone. Then it springs to its new width.
+- **In:** `Motion::arrange` sees several new keys at once on an island that's already there, and gives each a `wait` before its fade sets off, in order from the toggle's end (`Motion::from`). A single new item, like a reveal (D-58) or a widget's item appearing, comes in at once as before. A new island grows out with all its items, as before.
+- **Out:** the items have to stay laid out while they fade, so the host keeps them. Pressing the chevron moves the island from `Bar::expanded` to `Bar::collapsing`. The view still lays out its collapsible items and hands their keys (dividers' too) to the island as `Toggle::leaving`. The island fades them out in turn and sends `Toggle::on_gone` (`Collapsed(island)`) once, when the last is out. The host then leaves them out, and the island springs narrower.
+- **Changing your mind:** pressing the chevron again while they leave brings them back, each from where its fade got to. A reload forgets an island's collapsing like its expanding.
+- The squash on pressing (`COLLAPSE_SQUASH`) is unchanged. The fades ride `MORPH`. `STAGGER` is a gap, not a feel.
+
+**Why:** the user asked for the icons to come out one at a time, in order. Coming out of the chevron in a line says where they came from, the way a popover grows out of its island. All at once, they just appear. Going back in the reverse order makes the round trip one motion, and keeping the width until they're gone means nothing slides under an item that's still fading.
+
+**Alternatives:**
+- **delaying each item's fade by its distance from the toggle in pixels:** wide items would wait longer for no reason. Their order is what the eye follows.
+- **staggering every new item, a new island's too:** the whole bar would ripple in at start, and a new island already grows out of a sliver.
+- **dropping the items at once and fading copies of them in the island:** iced can't draw an element it no longer has, so the host has to keep them laid out anyway.
+- **the island shrinking as each one goes:** the items left would slide under the ones still fading out.
+
+**Measured** (Asahi aarch64, release, default GPU build, the user's config, two alternating runs against main): binary 20,803,248 → 20,868,784 B (+64 KiB, one page, for D-107 and D-108 together); RSS ~79.7 MB both, within noise; CPU 6 s after start the same within noise (1.6–2.1 %, both still settling). Nothing runs while no item waits.
+

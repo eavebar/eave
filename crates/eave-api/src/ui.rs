@@ -269,6 +269,11 @@ pub enum Kind<M> {
     Gulp(Box<Node<M>>),
     /// Centered across the panel's width.
     Center(Box<Node<M>>),
+    /// One page of a sequence: a change of `order` hands over to the next.
+    Page {
+        order: i64,
+        content: Box<Node<M>>,
+    },
     Separator,
     Empty,
     ListItem {
@@ -797,6 +802,19 @@ pub fn keys<M>(shortcut: Shortcut) -> Node<M> {
     })
 }
 
+/// One page of a sequence the plugin moves through: a list and one of its rows' details, a month
+/// of a calendar. `order` says which page it is. When it changes, the host hands over: the old
+/// page slides away and fades, then the new one comes in from the side it's on, from the right
+/// for a higher `order` (further in, later), from the left for a lower one (back, earlier). While
+/// `order` stays, the content just changes, as anywhere else. The plugin keeps which page it's
+/// on; the host only draws the way between them.
+pub fn page<M>(order: i64, content: Node<M>) -> Node<M> {
+    Node(Kind::Page {
+        order,
+        content: Box::new(content),
+    })
+}
+
 /// Pages behind a row of tabs, one page showing at a time: a popover's Output, Input and Apps.
 /// The host draws the tabs, switches pages when one is clicked and starts on the first each time
 /// the popover opens, so the plugin keeps no state for it. In the bar, only the first page shows.
@@ -1029,6 +1047,7 @@ impl<M> Node<M> {
             Kind::Button { content, .. }
             | Kind::Gulp(content)
             | Kind::Center(content)
+            | Kind::Page { content, .. }
             | Kind::Display(content)
             | Kind::Mark(content)
             | Kind::Counted { content, .. }
@@ -1155,6 +1174,10 @@ impl<M> Node<M> {
             },
             Kind::Gulp(content) => Kind::Gulp(Box::new(content.map(f))),
             Kind::Center(content) => Kind::Center(Box::new(content.map(f))),
+            Kind::Page { order, content } => Kind::Page {
+                order,
+                content: Box::new(content.map(f)),
+            },
             Kind::Separator => Kind::Separator,
             Kind::Empty => Kind::Empty,
             Kind::ListItem {

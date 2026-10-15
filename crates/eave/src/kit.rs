@@ -32,6 +32,7 @@ use crate::icon;
 use crate::label::Label;
 use crate::markdown;
 use crate::meter::Meter;
+use crate::page::Page;
 use crate::pip::Pip;
 use crate::shortcut;
 use crate::slider::Slider;
@@ -105,6 +106,7 @@ fn large_cover<M>(kind: &Kind<M>) -> Option<&str> {
         Kind::Row(children) | Kind::Column(children) | Kind::List(children) => first(children),
         Kind::Grid { cells, .. } => first(cells),
         Kind::Tabs(pages) => pages.iter().find_map(|(_, page)| large_cover(page.kind())),
+        Kind::Page { content, .. } => large_cover(content.kind()),
         _ => None,
     }
 }
@@ -908,6 +910,10 @@ pub fn fingerprint<M>(node: &Node<M>, hasher: &mut impl Hasher) {
         | Kind::Display(content)
         | Kind::Mark(content)
         | Kind::Scroll { content, .. } => fingerprint(content, hasher),
+        Kind::Page { order, content } => {
+            order.hash(hasher);
+            fingerprint(content, hasher);
+        }
         Kind::Step {
             mark,
             leading,
@@ -950,6 +956,7 @@ pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
         Kind::Button { content, .. }
         | Kind::Gulp(content)
         | Kind::Center(content)
+        | Kind::Page { content, .. }
         | Kind::Display(content)
         | Kind::Mark(content)
         | Kind::Counted { content, .. }
@@ -1212,6 +1219,10 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 .into()
         }
         Kind::Center(content) => render(*content, ctx, icons),
+        Kind::Page { order, content } if ctx.panel() => {
+            Page::new(order, render(*content, ctx, icons)).into()
+        }
+        Kind::Page { content, .. } => render(*content, ctx, icons),
         Kind::Button {
             content,
             on_press,

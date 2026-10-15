@@ -31,6 +31,7 @@ mod markdown;
 mod meter;
 mod neck;
 mod notch;
+mod page;
 mod pip;
 mod shortcut;
 mod slider;
