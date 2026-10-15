@@ -2752,7 +2752,7 @@ Tuning those numbers couldn't fix it. For a morph to flow, the outline itself ha
 
 **What:** while a shape morphs, what's drawn is a body (`body.rs`): a ring of 112 points round the outline, each with its own place and speed. The frame (the edges, on `MORPH`, easing in) stays what lays out, hit-tests and places content.
 - **Topology.** The points are sampled off the squircle the shape is going to: 8 round each corner, 24 along the top and the bottom, 16 down each side, whatever its size. So corners go to corners and nothing swims round the outline.
-- **Each point springs to its place** there, on `BODY_RESPONSE`, damped `BODY_DAMPING` (0.6): it goes past and bounces back.
+- **Each point springs to its place** there, on `BODY_RESPONSE`, damped `BODY_DAMPING` (0.75): it goes past a little and bounces back.
 - **Lead and lag are a field, not a rect.** When where it's going changes, each point's tempo is set by how far it goes along the outward normal there, as a share of the furthest any point goes, raised to `BODY_FOCUS`. Going out all the way, it swings in `BODY_LEAD` of the time; coming in, in `BODY_LAG` of it, damped up to `BODY_LAND`, so it lands without going through. So a popover pours out of its island, its bottom's middle running ahead of its corners, and drains back up with its middle hanging on. An island growing sideways runs on that way. A dialog pours toward the middle. No tongue and no fillet: one outline.
 - **Tension.** Each point is pulled toward its neighbors by how far they are from where they belong (`BODY_TENSION`), so what one point does spreads smoothly along the outline, and the corners, where the anchors themselves curve, aren't flattened.
 - **Area.** The body keeps the area its frame has (`BODY_AREA`), pushing along its normals, so a side running ahead draws the others in. The top, which hangs from the bar, takes no part.
@@ -2762,6 +2762,14 @@ Tuning those numbers couldn't fix it. For a morph to flow, the outline itself ha
 - **Room.** The frame cached round the shape grows to cover the body. Glass is told the box round both. A popover's surface keeps `BODY_ROOM` (48 px) under the panel while its body moves, once, so the bounce isn't cut off, and gives it back when it rests. Content is clipped to the frame and the body's box.
 - **Not for an island attached to an edge** (bleed, shoulders): it hangs from the edge and morphs as before, a frame and its skin.
 - **What stays:** the jelly ring for pokes (nudges, shelves, walls, the drop's bounce) and `Jelly::at` for items riding it; the drag's stretch, the press's squeeze; the dormer's stops and neck (D-86), whose `pour.rs` lost the box it had for the tongue.
+
+**The feel: firm.** Three variants were built on branches, differing only in these numbers, as D-83, D-111 and D-114 were. The user ran them on their screen and picked firm (the numbers in `theme.rs`):
+
+| Feel | `BODY_DAMPING` | `BODY_LEAD` | `BODY_LAG` | `BODY_LAND` | `BODY_FOCUS` | `BODY_TENSION` | `BODY_AREA` |
+|---|---|---|---|---|---|---|---|
+| **firm** (taken) | 0.75 | 0.7 | 1.15 | 0.9 | 2.5 | 2.5 | 0.3 |
+| bouncy | 0.6 | 0.55 | 1.3 | 0.85 | 2.5 | 1.5 | 0.3 |
+| gooey | 0.48 | 0.45 | 1.6 | 0.8 | 2.0 | 0.8 | 0.5 |
 
 **Alternatives:**
 - **Tune D-114's numbers:** the three feels it had already been tuned through were all a rect with a rect on it.
