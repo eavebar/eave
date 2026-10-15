@@ -34,7 +34,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **6.9 Light and dark.** `theme = "system"`, `"light"` or `"dark"`: a light scheme that mirrors the dark one, following the desktop by default. The `appearance` plugin switches the desktop's mode ([D-92](decisions.md)).
 - [x] **6.10 The bar's own actions.** `eave doctor` checks the setup ([D-96](decisions.md)), `eave-build check` says what an update would move ([D-97](decisions.md)), and the `essential` and `update` plugins put calibrate, restart, health, check for updates and update in the dormer ([D-98](decisions.md)).
 
-- [x] **6.10 Bays and parts.** A widget can show inside another's popover, where it leaves room: Spotify's playlists in `media`, a headset's battery in `volume`. The user decides, in config.toml, whether a widget sits on its own or in another's bay ([D-101](decisions.md)).
+- [x] **6.10 Bays and parts.** A widget can show inside another's popover, where it leaves room: Spotify's playlists in `media`, a headset's battery in `volume`. The user decides, in config.toml, whether a widget sits on its own or in another's bay ([D-109](decisions.md)).
 
 ## Next
 

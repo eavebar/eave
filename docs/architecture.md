@@ -62,7 +62,7 @@ A popover isn't a surface of its own: the island holding the item turns into it 
 
 ## Bays
 
-A widget's popover or dialog can hold other widgets' parts, in the bays it leaves for them ([D-101](decisions.md)). A part is an instance like any other, with an `owner`: it isn't drawn on the bar and has no popover of its own.
+A widget's popover or dialog can hold other widgets' parts, in the bays it leaves for them ([D-109](decisions.md)). A part is an instance like any other, with an `owner`: it isn't drawn on the bar and has no popover of its own.
 
 1. Wherever the host builds a panel (`popover_view`, `dialog_popover`, icon loading, the open and close hooks), `Bar::fill_bays` walks it. For each `ui::bay`, it asks the owner's parts, in config order, for `part(&bay)`. Their nodes take the bay's place, or nothing does.
 2. Each part's nodes send `Routed(part, message)`. `route` unwraps it where the panel's messages and its shortcuts become `Message::Widget`, so they reach the part. `keys_of` gives each row the `keys` of whoever sends it, so `shortcut::resolve_panel` settles keys across the owner and its parts in one pass.

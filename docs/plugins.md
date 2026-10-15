@@ -90,7 +90,7 @@ Whatever these say, a notification that shows brings the bar out with it, until 
 
 `keys = { id = "ctrl+k", other = false }` gives the widget's shortcuts other keys, or none, by the names its README lists. It's the host's, like `width_group` ([D-91](decisions.md), [running.md](running.md#shortcuts)).
 
-`parts = [...]` puts other widgets inside this one's popover, in the places it leaves for them, its **bays** ([D-101](decisions.md)). Each part is a widget reference, or a table with the widget's options, and `keys` for its own shortcuts:
+`parts = [...]` puts other widgets inside this one's popover, in the places it leaves for them, its **bays** ([D-109](decisions.md)). Each part is a widget reference, or a table with the widget's options, and `keys` for its own shortcuts:
 
 ```toml
 [[right]]
@@ -218,7 +218,7 @@ The built-in widgets' actions that are always there have ids, for `eave action <
 
 ### Bays
 
-The places the built-in widgets leave for parts ([D-101](decisions.md)), with what each is about:
+The places the built-in widgets leave for parts ([D-109](decisions.md)), with what each is about:
 
 | Widget | Bay | Subject |
 |---|---|---|
@@ -349,7 +349,7 @@ To send a notification, call `Notify` on `org.freedesktop.Notifications` over th
 
 - **A dialog for what needs room.** `dialog()` returns a `Panel` like `popover()` does, shown in the middle of the screen, sized to fit it, wider than a wide popover, with taller scrolls: for a conversation or a long read ([D-90](decisions.md)). Nothing opens it but you: return `Effect::none().open_dialog()`, and `close_dialog()` to close it. Returning `None` while it's open closes it too. The host picks where it comes from: it comes out of what was just acted on (your popover, your item's island, a notification, or the dormer), and your island stays on the bar, and without one it drops out of the top of the screen. It closes on Esc and on a click elsewhere, like the dormer. `on_open`/`on_close` on its panel say when it opens and starts going back. Keep returning its content while it goes back, so it fades out with it.
 
-- **Bays and parts.** A widget can show inside another's popover or dialog ([D-101](decisions.md)). As the owner, put `ui::bay(name, subject)` where others may add something: `name` says where, and your README lists it; `subject` says what it's about, as the service names it. A bay nothing fills takes no room. As a part, implement `part(&self, bay: &Bay) -> Option<Part<Message>>`: look at `bay.name()` and `bay.subject()`, and return `None` when you have nothing for them. `Part::new(node)` takes `.on_open` and `.on_close`, like a `Panel`. You don't choose where you go: the user does, putting your entry in a zone or in another's `parts`. In a zone, the host uses your `item()` and `popover()`; as a part, only `part()`. The rest works the same, and effects land where you show: as a part, `open_popover()` opens your owner's popover, and a nudge nudges its island. To work in both places, share what you show:
+- **Bays and parts.** A widget can show inside another's popover or dialog ([D-109](decisions.md)). As the owner, put `ui::bay(name, subject)` where others may add something: `name` says where, and your README lists it; `subject` says what it's about, as the service names it. A bay nothing fills takes no room. As a part, implement `part(&self, bay: &Bay) -> Option<Part<Message>>`: look at `bay.name()` and `bay.subject()`, and return `None` when you have nothing for them. `Part::new(node)` takes `.on_open` and `.on_close`, like a `Panel`. You don't choose where you go: the user does, putting your entry in a zone or in another's `parts`. In a zone, the host uses your `item()` and `popover()`; as a part, only `part()`. The rest works the same, and effects land where you show: as a part, `open_popover()` opens your owner's popover, and a nudge nudges its island. To work in both places, share what you show:
 
   ```rust
   fn popover(&self) -> Option<Panel<Message>> {

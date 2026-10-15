@@ -2261,7 +2261,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 
 ---
 
-## D-101: Bays and parts: widgets that show in another's popover
+## D-109: Bays and parts: widgets that show in another's popover
 
 **Status:** accepted (2026-10-15). Extends [D-11](#d-11-three-layers-plugins-are-widgets-and-only-widgets-are-plugins) (widgets are still the only plugins) and follows [D-84](#d-84-the-dormer-actions-widgets-declare-found-by-typing) (the host puts together what widgets declare; no plugin reads another).
 

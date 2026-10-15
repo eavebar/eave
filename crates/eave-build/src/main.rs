@@ -473,7 +473,7 @@ fn update_self(
 }
 
 /// `eave = "…"` and every `widget = "…"`, in bar order, then the dormer's, each entry's parts
-/// after it (D-101). Malformed entries are left to the bar, which reports them.
+/// after it (D-109). Malformed entries are left to the bar, which reports them.
 fn read_config(text: &str) -> Result<(Option<String>, Vec<String>)> {
     let table: toml::Table = text.parse().map_err(|e| format!("{e}"))?;
     let eave = match table.get("eave") {

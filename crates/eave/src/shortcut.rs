@@ -87,7 +87,7 @@ fn bindings<'a, M>(node: &'a mut Node<M>, out: &mut Vec<(&'a mut Binding, &'a M)
 /// Gives the rows and buttons of a popover's panel their keys: the user's where they set one,
 /// else the plugin's. Where two want the same key, the user's wins, then the first. A row that
 /// loses has no key, so it shows none either. `keys` says whose `keys` a row's are by what it
-/// sends: a panel can hold parts of other widgets (D-101), each with its own.
+/// sends: a panel can hold parts of other widgets (D-109), each with its own.
 pub fn resolve_panel<'k, M>(node: &mut Node<M>, keys: &dyn Fn(&M) -> &'k Keys) {
     let mut rows = Vec::new();
     bindings(node, &mut rows);
@@ -406,7 +406,7 @@ mod tests {
 
     #[test]
     fn each_row_takes_its_own_widgets_keys() {
-        // Rows that send 10 and up are a part's, with keys of its own (D-101).
+        // Rows that send 10 and up are a part's, with keys of its own (D-109).
         let row = |id, key, message| {
             ui::list_item("row")
                 .shortcut(id, shortcut(key))

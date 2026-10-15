@@ -44,7 +44,7 @@ pub struct Device {
     pub connection: Option<&'static str>,
     /// The server's name for it, which stays while it's there and when it comes back, unlike
     /// `index`: `alsa_output.pci-0000_00_1f.3.analog-stereo`, `bluez_output.AC_12_34_56_78_9A.1`
-    /// for a Bluetooth device, with its address. What `volume`'s bays are about (D-101).
+    /// for a Bluetooth device, with its address. What `volume`'s bays are about (D-109).
     pub name: String,
     channels: u8,
 }
