@@ -113,17 +113,17 @@ A widget's dialog is its panel in the middle of the screen ([D-90](decisions.md)
 
 ## Glass
 
-With the `hypr-eave` Hyprland plugin loaded, the islands are glass ([D-111](decisions.md)). The plugin draws it; eave says where:
+With `theme = "glass"` and the `hypr-eave` Hyprland plugin loaded, the islands are glass ([D-111](decisions.md)). The plugin draws it; eave says where:
 
 1. eave draws every island opaque, in its fill, as it would without the plugin.
 2. The vendored layershellev publishes its layer surfaces' `wl_surface` (`layer_surfaces`). At the first frame, `glass::client` binds `eave_glass_v1` on the bar's connection, on an event queue of its own that a small thread dispatches.
 3. As a frame is drawn, `glass::frame` gathers what it says:
-   - Each island that may turn to glass records its shape, fill and tone (`draw_island`). That's one not attached to an edge and not in a solid bar.
+   - Each island that may turn to glass records its shape, fill and which way its ink goes (`draw_island`, from `Motion::ink`). That's one not attached to an edge and not in a solid bar, and not a drop hanging from the notch.
    - Every other island records itself as opaque. Pictures record themselves as solid (`Picture::draw`).
    - The offsets of the island's motion, of `Lift` and of scrollables (`glass::Scrolled`) are added on the way.
    - The notch and the grown edge come from `Bar::bezel_rects`.
-4. `glass::Present`, last in the view, sends the records from an overlay, the last thing drawn (popovers draw in overlays), before iced commits the frame. The protocol applies them with that commit.
-5. The plugin answers with `active` and `backdrop`, which arrive as `Message::Glass`. With glass, `Bar::light_islands` holds the islands over something bright, which draw with the light palette (`Island::theme`).
+4. `glass::Present`, last in the view, sends the records from an overlay, the last thing drawn (popovers draw in overlays), before iced commits the frame. The protocol applies them with that commit. `frame::fit` keeps them to 64, so the request fits in one Wayland message, and only the first bar's are sent.
+5. The plugin answers with `active` and `backdrop`, which arrive as `Message::Glass`. With glass, `Bar::darker_ink` (and `center_darker`, for the dormer's and dialogs' island) holds the islands over something bright, whose ink turns dark (`Island::ink`). The palette stays the dark one.
 6. The plugin going away (unloaded, or turned off) sends `active(0)` or removes its global. The islands go back to dark, and nothing is sent.
 
 ## Data sources by widget
@@ -176,7 +176,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/jelly.rs             an island's outline as a ring of coupled springs, which nudges poke, and the shelves nudges hold out
   src/wall.rs              the screen's edges as walls: how far an island can go toward each before it's too close
   src/hand.rs              what a drag does to a shape: the rubber band, and the stretch around the grab
-  src/glass/               glass with the hypr-eave plugin: the protocol client, what each frame says, light islands (D-111)
+  src/glass/               glass with the hypr-eave plugin: the protocol client, what each frame says, which way the ink goes (D-111)
   src/lift.rs              the bar sliding up off the screen and back, drawn lifted on a spring
   src/zones.rs             the three zones across the bar: sides at the edges, the center pushed aside when they reach it, or split around the notch
   src/bezel.rs             the notch and the grown edge (the whole bar when it's solid): squished by the dormer's drop, stretched by a drag, a click brings the dormer out

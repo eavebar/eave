@@ -43,7 +43,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 
 Every item from here on is a plugin, written against `eave-api` like a third-party one. Anything a built-in widget needs goes into the API or the kit, not into a private shortcut.
 
-- [ ] **Glass** ([D-111](decisions.md)). It works with the hypr-eave plugin: eave_glass_v1 both ways, region-exact keying, light islands, `eave-build` building the plugin, a nested smoke test. Still to do: the user's sign-off on the look, popovers following the backdrop, an animated light/dark switch, a build on x86_64, and the upstream asks that would remove its private accesses.
+- [ ] **Glass** ([D-111](decisions.md)). It works with the hypr-eave plugin: eave_glass_v1 both ways, region-exact keying, glass as a theme with the ink turning over bright backdrops, glass popovers, dormer and dialogs, `eave-build` building the plugin, a nested smoke test. Still to do: the user's sign-off on the look, a build on x86_64, and the upstream asks that would remove its private accesses.
 
 ## Known issues
 
