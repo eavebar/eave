@@ -339,7 +339,7 @@ An optional `dist/systemd/eave-rebuild.path` runs it whenever `plugins.toml` cha
 
 ## D-23: Core plugins depend only on Hyprland and the kernel
 
-**Status:** accepted (2026-10-12). Supersedes D-18's battery and network parts.
+**Status:** accepted (2026-10-12). Supersedes D-18's battery and network parts. Amended by [D-112](#d-112-glass-drawn-by-a-hyprland-plugin-that-eave-tells-whats-glass): glass needs a Hyprland plugin built from this repository. It's optional, and the bar is the same without it.
 
 **What:** the bar and its core plugins must work on any Hyprland machine without checking what else is installed. An audit found three plugins tied to this machine's setup:
 - `battery` read UPower. Minimal Hyprland installs often don't have it. It now reads `/sys/class/power_supply` directly (`plugins/battery/src/sysfs.rs`). System batteries (`type = Battery`, `scope` not `Device`, so a mouse doesn't count) are combined the way UPower's display device does it: percentage = stored energy / full energy (charge × design voltage when a driver only reports charge), and a state that is charging if any battery charges. Watts and time left come from `power_now` (or `current_now × voltage_now`), or from the kernel's own `time_to_*_now` for a single battery. One `eave-battery` thread blocks on a `NETLINK_KOBJECT_UEVENT` socket (rustix), so plugging in shows at once. Drivers don't send an event for every percent, so it also re-reads every 30 s, but only while a battery exists. A desktop never wakes.
@@ -2016,7 +2016,7 @@ The settings are grouped by the thing they're about, not by situation, because e
 
 ## D-92: Light and dark: the palette mirrors
 
-**Status:** accepted (2026-10-14). Amends [D-61](#d-61-black-and-white-and-color-only-as-a-signal) and [D-65](#d-65-code-is-content-colored-code-diffs-and-timelines), which now describe the dark scheme.
+**Status:** accepted (2026-10-14). Amends [D-61](#d-61-black-and-white-and-color-only-as-a-signal) and [D-65](#d-65-code-is-content-colored-code-diffs-and-timelines), which now describe the dark scheme. Amended by [D-112](#d-112-glass-drawn-by-a-hyprland-plugin-that-eave-tells-whats-glass): `theme` also takes `"glass"`, drawn with the dark palette and turned to glass by hypr-eave. Without the plugin it looks dark.
 
 **What:** `theme` in config.toml is `"system"` (the default), `"light"` or `"dark"`, and applies live.
 - **Two palettes.** Every color in `theme.rs` moved from a `const` into a `Palette`: `DARK` holds the values D-61 and D-65 set, unchanged, and `LIGHT` is its mirror. White islands; ink black at 88 % (`Normal`) and 50 % (`Dim`), written as the grey it makes on white; `Accent` black; every white overlay black at about the same alpha (fills a little lighter, since black on white reads stronger); the accent fill black with white on it. Signals and code hues go deeper so they read on white: good `#248A3D`, warning `#C25E00`, critical `#D70015`. A cover's color is lifted to a lightness of 0.62–0.74 on black, and held to 0.34–0.44 on white, so the white on a prominent button still reads. Sizes, springs and durations stay `const`s.
@@ -2525,3 +2525,82 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 | heavy: squashes as it sets off (lags its frame), a big splat | −2 | 6 | 0 | 0.6 | 0.8 | 0.25 | 8 | 6 |
 
 **Cost:** no dependency; the three give springs and four landing floats are gone, two floats of goals' bookkeeping per edge came. The ring now runs while a shape morphs, as it ran while nudged: 72 springs at 480 Hz (60 before D-111), plus a sum over them per substep for the area. At rest nothing moves. **Measured** (Asahi aarch64, release, GPU, two clocks, both binaries from the same directory, 12 s after start, two alternating runs): binary 20,868,784 → 20,868,800 bytes. RSS 75.6 and 74.9 MB on main, 76.0 and 75.1 MB here: unchanged within noise. Idle CPU 1 and 6 ticks over 10 s on main, 1 and 1 here. CPU while morphing wasn't measured. x86_64 wasn't built: `cargo check --target x86_64-unknown-linux-gnu` stops in smithay-client-toolkit's build script (no cross pkg-config here). Nothing in this change is arch-specific.
+
+---
+
+## D-112: Glass, drawn by a Hyprland plugin that eave tells what's glass
+
+**Status:** accepted (2026-10-15), experimental until the user signs off the look. It amends [D-23](#d-23-core-plugins-depend-only-on-hyprland-and-the-kernel): an optional compositor plugin, built from this repository, is allowed, and [D-92](#d-92-light-and-dark-the-palette-mirrors): glass is a third theme. Without the plugin, nothing changes.
+
+**What:** `theme = "glass"` in config.toml, next to dark, light and system. With the `hypr-eave` plugin loaded in Hyprland, the islands are liquid glass. What's behind them shows through, frosted, and is bent at their edges with a lit rim. eave still draws every island opaque, in its own fill, exactly as without the plugin. The plugin keys the glass in where an island is that fill, so fades, which cover content with the island's color, fade to glass for free.
+- **The plugin** (`hypr-eave/`, C++, Hyprland 0.56):
+  - **Two pass elements around the surface's own.** It adds them to the render pass at `RENDER_LAST_MOMENT`. The first, just before the surface draws, copies the framebuffer around it and frosts the copy with a dual Kawase blur. The second, just after, draws the glass where the surface's buffer is the island's fill, bent at the edges of the buffer's alpha.
+  - **Shape from this frame.** The shape comes only from the buffer drawn this frame, at the box it's drawn at, so the glass can't lag a morph.
+  - **Ink.** Grey ink over glass becomes the opposite of the glass behind it, made just light or dark enough to reach a contrast ratio (`ink = "readable"`). The glass gives way where the ink can't get there otherwise.
+  - **Readback.** It reads back how bright it is behind the bar, with a pixel pack buffer and a fence, at most ten times a second. It sends a reading only when an island's average brightness moved by 16/255: text scrolling behind the bar moves single cells a lot and islands little.
+- **The channel:** `eave_glass_v1` (`protocol/eave-glass-v1.xml`), a private Wayland protocol on the bar's own connection. Its state is double-buffered and applied on `wl_surface.commit`, so what eave says lands with the frame it describes.
+  - **eave → plugin, each frame:**
+    - `set_regions`: each island that may turn to glass, with its exact fill and which way its ink goes (a weight, 0 lighter to 255 darker), plus what never turns to glass: pictures, the notch, the grown edge, and islands attached to an edge or in a solid bar. At most 64 records (see *the crash* below).
+    - `set_look`: `[glass]` in config.toml.
+    - `set_report`: the cell size of the brightness grid.
+  - **plugin → eave:**
+    - `active`: whether there's glass.
+    - `backdrop`: a grid of how bright it is behind the surface.
+- **eave** (`crates/eave/src/glass/`):
+  - **Binding.** The vendored layershellev publishes its layer surfaces' `wl_surface`. eave binds the protocol on its own event queue, which a small thread dispatches.
+  - **Gathering.** Islands record themselves as they're drawn (`draw_island`), and pictures do too (`Picture::draw`). The record includes the offsets of the island's motion, of `Lift` and of scrollables (`glass::Scrolled`, which reads its scroll from the viewport it passes down).
+  - **Sending.** The last overlay of the frame (`glass::Present`) sends the records before iced presents. It has to be an overlay because popovers draw in overlays.
+  - **One palette.** Glass is drawn with the dark palette, and is never swapped for the light one. Over something bright (luma above 0.6, back below 0.5) an island's grey ink goes darker instead: the plugin turns it, and the island springs the weight from 0 to 1 (`Motion::ink`, the fade's feel), so it turns rather than snaps. Popovers, the dormer and dialogs follow the backdrop the same way, since nothing they're built with changes.
+  - **The dormer and dialogs** are glass once they let go of the notch. While a drop hangs from it on its neck it is the notch's, black ([D-92](#d-92-light-and-dark-the-palette-mirrors)), and it turns black again as the neck catches it on the way back. A dialog that comes out of an island on the bar has no neck, and is glass throughout.
+  - **One bar.** Only the first bar's frames reach its glass: records are gathered per thread, and another bar's would land on it.
+
+**Why:**
+- The user wanted real refraction at the islands' edges, "the right way", and only the compositor has what's behind a surface.
+- **A theme, not dark or light glass.** At first an island over something bright switched to the light palette. Popovers couldn't follow (they're built with the bar's palette), so an island turned dark again as it opened, and glass was a variant of whichever theme was set. The user wanted glass as a theme of its own, with no dark or light of it. Readability already comes from the plugin's ink, so only the ink's direction needs to change, and that's the plugin's to draw: eave's pixels stay the same.
+- The spike guessed everything eave already knows:
+  - a luminance key for what's island, which turned black covers to glass,
+  - a per-column guess of what hangs from the top edge,
+  - a 16-tap vote on whether an island is light,
+  - a pid filter.
+- And it reported through a Hyprland custom event broadcast to every socket2 listener, with one global state.
+- A protocol on the same connection makes each of these exact, per surface, versioned, and in step with the frame.
+
+**Alternatives:**
+- **ext-background-effect-v1**, which Hyprland 0.56 implements: blur only, no refraction, no ink, nothing back.
+- **Translucent islands with Hyprland's own layer blur:** fades went black (content fades by covering it with the island's color), and there's no refraction.
+- **A Unix socket or Hyprland's IPC for the channel:** it can't name a `wl_surface`, and it can't land with a commit, so a morph would lag by a frame.
+- **Marking glass in the buffer's alpha** (fill at 254/255): fades would mark faded content as content, which is the spike's black fades again.
+- **Function hooks into Hyprland's renderer:** x86-only trampolines, and AGENTS.md needs aarch64.
+- **eave loading the plugin itself:** a bar shouldn't load code into the compositor. The user's Hyprland config does it.
+
+**Robustness:**
+- **The crash: one message, 4096 bytes.** libwayland won't send or receive a message over 4096 bytes, and fails the connection instead. The glass shares the bar's connection, so that kills the bar. A dialog makes the surface tall: a 95 × 55 grid of 16 px cells was a 5252-byte `backdrop`, and eave died as the eave-claude chat opened, and again on each restart while it was open. Now:
+  - the plugin doubles the report's cells until it fits (`MAX_REPORT_CELLS`), and never sends a bigger one;
+  - eave sends at most 64 records (`frame::fit`): islands first, then pictures that touch one, largest first, and none scrolled out of view. A picture left out can only turn to glass where it's exactly an island's fill.
+- **Private members.** The two private things in Hyprland it can't do without are reached by explicit template instantiation (`Internals.hpp`), so a change fails to compile instead of corrupting memory. No more `#define private public`:
+  - this frame's record in the damage ring,
+  - the pass's element list.
+- **Unloading.** The plugin pins itself mapped (`RTLD_NODELETE`), because clients hold objects whose code is the plugin's. On unload those objects turn inert, and only the client destroys them. The global is removed, and eave falls back to dark islands.
+- **Errors.** Every entry point catches exceptions. A shader or framebuffer failure turns glass off for the session, with one notification.
+- **Builds.** A plugin built for another Hyprland refuses to load (the API hash). `eave-build` rebuilds it every run against the installed headers.
+- **Transforms.** Rotated monitors map through the monitor's transform, and the shaders think upright.
+- **Color.** Off sRGB (HDR, wide gamut), the glass stays but the ink's contrast math is off.
+
+**Upstream asks** (each would remove a private access):
+- a way for a pass element to say it reads what's behind it, so its whole region is damaged in this frame's record;
+- a way to place an element right before or after a given surface's.
+
+**Open:**
+- **Looks.** The look needs the user's visual sign-off.
+- **x86_64.** Not built yet on CachyOS.
+- **A hang, once.** A nested Hyprland hung once (main thread waiting on a futex) during a rapid unload/reload loop on the first build, and never again: 15 runs of `hypr-eave/smoke.sh` with 5 to 40 reloads each. One run failed only because eave started slowly; the script now waits for it. No backtrace: ptrace is restricted here.
+- **Reloading by the same path** gets the old code until Hyprland restarts: glibc matches a pinned library by name.
+- **Nested bars.** eave redraws continuously inside a nested Hyprland, so idle cost there says nothing.
+
+**Cost:**
+- **Dependencies:** none new. `wayland-client` and `wayland-scanner` were already in the tree through layershellev.
+- **Binary:** the release binary grows by 65,864 bytes, 20,868,800 → 20,934,664 on aarch64, against main at 3445c2c.
+- **Memory:** RSS is the same within noise, measured in a nested Hyprland: 79.0 MB on main, 78.9 MB with glass and no plugin, 79.0 MB with the plugin.
+- **Threads:** there's one more, the glass queue's, with a 128 KiB stack. It sleeps until the compositor speaks.
+- **Without the plugin:** nothing is gathered or sent per frame.
+- **In the plugin:** a glass redraw cost the spike about 0.6–1.2 ms of GPU time (Asahi, measured with glFinish). The redraw no longer has the attached-columns pass or the 16-tap vote. Nothing runs while nothing near the glass changes, and eave's commits damage it only when what eave says changed.

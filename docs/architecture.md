@@ -111,6 +111,21 @@ A widget's dialog is its panel in the middle of the screen ([D-90](decisions.md)
 4. The island in the middle draws every dialog, with the key `DIALOG` and `Placement::Middle`, centered on the screen. Out of an island, its home is that island's shape as last drawn (`Bar::shapes`, `Island::shape`, `Popover::home`): it starts there, popover and all, and springs back onto it when it closes, while the island itself stays on the bar. If the dormer is still folding back in that island, the dialog doesn't start from the dormer's shape: it starts at its home (`Motion::rehome`). Out of the top, it comes with a drop, as the dormer does, and the notch squishes as the neck lets go and catches it (`Neck`). Without a notch, "the top" is the island in the middle, as for the dormer.
 5. Placing, growing the surface, the input region, the keyboard and closing are the dormer's (`Placed`, `Closed`). It also closes when the widget returns `close_dialog()` or stops offering a dialog.
 
+## Glass
+
+With `theme = "glass"` and the `hypr-eave` Hyprland plugin loaded, the islands are glass ([D-112](decisions.md)). The plugin draws it; eave says where:
+
+1. eave draws every island opaque, in its fill, as it would without the plugin.
+2. The vendored layershellev publishes its layer surfaces' `wl_surface` (`layer_surfaces`). At the first frame, `glass::client` binds `eave_glass_v1` on the bar's connection, on an event queue of its own that a small thread dispatches.
+3. As a frame is drawn, `glass::frame` gathers what it says:
+   - Each island that may turn to glass records its shape, fill and which way its ink goes (`draw_island`, from `Motion::ink`). That's one not attached to an edge and not in a solid bar, and not a drop hanging from the notch.
+   - Every other island records itself as opaque. Pictures record themselves as solid (`Picture::draw`).
+   - The offsets of the island's motion, of `Lift` and of scrollables (`glass::Scrolled`) are added on the way.
+   - The notch and the grown edge come from `Bar::bezel_rects`.
+4. `glass::Present`, last in the view, sends the records from an overlay, the last thing drawn (popovers draw in overlays), before iced commits the frame. The protocol applies them with that commit. `frame::fit` keeps them to 64, so the request fits in one Wayland message, and only the first bar's are sent.
+5. The plugin answers with `active` and `backdrop`, which arrive as `Message::Glass`. With glass, `Bar::darker_ink` (and `center_darker`, for the dormer's and dialogs' island) holds the islands over something bright, whose ink turns dark (`Island::ink`). The palette stays the dark one.
+6. The plugin going away (unloaded, or turned off) sends `active(0)` or removes its global. The islands go back to dark, and nothing is sent.
+
 ## Data sources by widget
 
 | Widget | Source | Mechanism |
@@ -161,6 +176,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/jelly.rs             an island's outline, its skin: a ring of coupled springs that keeps its area, pushed by the frame's motion and poked by nudges, and the shelves nudges hold out
   src/wall.rs              the screen's edges as walls: how far an island can go toward each before it's too close
   src/hand.rs              what a drag does to a shape: the rubber band, and the stretch around the grab
+  src/glass/               glass with the hypr-eave plugin: the protocol client, what each frame says, which way the ink goes (D-112)
   src/lift.rs              the bar sliding up off the screen and back, drawn lifted on a spring
   src/zones.rs             the three zones across the bar: sides at the edges, the center pushed aside when they reach it, or split around the notch
   src/bezel.rs             the notch and the grown edge (the whole bar when it's solid): squished by the dormer's drop, stretched by a drag, a click brings the dormer out
@@ -197,6 +213,8 @@ plugins/bluetooth/         Bluetooth devices, connecting and pairing, via eave-b
 plugins/brightness/        display and keyboard backlights from sysfs, set through logind (eave-brightness)
 plugins/network/           primary connection, via eave-net; Wi-Fi to join via eave-iwd (eave-network)
 plugins/volume/            output volume and switching (eave-volume)
+hypr-eave/                the Hyprland plugin that draws glass (C++), and its smoke test (D-112)
+protocol/                 eave-glass-v1.xml, the protocol between eave and hypr-eave (D-112)
 vendor/softbuffer/         softbuffer 0.4.8 with an alpha-carrying Wayland buffer (D-25)
 vendor/iced_tiny_skia/     iced_tiny_skia 0.14.1: lazy clip mask, damage-aware present, EAVE_FRAMES (D-66)
 dist/systemd/              user units: the bar, the rebuild-on-config.toml pair, and the update and check

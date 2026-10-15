@@ -23,6 +23,10 @@ tokio = { version = "1", default-features = false, features = ["rt", "time"] }
 iced_layershell = "0.19"
 # Patched in vendor/: touchpad holds, which stop a fling (D-79).
 layershellev = "0.19"
+# Glass (hypr-eave): eave_glass_v1 on the bar's own Wayland connection, on an event queue of its
+# own. Both were already in the tree through layershellev.
+wayland-client = { version = "0.31", default-features = false }
+wayland-scanner = "0.31"
 # Markdown (D-62): Claude's replies and plans. Just the parser, no HTML writer or SIMD; iced's own
 # markdown feature would add its widget and url parsing on top.
 pulldown-cmark = { version = "0.13", default-features = false }

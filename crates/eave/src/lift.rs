@@ -146,15 +146,17 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Lift<'_, M> {
         }
         let offset = self.offset(state);
         renderer.with_translation(offset, |renderer| {
-            self.content.as_widget().draw(
-                &tree.children[0],
-                renderer,
-                theme,
-                style,
-                layout,
-                cursor - offset,
-                viewport,
-            );
+            crate::glass::frame::translated(offset, || {
+                self.content.as_widget().draw(
+                    &tree.children[0],
+                    renderer,
+                    theme,
+                    style,
+                    layout,
+                    cursor - offset,
+                    viewport,
+                );
+            });
         });
     }
 

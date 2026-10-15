@@ -75,12 +75,14 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Picture {
         _style: &renderer::Style,
         layout: Layout<'_>,
         _cursor: mouse::Cursor,
-        _viewport: &Rectangle,
+        viewport: &Rectangle,
     ) {
         use iced::advanced::image::Renderer as _;
 
         let squish = squish::current();
         let bounds = squish.rect(layout.bounds());
+        // Never glass, however dark it is.
+        crate::glass::frame::solid(bounds, viewport);
         renderer.draw_image(
             iced::advanced::image::Image {
                 opacity: self.opacity,

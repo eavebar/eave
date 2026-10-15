@@ -6,7 +6,7 @@
 //! widgets' dialogs, which come out of whatever was acted on to open them (D-90).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant, SystemTime};
 
 use eave_api::erased::{AnyMessage, DialogRequest, ErasedWidget, PopoverRequest};
@@ -30,6 +30,7 @@ use crate::countdown::Countdown;
 use crate::cover::{self, Cover};
 use crate::dialog::{self, Dialog, Origin, Touch, Touched};
 use crate::dormer::{self, Recent, Session, Source};
+use crate::glass;
 use crate::island::{self, Island, Placement, Toggle};
 use crate::lift::{self, Lift};
 use crate::notch::{self, Notch, Place, Side};
@@ -80,6 +81,14 @@ pub struct Bar {
     dialog: Option<Dialog>,
     /// Each island's shape as it was last drawn, for a dialog to come out of and go back into.
     shapes: RefCell<HashMap<IslandId, island::Shape>>,
+    /// Whether the glass plugin draws glass behind the bar ([`glass`]).
+    glass: bool,
+    /// With glass, the islands over something bright, whose ink goes darker.
+    darker_ink: HashSet<IslandId>,
+    /// The island in the middle's shape, as last drawn: the dormer's or a dialog's.
+    center_shape: island::Shape,
+    /// Whether its ink goes darker, over something bright.
+    center_darker: bool,
     /// The dialog asked for, while where its top goes is looked up: whose, and where it comes
     /// out of.
     asked: Option<(u64, Origin)>,
@@ -342,6 +351,8 @@ pub enum Message {
     Unreveal(u64, u64),
     /// Hyprland's windows or workspaces changed: whether one covers the screen may have too.
     CheckFullscreen,
+    /// From the glass plugin: whether there's glass, and how bright it is behind the bar.
+    Glass(glass::GlassEvent),
     /// Whether a window covers the screen, as of the check with this number.
     Fullscreen(u64, bool),
     /// The focused workspace changed.
@@ -402,6 +413,10 @@ impl Bar {
             recent: Recent::default(),
             dialog: None,
             shapes: RefCell::default(),
+            glass: false,
+            darker_ink: HashSet::new(),
+            center_shape: island::Shape::default(),
+            center_darker: false,
             asked: None,
             touched: None,
             warned: Vec::new(),
@@ -1322,7 +1337,7 @@ impl Bar {
 
     /// How the bar shows right now: outside fullscreen, or over a fullscreen window (D-88).
     /// Which way round the palette is: as `theme` says, or for `"system"` as the desktop
-    /// prefers, dark unless it prefers light.
+    /// prefers, dark unless it prefers light. Glass is drawn dark.
     pub fn scheme(&self) -> Scheme {
         match (self.config.theme, self.desktop) {
             (config::Theme::Light, _) | (config::Theme::System, ColorScheme::Light) => {
@@ -1334,6 +1349,12 @@ impl Bar {
 
     fn palette(&self) -> &'static Palette {
         self.scheme().palette()
+    }
+
+    /// Whether islands may turn to glass: the glass theme, with hypr-eave drawing it. Glass draws
+    /// with the dark palette, and looks dark without the plugin.
+    fn glass_on(&self) -> bool {
+        self.glass && self.config.theme == config::Theme::Glass
     }
 
     fn showing(&self) -> Showing {
@@ -1963,6 +1984,33 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             bar.sinking = None;
             bar.move_to(Layer::Top)
         }
+        // Drawn again, which asks for glass.
+        Message::Glass(glass::GlassEvent::Ready) => Task::none(),
+        Message::Glass(glass::GlassEvent::Active(active)) => {
+            bar.glass = active;
+            if !active {
+                bar.darker_ink.clear();
+                bar.center_darker = false;
+            }
+            Task::none()
+        }
+        Message::Glass(glass::GlassEvent::Backdrop(backdrop)) => {
+            if !bar.glass {
+                return Task::none();
+            }
+            let shapes = bar.shapes.borrow();
+            let darker = shapes
+                .iter()
+                .filter(|(_, shape)| shape.get().width > 0.0)
+                .filter(|(id, shape)| backdrop.darker(shape.get(), bar.darker_ink.contains(id)))
+                .map(|(id, _)| *id)
+                .collect();
+            drop(shapes);
+            bar.darker_ink = darker;
+            let center = bar.center_shape.get();
+            bar.center_darker = center.width > 0.0 && backdrop.darker(center, bar.center_darker);
+            Task::none()
+        }
         Message::CheckFullscreen => {
             bar.checks += 1;
             let check = bar.checks;
@@ -2357,6 +2405,9 @@ fn capitalized(name: &str) -> String {
 /// Every surface is a bar.
 pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     let palette = bar.palette();
+    // What's drawn tells the glass about itself while there's glass to tell.
+    let glass_on = bar.glass_on();
+    glass::frame::gather(glass_on);
     let notices = bar
         .notices
         .as_ref()
@@ -2383,6 +2434,27 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                     .filter(move |instance| instance.island() == island && instance.owner.is_none())
             };
             let collapsible = instances().any(|instance| instance.entry.collapsible);
+            // The open one wins over one still closing in the same island.
+            let popover = bar
+                .popovers
+                .iter()
+                .filter(|popover| popover.window == window)
+                .filter(|popover| instances().any(|instance| instance.id == popover.instance))
+                .max_by_key(|popover| popover.open);
+            // A popover wins: the notifications wait for it.
+            let popover = match popover {
+                Some(popover) => Some(popover_view(bar, popover)),
+                None => notices
+                    .filter(|_| island == notice_island)
+                    .map(|panel| notices_view(bar, panel)),
+            };
+            let attach = instances()
+                .next()
+                .map(|instance| instance.entry.attach)
+                .unwrap_or_default();
+            // Glass, with the plugin, but where it stands for the hardware: attached to an edge,
+            // or in a solid bar.
+            let glass = glass_on && band.is_none() && !(attach.top || attach.left || attach.right);
             let expanded = bar.expanded.contains(&island);
             let collapsing = bar.collapsing.contains(&island);
             let mut items = Vec::new();
@@ -2413,20 +2485,6 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             let nudges = instances()
                 .filter_map(|instance| Some((instance.id, instance.nudge?)))
                 .collect();
-            // The open one wins over one still closing in the same island.
-            let popover = bar
-                .popovers
-                .iter()
-                .filter(|popover| popover.window == window)
-                .filter(|popover| instances().any(|instance| instance.id == popover.instance))
-                .max_by_key(|popover| popover.open);
-            // A popover wins: the notifications wait for it.
-            let popover = match popover {
-                Some(popover) => Some(popover_view(bar, popover)),
-                None => notices
-                    .filter(|_| island == notice_island)
-                    .map(|panel| notices_view(bar, panel)),
-            };
 
             if items.is_empty() && popover.is_none() && !collapsible {
                 // Not drawn: nothing can come out of it.
@@ -2446,12 +2504,10 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                 leaving,
                 on_gone: collapsing.then_some(Message::Collapsed(island)),
             });
-            let attach = instances()
-                .next()
-                .map(|instance| instance.entry.attach)
-                .unwrap_or_default();
             Some((
                 Island::new(items)
+                    .glass(glass)
+                    .ink(bar.darker_ink.contains(&island))
                     .align(align)
                     .popover(popover)
                     .nudges(nudges)
@@ -2593,7 +2649,16 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     let bezel = Lift::new(bezel, stays || bar.out(), by);
     let islands = Lift::new(islands, bar.out(), by);
     // Always a stack, so the islands' state stays put when the dormer comes and goes.
-    stack![bezel, islands, center_view(bar, window)].into()
+    // Last: what this frame says about glass goes out with it. The notch and the grown edge are
+    // never glass, a little past where they rest, since they move when kicked.
+    let solid = bar
+        .bezel_rects(window)
+        .into_iter()
+        .map(|rect| rect.expand(style::GLASS_BEZEL_MARGIN))
+        .collect();
+    let look = (bar.config.theme == config::Theme::Glass).then_some(bar.config.glass);
+    let present = glass::Present::new(look, solid, bar.toast_window() == Some(window));
+    stack![bezel, islands, center_view(bar, window), present].into()
 }
 
 /// The island in the middle at the top, for the dormer or a widget's dialog: a dot where it comes
@@ -2610,7 +2675,11 @@ fn center_view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         (None, Some(session)) => dormer_popover(bar, session),
         (None, None) => return Space::new().into(),
     };
+    // Glass, once it lets go of the notch.
     let island = Island::new([(DORMER, Space::new().into())])
+        .glass(bar.glass_on())
+        .ink(bar.center_darker)
+        .shape(bar.center_shape.clone())
         .align(Horizontal::Center)
         .popover(Some(popover))
         .corners(bar.screen.island_corners(Place::default()))
@@ -3145,6 +3214,8 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
     // Always: the dormer's keybind comes this way, and what may change whether a window covers
     // the screen. Every other event stops in the filter.
     subscriptions.push(Subscription::run(hyprland_events).filter_map(hyprland));
+    // The glass plugin, if Hyprland has it loaded: quiet otherwise.
+    subscriptions.push(Subscription::run(glass::events).map(Message::Glass));
     // Notifications say how long ago they came: a minute at a time, while they show.
     let timed = bar
         .toasts

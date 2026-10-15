@@ -26,6 +26,7 @@ use crate::countdown::Countdown;
 use crate::counter::Counter;
 use crate::cover;
 use crate::field::Field;
+use crate::glass;
 use crate::glide::Glide;
 use crate::gulp::Gulp;
 use crate::icon;
@@ -1389,14 +1390,14 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 return rows.into();
             }
             let most = theme::LIST_MAX_ROWS * (theme::ROW_HEIGHT + theme::ROW_SPACING as f32);
-            container(Glide::new(
+            container(Glide::new(glass::Scrolled::new(
                 scrollable::Scrollable::new(rows)
                     .direction(scrollable::Direction::Vertical(
                         Scrollbar::new().width(3).scroller_width(3).margin(1),
                     ))
                     .width(Length::Fill)
                     .style(scrollable_style),
-            ))
+            )))
             .max_height(most)
             .into()
         }
@@ -1597,7 +1598,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             } else {
                 scroll
             };
-            container(Glide::new(scroll).bottom(bottom))
+            container(Glide::new(glass::Scrolled::new(scroll)).bottom(bottom))
                 .max_height(ctx.scroll)
                 .into()
         }

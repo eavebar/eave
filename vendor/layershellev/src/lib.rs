@@ -132,6 +132,15 @@ pub fn holds() -> u64 {
     HOLDS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+// eave patch: the layer surfaces' wl_surfaces, so eave can attach its own protocol objects to
+// them (hypr-eave's glass) on its own event queue.
+static SURFACES: std::sync::Mutex<Vec<(id::Id, WlSurface)>> = std::sync::Mutex::new(Vec::new());
+
+/// eave patch: the wl_surface of every layer surface there is now, oldest first, with its id.
+pub fn layer_surfaces() -> Vec<(id::Id, WlSurface)> {
+    SURFACES.lock().map(|list| list.clone()).unwrap_or_default()
+}
+
 pub use events::{
     AxisScroll, DispatchMessage, Ime, LayerShellEvent, ReturnData, XdgInfoChangedType,
 };
@@ -1030,6 +1039,9 @@ impl<T> WindowState<T> {
             .position(|unit| unit.id == id && unit.becreated)?;
 
         self.units[index].shell.destroy();
+        if let Ok(mut list) = SURFACES.lock() {
+            list.retain(|(unit, _)| *unit != id);
+        }
         self.units[index].wl_surface.destroy();
 
         if let Some(buffer) = self.units[index].buffer.as_ref() {
@@ -1099,6 +1111,11 @@ impl<T> WindowState<T> {
 
     fn push_window(&mut self, window_state_unit: WindowStateUnit<T>) {
         let surface = window_state_unit.wl_surface.clone();
+        if matches!(window_state_unit.shell, Shell::LayerShell(_))
+            && let Ok(mut list) = SURFACES.lock()
+        {
+            list.push((window_state_unit.id, surface.clone()));
+        }
         self.units.push(window_state_unit);
         // new created surface will be current_surface.
         self.update_current_surface(Some(surface));
