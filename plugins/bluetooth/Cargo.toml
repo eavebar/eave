@@ -1,0 +1,16 @@
+[package]
+name = "eave-bluetooth"
+version = "0.1.0"
+description = "Bluetooth devices: connect, pair and see their battery, for eave"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+# BlueZ over the shared system bus (D-103).
+eave-bluez.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

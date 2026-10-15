@@ -83,6 +83,8 @@ pub enum Icon {
     Previous,
     /// A triangle pointing right against a bar: on to the next track.
     Next,
+    /// The Bluetooth rune, with a dot on each side while a device is connected.
+    Bluetooth { connected: bool },
 }
 
 /// Where a [`step`] of a [`timeline`] stands. The host draws it as the step's mark on the line.

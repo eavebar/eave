@@ -2288,3 +2288,28 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 **Alternatives:**
 - a nudge on the battery item: easy to miss, and nothing else in the bar answers a plug.
 - one on unplugging too: you know you unplugged; asked for only on plugging in.
+
+---
+
+## D-103: Bluetooth through BlueZ
+
+**Status:** accepted (2026-10-15). Amends [D-23](#d-23-core-plugins-depend-only-on-hyprland-and-the-kernel) for Bluetooth, the way [D-42](#d-42-wi-fi-controls-through-iwd) did for Wi-Fi.
+
+**What:** a `bluetooth` widget and a `crates/eave-bluez` service, on `eave-dbus`'s shared system connection. The bar shows the Bluetooth rune (a new `Icon::Bluetooth { connected }`, with a dot on each side while a device is connected), dimmed while off, and the connected device with its battery when the pointer rests on it. The popover turns Bluetooth on and off, connects and disconnects paired devices, looks for devices while it's open and pairs them, and has a page per paired device to forget it. The dormer turns Bluetooth on and off (`bluetooth-on`, `bluetooth-off`) and connects or disconnects each paired device. `show` keeps the item to when Bluetooth is on, or a device is connected.
+
+**Why BlueZ, against D-23:** on Linux, Bluetooth is BlueZ. The kernel's HCI sockets would mean reimplementing pairing, profiles and the audio hand-off to PipeWire, all of which go through bluetoothd anyway. Its API is small (adapter, device, battery, agent manager) and on the system bus eave already shares. Without it, the popover says Bluetooth needs BlueZ; turned away by its bus policy, it says that.
+
+**How:**
+- `eave_dbus::watch_all` re-reads on any signal from `org.bluez`, one `GetManagedObjects` folded into the first adapter, its devices (paired first by name, then the strongest) and their `Battery1`. Devices come and go while looking, so it's every signal, not only `PropertiesChanged` on known paths.
+- **Watched all the time, unlike iwd (D-42):** the bar item shows what's connected and its battery, and BlueZ is quiet unless something changes. Looking for devices, the chatty part, runs only while the popover is open, and stops when it closes (BlueZ also stops it if eave leaves).
+- **Pairing** goes through an `org.bluez.Agent1` served on the shared connection at `/eave/bluez/agent`, as `KeyboardDisplay` so BlueZ can pick whatever the device can do. It's registered before each pairing and never made the default agent: BlueZ asks the agent of whoever called `Pair`, so it only ever hears about devices eave pairs, and it turns down any other. A question (confirm a passkey, type a PIN or passkey, show a code to type on a keyboard) goes out on `requests()`, which the widget watches only while pairing, and waits up to a minute for `answer`. A paired device is trusted and connected right away, so it reconnects on its own later.
+- Errors become short reasons under the device (`reason()`), like iwd's.
+
+**Alternatives:**
+- the `bluer` crate: BlueZ's own Rust bindings, but on its own D-Bus stack (dbus-rs and libdbus), a second D-Bus library beside zbus (D-7).
+- making eave the default agent: it would answer every device that tries to pair, also when no popover is open to ask.
+- unblocking rfkill from the popover: the kernel's `/dev/rfkill` could do it, but a blocked adapter is rare and deliberate. The popover says it's blocked.
+
+**Measured** (Asahi, release, both renderers built in, run on tiny-skia, BlueZ running with one paired device): +0.69 MiB of binary (20,082,304 → 20,803,248 bytes), most of it the agent's `interface` code and the second plugin's popover. A clock alone ~18.8 MB RSS; with `bluetooth` ~19.1–19.5 MB. Idle CPU unchanged: one tick in 20 s either way.
+
+**Cost:** `Icon::Bluetooth` grows eave-api, compatibly: plugins using it need the next eave-api. `eave-bluez` is a new service crate, to publish beside the others (D-50) once third-party plugins want it.

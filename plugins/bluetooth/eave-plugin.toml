@@ -1,0 +1,5 @@
+# Plugin manifest, beside the crate's Cargo.toml.
+[plugin]
+name = "bluetooth"
+description = "Bluetooth: connected devices and their battery, pairing and connecting in the popover (through BlueZ)"
+api = "0.1"

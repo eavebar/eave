@@ -6,6 +6,7 @@ fn main() -> Result<(), eave::Error> {
         eave_appearance::register,
         eave_apps::register,
         eave_battery::register,
+        eave_bluetooth::register,
         eave_brightness::register,
         eave_clock::register,
         eave_essential::register,

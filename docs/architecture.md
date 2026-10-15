@@ -28,7 +28,7 @@ eave keeps these apart. The **host** does the first job and owns everything visu
 
 - **Host** ([D-11](decisions.md)): owns every surface, the layout, the look and the motion. It is not pluggable.
 - **Widgets** implement `eave_api::Widget`. They can't pick colors or sizes, can't build raw iced elements, and can't move other items or the bar ([D-13](decisions.md)).
-- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-net` holds one netlink listener for links, addresses, routes and Wi-Fi ([D-23](decisions.md)). `crates/eave-dbus` shares one system bus connection and one session bus connection ([D-18](decisions.md)). `crates/eave-pulse` holds the one audio event subscription ([D-19](decisions.md)). `crates/eave-iwd` controls Wi-Fi through iwd, watched only while the network popover is open ([D-42](decisions.md)). `crates/eave-mpris` follows media players on the session bus ([D-56](decisions.md)).
+- **Services** are shared event sources, as ordinary public crates that plugins depend on. `crates/eave-hyprland` is the first: every widget that watches Hyprland shares one socket2 connection ([D-17](decisions.md)). `crates/eave-net` holds one netlink listener for links, addresses, routes and Wi-Fi ([D-23](decisions.md)). `crates/eave-dbus` shares one system bus connection and one session bus connection ([D-18](decisions.md)). `crates/eave-pulse` holds the one audio event subscription ([D-19](decisions.md)). `crates/eave-iwd` controls Wi-Fi through iwd, watched only while the network popover is open ([D-42](decisions.md)). `crates/eave-mpris` follows media players on the session bus ([D-56](decisions.md)). `crates/eave-bluez` watches and controls Bluetooth through BlueZ, with a pairing agent ([D-103](decisions.md)).
 
 Core plugins depend only on Hyprland and the kernel, plus an audio server for volume. They don't need UPower, NetworkManager or any other daemon or binary to be installed ([D-23](decisions.md)).
 
@@ -113,12 +113,12 @@ A widget's dialog is its panel in the middle of the screen ([D-90](decisions.md)
 | Brightness | kernel (`/sys/class/backlight`, `/sys/class/leds`) | `backlight` uevents over netlink; the keyboard's LED re-read every 2 s only while the popover is open; set through logind's `SetBrightness` ([D-80](decisions.md)) |
 | Media | MPRIS players | D-Bus on the session bus: name changes, `PropertiesChanged` and `Seeked` from every player ([D-56](decisions.md)) |
 | Network | kernel (rtnetlink, nl80211) | link/address/route multicast events, plus a 10 s signal re-read while on Wi-Fi ([D-23](decisions.md)) |
-| Bluetooth | BlueZ | D-Bus (`zbus`) |
+| Bluetooth | BlueZ | D-Bus on the system bus: every signal from `org.bluez` re-reads its objects ([D-103](decisions.md)) |
 | Tray | StatusNotifierItem | D-Bus. We must act as the watcher/host. The hardest widget. |
 | Notifications | apps, through the freedesktop notification spec | D-Bus: eave serves `org.freedesktop.Notifications` on the session bus, from the plugin in [eaveshell/eave-notifications](https://github.com/eaveshell/eave-notifications) ([D-48](decisions.md), [D-50](decisions.md)) |
 | CPU / RAM / temps | `/proc`, `/sys` | timer (the only legitimate polling) |
 
-So far: clock, workspaces, active window, keyboard layout, battery, network, volume, brightness, media and notifications. Bluetooth is next. See [roadmap.md](roadmap.md).
+So far: clock, workspaces, active window, keyboard layout, battery, network, volume, brightness, media, notifications and Bluetooth. The tray is next. See [roadmap.md](roadmap.md).
 
 ## Code layout
 
@@ -167,6 +167,7 @@ crates/eave-build/         builds the widgets config.toml uses, installs and res
 crates/eave-dbus/          service: shared system and session buses, snapshot-on-PropertiesChanged watcher; systemd units
 crates/eave-mpris/         service: MPRIS media players on the session bus, and their controls
 crates/eave-iwd/           service: Wi-Fi networks and controls through iwd's D-Bus API, and a passphrase agent
+crates/eave-bluez/         service: Bluetooth adapter and devices through BlueZ's D-Bus API, and a pairing agent
 crates/eave-net/           service: network state from the kernel over netlink (one event thread)
 crates/eave-pulse/         service: audio over the PulseAudio protocol (one event thread)
 crates/eave-hyprland/      service: shared socket2 events, socket1 queries and dispatches
@@ -180,6 +181,7 @@ plugins/window/            focused window title (eave-window)
 plugins/keyboard/          keyboard layout (eave-keyboard)
 plugins/media/             now playing over MPRIS, with cover art (eave-media)
 plugins/battery/           battery from sysfs (eave-battery)
+plugins/bluetooth/         Bluetooth devices, connecting and pairing, via eave-bluez (eave-bluetooth)
 plugins/brightness/        display and keyboard backlights from sysfs, set through logind (eave-brightness)
 plugins/network/           primary connection, via eave-net; Wi-Fi to join via eave-iwd (eave-network)
 plugins/volume/            output volume and switching (eave-volume)

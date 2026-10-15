@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/eave",
     "crates/eave-api",
+    "crates/eave-bluez",
     "crates/eave-build",
     "crates/eave-dbus",
     "crates/eave-hyprland",
@@ -13,6 +14,7 @@ members = [
     "plugins/appearance",
     "plugins/apps",
     "plugins/battery",
+    "plugins/bluetooth",
     "plugins/brightness",
     "plugins/clock",
     "plugins/essential",
@@ -37,6 +39,7 @@ repository = "https://github.com/eaveshell/eave"
 eave-api = { path = "crates/eave-api", version = "0.1.8" }
 eave = { path = "crates/eave", version = "0.1.0" }
 eave-dbus = { path = "crates/eave-dbus", version = "0.1.1" }
+eave-bluez = { path = "crates/eave-bluez", version = "0.1.0" }
 eave-pulse = { path = "crates/eave-pulse", version = "0.1.0" }
 eave-hyprland = { path = "crates/eave-hyprland", version = "0.2.0" }
 eave-iwd = { path = "crates/eave-iwd", version = "0.1.1" }
@@ -45,6 +48,7 @@ eave-net = { path = "crates/eave-net", version = "0.1.0" }
 eave-appearance = { path = "plugins/appearance", version = "0.1.0" }
 eave-apps = { path = "plugins/apps", version = "0.1.0" }
 eave-battery = { path = "plugins/battery", version = "0.1.0" }
+eave-bluetooth = { path = "plugins/bluetooth", version = "0.1.0" }
 eave-brightness = { path = "plugins/brightness", version = "0.1.0" }
 eave-clock = { path = "plugins/clock", version = "0.1.0" }
 eave-essential = { path = "plugins/essential", version = "0.1.0" }
