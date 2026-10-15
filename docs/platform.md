@@ -50,6 +50,6 @@ That's all. Battery, brightness and network read the kernel directly. The binary
 
 - **`eave-build`** relaunches a bar started from the Hyprland config by writing to `.socket.sock` itself (no `hyprctl`). Hyprland 0.56 moved to Lua configs, where `dispatch <args>` is evaluated as Lua (`hl.dispatch(<args>)`), so it sends `eval hl.exec_cmd(…)` first and falls back to `dispatch exec` on older releases ([D-22](decisions.md)).
 
-- **A held button keeps the pointer only while something has the keyboard.** Hyprland sends a surface a held button's motion past its edges only if some surface has keyboard focus. On an empty workspace nothing does, and a drag off the bar would get a leave. So the bar takes the keyboard while a press is held and no window is focused ([D-111](decisions.md)).
+- **A held button keeps the pointer only while something has the keyboard.** Hyprland sends a surface a held button's motion past its edges only if some surface has keyboard focus. On an empty workspace nothing does, and a drag off the bar would get a leave. So while no window is focused, the bar takes the keyboard on demand. Becoming exclusive during a press doesn't work: Hyprland lets go of every held button when a layer takes the keyboard that way ([D-111](decisions.md)).
 
 Hyprland's IPC changes between releases more often than freedesktop APIs do. Keep parsing tolerant: ignore unknown events, and don't crash on extra fields.

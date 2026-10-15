@@ -2493,24 +2493,23 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 
 ---
 
-## D-111: A held press takes the keyboard while no window is focused
+## D-111: The bar takes the keyboard on demand while no window is focused
 
 **Status:** accepted (2026-10-15).
 
-**What:** while Hyprland has no window focused, a press held on a bar surface gives that surface the keyboard (`Exclusive`, as a popover does, D-36) until it's let go. That's how a drag on an island or the notch keeps following the pointer past the bar on an empty workspace.
+**What:** while Hyprland has no window focused, every bar surface that isn't holding the keyboard for a popover has `KeyboardInteractivity::OnDemand` instead of `None`, so Hyprland gives it the keyboard as the pointer comes onto it. That's how a drag on an island or the notch keeps following the pointer past the bar on an empty workspace.
 - **Whether a window is focused** (`Bar::window_focused`): `activewindowv2` on socket2 says when it changes, and `activewindow` is asked once when the events come on (`HyprlandStarted`). If it can't be asked, the bar acts as if a window were focused.
-- **Whether a press is held** (`Bar::held`): an event listener, subscribed only while no window is focused, turns a press on a surface, taken by a widget or not, into `Held(window, true)`, and a release or the pointer leaving into `Held(window, false)`.
-- `hand_keyboard` gives the keyboard to the held surface after the popover, the dormer, a dialog and typing, and takes it back on release. With a window focused nothing changes, so a click on the bar never takes the focus from a window.
+- `hand_keyboard` sets each surface to what it should be: `Exclusive` for the one with the open popover, the dormer, a dialog or a reply being typed (D-36), and `OnDemand` or `None` for the rest (`Bar::on_demand`), the one giving the keyboard back first. Once a window is focused, they all go back to `None`, so the bar never takes the focus from a window.
 
-**Why:** Hyprland keeps a held button's pointer on the surface it was pressed on only while some surface has the keyboard (`InputManager::mouseMoveUnified` checks `Desktop::focusState()->surface()` before keeping `pointerFocus`). With a window focused, the window has it, and a drag goes anywhere. On an empty workspace nothing has it, so as soon as the pointer left the bar, Hyprland gave it to the wallpaper, or to nothing, and the bar got `CursorLeft`, which lets go of the drag ([platform.md](platform.md#hyprland-interface-we-rely-on)).
+**Why:** Hyprland keeps a held button's pointer on the surface it was pressed on only while some surface has the keyboard (`InputManager::mouseMoveUnified` checks `Desktop::focusState()->surface()` before keeping `pointerFocus`). With a window focused, the window has it, and a drag goes anywhere. On an empty workspace nothing has it, so as soon as the pointer left the bar, Hyprland gave it to the wallpaper, or to nothing, and the bar got `CursorLeft`, which lets go of the drag ([platform.md](platform.md#hyprland-interface-we-rely-on)). An `OnDemand` layer under the pointer gets the keyboard straight from `mouseMoveUnified` (`rawSurfaceFocus`), so it already has it when a press comes.
 
 **Alternatives:**
+- **Taking the keyboard (`Exclusive`) while a press is held:** tried first. A layer turning exclusive makes Hyprland take the keyboard with `takeKeyboardFocus`, which calls `releaseAllMouseButtons`, so the press ended at once and nothing could be dragged at all.
 - **Not letting go on `CursorLeft`:** the island would freeze where the pointer left, and the release would never come.
 - **Asking Hyprland where the pointer is (`cursorpos`) while dragging:** polling, which the rules forbid when the pointer has events.
-- **Taking the keyboard on every press:** it would take the focus from the window on every click on the bar.
-- **`OnDemand` instead of `Exclusive`:** Hyprland gives an `OnDemand` surface the keyboard on a click, but only after the press it would have to be there for.
+- **`OnDemand` all the time:** with `follow_mouse`, pointing at the bar would take the focus from the window under it.
 
-**Cost:** no dependency. One more socket2 event goes to `update` (a focus change), one request on the way in, and an event listener while no window is focused.
+**Cost:** no dependency. One more socket2 event goes to `update` (a focus change), and one request on the way in. On an empty workspace, keys typed while the pointer is on the bar go to the bar, which ignores them; there's no window for them to go to anyway.
 
 **Measured** (Asahi aarch64, release, both renderers built in, run on tiny-skia, each alone on a session bus of its own, D-110 and D-111 together against main built in the same session, alternating runs): binary 20,868,784 bytes on both. RSS with two clocks 19.0–19.1 MB on main, 18.6–19.0 MB on the branch; with the user's config 23.2–23.6 MB on both. Idle CPU with two clocks 0–2 ticks in 10 s on both. With the user's config, idle CPU varied between runs in the same way on both: 0–14 ticks in 10 s in one set of runs, about 32–35 in another, which was something on the desktop rather than either build. Only aarch64 was built: nothing here is arch-specific.
 

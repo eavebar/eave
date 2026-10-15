@@ -57,11 +57,12 @@ pub struct Bar {
     /// The bar surface holding the keyboard: the one with the open popover, so a key press can
     /// close it.
     keyboard: Option<window::Id>,
-    /// Whether Hyprland has a window focused. Without one, a held press takes the keyboard
+    /// Whether Hyprland has a window focused. Without one, the bar takes the keyboard on demand
     /// (D-111).
     window_focused: bool,
-    /// The bar surface with a press held on it, tracked only while no window is focused.
-    held: Option<window::Id>,
+    /// The bar surfaces that take the keyboard on demand: all but `keyboard`'s, while no window
+    /// is focused.
+    on_demand: Vec<window::Id>,
     /// How many nudges widgets have asked for, so each island can tell a new one from one it has
     /// already played.
     nudges: u64,
@@ -311,8 +312,6 @@ pub enum Message {
     HyprlandStarted,
     /// Whether Hyprland has a window focused.
     WindowFocused(bool),
-    /// A press on this bar surface is held down, or let go.
-    Held(window::Id, bool),
     /// The pointer came onto the bar's surface, or left it.
     PointerEntered,
     PointerLeft,
@@ -401,7 +400,7 @@ impl Bar {
             pointer_inside: false,
             keyboard: None,
             window_focused: true,
-            held: None,
+            on_demand: Vec::new(),
             nudges: 0,
             icons: Icons::default(),
             loading: Vec::new(),
@@ -1734,8 +1733,13 @@ pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
 }
 
 /// Gives the keyboard to the bar surface with the open popover, or with a notification being
-/// answered, and takes it back from the one that had it. Exclusive, not on demand: with `follow_mouse`, hovering a window would take the
-/// focus away ([D-36](../../../docs/decisions.md)).
+/// answered, and takes it back from the one that had it. Exclusive, not on demand: with
+/// `follow_mouse`, hovering a window would take the focus away ([D-36](../../../docs/decisions.md)).
+///
+/// The rest take it on demand while no window is focused, so Hyprland gives a surface the
+/// keyboard as the pointer comes onto it. Something has to have it for Hyprland to keep a held
+/// press's pointer on the bar once it leaves, so a drag can go past the bar (D-111). Not on a
+/// press: a surface turning exclusive makes Hyprland let go of every button held.
 fn hand_keyboard(bar: &mut Bar) -> Vec<Task<Message>> {
     let wanted = bar
         .popovers
@@ -1747,24 +1751,55 @@ fn hand_keyboard(bar: &mut Bar) -> Vec<Task<Message>> {
                 .then(|| bar.toast_window())
                 .flatten()
         })
-        .or_else(|| bar.typing().then(|| bar.toast_window()).flatten())
-        // Hyprland keeps a held press's pointer on its surface only while something has the
-        // keyboard: with no window focused, the bar does, until the press is let go (D-111).
-        .or_else(|| bar.held.filter(|_| !bar.window_focused));
-    if wanted == bar.keyboard {
-        return Vec::new();
-    }
+        .or_else(|| bar.typing().then(|| bar.toast_window()).flatten());
+    let resting = if bar.window_focused {
+        KeyboardInteractivity::None
+    } else {
+        KeyboardInteractivity::OnDemand
+    };
+    let had = |window| {
+        if bar.keyboard == Some(window) {
+            KeyboardInteractivity::Exclusive
+        } else if bar.on_demand.contains(&window) {
+            KeyboardInteractivity::OnDemand
+        } else {
+            KeyboardInteractivity::None
+        }
+    };
     let change = |id, keyboard_interactivity| {
         Task::done(Message::KeyboardInteractivityChange {
             id,
             keyboard_interactivity,
         })
     };
-    let released = bar
-        .keyboard
-        .map(|window| change(window, KeyboardInteractivity::None));
-    let taken = wanted.map(|window| change(window, KeyboardInteractivity::Exclusive));
+    // The one that had it gives it back before another takes it.
+    let mut released = Vec::new();
+    let mut taken = Vec::new();
+    for &window in &bar.windows {
+        let want = if wanted == Some(window) {
+            KeyboardInteractivity::Exclusive
+        } else {
+            resting
+        };
+        if want != had(window) {
+            let tasks = if want == KeyboardInteractivity::Exclusive {
+                &mut taken
+            } else {
+                &mut released
+            };
+            tasks.push(change(window, want));
+        }
+    }
     bar.keyboard = wanted;
+    bar.on_demand = if bar.window_focused {
+        Vec::new()
+    } else {
+        bar.windows
+            .iter()
+            .copied()
+            .filter(|window| Some(*window) != wanted)
+            .collect()
+    };
     released.into_iter().chain(taken).collect()
 }
 
@@ -2002,13 +2037,6 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         }
         Message::WindowFocused(focused) => {
             bar.window_focused = focused;
-            if focused {
-                bar.held = None;
-            }
-            Task::none()
-        }
-        Message::Held(window, held) => {
-            bar.held = held.then_some(window);
             Task::none()
         }
         Message::WorkspaceChanged => {
@@ -3180,11 +3208,6 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
     if bar.is_open() && !bar.pointer_inside {
         subscriptions.push(iced::event::listen_with(pointer_moved));
     }
-    // With no window focused, a held press takes the keyboard, or Hyprland lets go of the
-    // pointer as soon as it leaves the surface (D-111).
-    if !bar.window_focused {
-        subscriptions.push(iced::event::listen_with(held_event));
-    }
     // Always: the dormer's keybind comes this way, and what may change whether a window covers
     // the screen. Every other event stops in the filter.
     subscriptions.push(Subscription::run(hyprland_events).filter_map(hyprland));
@@ -3202,19 +3225,6 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
 fn pointer_moved(event: Event, _: iced::event::Status, _: window::Id) -> Option<Message> {
     match event {
         Event::Mouse(mouse::Event::CursorMoved { .. }) => Some(Message::PointerEntered),
-        _ => None,
-    }
-}
-
-fn held_event(event: Event, _: iced::event::Status, window: window::Id) -> Option<Message> {
-    match event {
-        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left | mouse::Button::Right)) => {
-            Some(Message::Held(window, true))
-        }
-        Event::Mouse(
-            mouse::Event::ButtonReleased(mouse::Button::Left | mouse::Button::Right)
-            | mouse::Event::CursorLeft,
-        ) => Some(Message::Held(window, false)),
         _ => None,
     }
 }
@@ -4414,15 +4424,24 @@ mod tests {
     }
 
     #[test]
-    fn with_no_window_focused_a_held_press_takes_the_keyboard() {
+    fn with_no_window_focused_the_bar_takes_the_keyboard_on_demand() {
         let (mut bar, window) = acting_bar();
-        let _ = update(&mut bar, Message::Held(window, true));
-        assert_eq!(bar.keyboard, None, "a window has it");
+        assert!(bar.on_demand.is_empty(), "a window has it");
         let _ = update(&mut bar, Message::WindowFocused(false));
-        let _ = update(&mut bar, Message::Held(window, true));
-        assert_eq!(bar.keyboard, Some(window));
-        let _ = update(&mut bar, Message::Held(window, false));
-        assert_eq!(bar.keyboard, None);
+        assert_eq!(bar.on_demand, [window]);
+        // A popover takes it for good, and gives it back on demand.
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
+        assert_eq!(
+            (bar.keyboard, bar.on_demand.as_slice()),
+            (Some(window), [].as_slice())
+        );
+        let _ = update(&mut bar, Message::KeyPressed);
+        assert_eq!(
+            (bar.keyboard, bar.on_demand.as_slice()),
+            (None, [window].as_slice())
+        );
+        let _ = update(&mut bar, Message::WindowFocused(true));
+        assert!(bar.on_demand.is_empty());
     }
 
     #[test]
