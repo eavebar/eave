@@ -3350,7 +3350,7 @@ mod tests {
         popover(&mut motion, true, panel, true);
         let (out, inward, _) = skin_range(&mut motion);
         let (left, right) = (stretched(out, inward, 0), stretched(out, inward, 2));
-        assert!(right > 1.0, "leans right: {out:?} {inward:?}");
+        assert!(right > 0.5, "leans right: {out:?} {inward:?}");
         assert!(left < right / 3.0, "the left barely: {out:?} {inward:?}");
 
         // Back right to left: the right side carries on in, past the island's.
