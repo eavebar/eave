@@ -75,6 +75,7 @@ Current baseline (Asahi, aarch64, release, tiny-skia, default binary). Measured 
 | the user's config, Markdown, text area, scroll (after D-62) | 11.6 MiB | ~19.3 MB (~18.8 on main in the same session) | unchanged within noise |
 | the user's config, notification cards (after D-85; both renderers built in, run on tiny-skia, alone on a session bus of its own) | 18.40 → 18.53 MiB | ~23.4 MB idle, ~27.7 MB with a notification shown (main in the same session: ~23.6 and ~27.3) | unchanged within noise |
 | two clocks, + `essential` and `update` under `[[dormer]]` (after D-96–D-98; CachyOS x86_64, both renderers built in, run on tiny-skia) | 20.77 → 21.98 MiB | ~18.2 MB for two clocks (~17.9 on main in the same session), ~18.4 MB with both plugins | 0% |
+| a clock, + `bluetooth` with BlueZ running and a paired device (after D-103; Asahi, both renderers built in, run on tiny-skia) | 19.15 → 19.84 MiB | ~18.8 MB for the clock alone, ~19.1–19.5 MB with bluetooth, same session | 0% (one tick in 20 s either way) |
 
 Before the plugin split (skeleton, clock + date hard-coded): binary 5.6 MiB, RSS ~11.5 MB. The +0.2 MiB of binary and +0.3 MB of RSS are the price of the registry, config parsing (`toml`) and popover surfaces ([D-12](decisions.md), [D-14](decisions.md)).
 
@@ -100,7 +101,7 @@ For smoothness: watch animations with Hyprland's debug overlay (`hyprctl keyword
 
 Three things get versions, each by hand and only when the user asks for it:
 
-- **The crates on crates.io:** `eave-api` and the services (`eave-dbus`, `eave-hyprland`, `eave-iwd`, `eave-net`, `eave-pulse`), so plugins in other repositories build and test on their own ([D-50](decisions.md)). The host, `eave-build` and the built-in plugins aren't published.
+- **The crates on crates.io:** `eave-api` and the services (`eave-dbus`, `eave-hyprland`, `eave-iwd`, `eave-bluez`, `eave-net`, `eave-pulse`), so plugins in other repositories build and test on their own ([D-50](decisions.md)). The host, `eave-build` and the built-in plugins aren't published.
 - **eave's release tags:** `vX.Y.Z` on `main`. The AUR package builds `eave-build` from a tag, and a packaged eave-build builds the bar from that same tag ([D-54](decisions.md)).
 - **Plugin repositories** (`eaveshell/eave-claude`, `eaveshell/eave-notifications`, …): they depend on the published crates, and their CI builds with `--locked`.
 

@@ -1,0 +1,20 @@
+[package]
+name = "eave-bluez"
+version = "0.1.0"
+description = "Bluetooth controls for eave plugins, through BlueZ's D-Bus API"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The shared system bus connection and its watching (D-103).
+eave-dbus.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# The agent's interface macros name `::zbus`. The same zbus eave-dbus uses, not another.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+# The agent hands pairing requests to the plugin and waits for its answer. Already in the build
+# through eave-dbus.
+tokio = { version = "1", default-features = false, features = ["sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt"] }

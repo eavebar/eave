@@ -763,6 +763,7 @@ dependencies = [
  "eave-appearance",
  "eave-apps",
  "eave-battery",
+ "eave-bluetooth",
  "eave-brightness",
  "eave-clock",
  "eave-dbus",
@@ -836,6 +837,26 @@ dependencies = [
  "serde",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "eave-bluetooth"
+version = "0.1.0"
+dependencies = [
+ "eave-api",
+ "eave-bluez",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "eave-bluez"
+version = "0.1.0"
+dependencies = [
+ "eave-dbus",
+ "futures-util",
+ "tokio",
+ "zbus",
 ]
 
 [[package]]

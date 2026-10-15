@@ -1139,6 +1139,7 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
         quote(&api_dir)
     );
     for service in [
+        "eave-bluez",
         "eave-dbus",
         "eave-hyprland",
         "eave-iwd",

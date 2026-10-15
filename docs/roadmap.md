@@ -36,7 +36,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 
 ## Next
 
-- [ ] **7. Bluetooth.** BlueZ over zbus, on `eave-dbus`.
+- [x] **7. Bluetooth.** BlueZ over zbus, on `eave-dbus`: devices, battery, connecting and pairing through an agent ([D-103](decisions.md)).
 - [ ] **8. System tray.** StatusNotifierItem watcher and host, with menus.
 
 Every item from here on is a plugin, written against `eave-api` like a third-party one. Anything a built-in widget needs goes into the API or the kit, not into a private shortcut.

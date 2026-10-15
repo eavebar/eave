@@ -286,6 +286,7 @@ impl Glyph {
                     .fill(&polygon(&[(2.5, 3.0), (10.5, 8.0), (2.5, 13.0)]), pen.on);
                 pen.block(11.25, 3.0, 2.25, 10.0, 1.0);
             }
+            Icon::Bluetooth { connected } => pen.bluetooth(connected),
         }
     }
 }
@@ -340,6 +341,22 @@ impl Pen<'_> {
     fn dot(&mut self, x: f32, y: f32, radius: f32) {
         self.frame
             .fill(&Path::circle(Point::new(x, y), radius), self.on);
+    }
+
+    /// The rune: a stem with two arrowheads folded back across it.
+    fn bluetooth(&mut self, connected: bool) {
+        self.polyline(&[
+            (4.5, 4.75),
+            (11.0, 10.75),
+            (7.75, 14.0),
+            (7.75, 2.0),
+            (11.0, 5.25),
+            (4.5, 11.25),
+        ]);
+        if connected {
+            self.dot(2.25, 8.0, 1.0);
+            self.dot(13.75, 8.0, 1.0);
+        }
     }
 
     fn lock(&mut self) {
