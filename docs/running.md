@@ -168,7 +168,7 @@ systemctl --user enable --now eave-rebuild.path   # eave-build init put the unit
 | Enter, `s` | save to config.toml and quit |
 | Esc, `q` | quit without saving |
 
-It starts from what config.toml says for this monitor, or from the notch the hardware reports. Saving writes `notch` and `screen` into the monitor's `[monitor."…"]` table ([D-94](decisions.md)): the one that already matches it, or a new one named after its make and model, so the same config.toml fits every screen you use. It keeps the notch's and the screen's `grow` as they were, the top-level keys, the rest of the file and its comments, and writes through a symlink. Run it with the binary the bar runs, `~/.local/bin/eave calibrate`, or `cargo run --release -- calibrate` in a checkout. The `essential` widget's Calibrate screen, in the dormer, runs it for you.
+It starts from what config.toml says for this monitor, or from the notch the hardware reports. Saving writes `notch` and `screen` into the monitor's `[monitor."…"]` table ([D-94](decisions.md)): the one that already matches it, or a new one named after its make and model, so the same config.toml fits every screen you use. It keeps the notch's and the screen's `grow` as they were, the top-level keys, the rest of the file and its comments, and writes through a symlink. Run it with the binary the bar runs, `~/.local/bin/eave calibrate`, or `cargo run --release -- calibrate` in a checkout. The `essential` widget's Calibrate screen, in the dormer, runs it for you. What it saves is in screen pixels, so it holds at any scale: change the monitor's scale and the bar fits the panel again on its own ([D-110](decisions.md)).
 
 ## Check the setup
 

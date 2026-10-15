@@ -2088,7 +2088,7 @@ The settings are grouped by the thing they're about, not by situation, because e
 - The bar doesn't follow a monitor plugged in or out while it runs. It stays where it opened, with that monitor's settings, until it restarts. Following hotplug comes with one bar per monitor ([roadmap.md](roadmap.md)).
 - Top-level `notch` and `screen` written by an older `eave calibrate` stay where they are. The monitor's table now overrides them, and they still apply to other monitors.
 
-**Cost:** no dependency. One more Hyprland query when config.toml has no measurements, only when these settings change.
+**Cost:** no dependency. One more Hyprland query when config.toml has no measurements, only when these settings change. *(Since [D-110](#d-110-the-screen-is-looked-into-again-when-the-scale-changes), also when the monitor's scale changes.)*
 
 ---
 
@@ -2467,3 +2467,21 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 - `eave popover <part>` opening its owner's popover.
 
 **Cost:** nothing at rest: `part()` is asked only while a panel with bays is on screen, and a widget with no parts costs one walk of its panel's nodes. eave-api gains `ui::bay`, `Bay`, `Part`, `Widget::part` and `AnyMessage::downcast_ref`, additive, for the next 0.1.x. **Measured** (Asahi, release, two clocks on tiny-skia, alternating runs): the binary is 20,082,304 → 20,147,840 bytes (+64 KB, text +26 KB). RSS 18.1–18.5 → 18.6–19.1 MB, all of it file-backed pages of the binary (RssFile 12.6 → 13.0 MB); anonymous memory unchanged (3.2–3.6 MB on both). Idle CPU 0 ticks in 10 s on both.
+
+---
+
+## D-110: The screen is looked into again when the scale changes
+
+**Status:** accepted (2026-10-15). Amends [D-94](#d-94-screen-settings-per-monitor): the screen is looked into on a change of scale too, not only of the settings.
+
+**Problem:** `notch`, `screen` and `islands` are in physical pixels, and `notch::resolve` turns them into logical ones at the monitor's scale. It ran only when config.toml's screen settings changed. Change the scale while the bar runs (a monitor rule, `hyprctl eval`) and the bar kept the old scale's logical sizes, so the notch, corners and insets no longer fit the panel until it restarted.
+
+**What:**
+- **Calibration stays in physical pixels.** It measures the panel, which doesn't change with the scale. `eave calibrate` saves what it sees, and the bar converts at the scale it's on now.
+- **A new width means a new scale.** The bar surface spans its output, so its laid-out width (`Message::Width`) changes when the scale or the mode does. A change after the first one looks into the screen again. Each look is numbered and only the last one's answer counts, so two changes in a row can't land out of order.
+
+**Why the width, not the scale:** iced_layershell 0.19 applies the compositor's fractional scale but doesn't pass `window::Event::Rescaled` on to the app. Its `Resized` does fire on a scale change, but the width the bar already tracks says the same thing with no new event plumbing. Hyprland's socket2 has no event for a monitor's scale.
+
+**What we give up:** layer-shell margins and exclusive zones are whole logical pixels. At a fractional scale, an inset can be off by up to half a logical pixel (under one physical pixel at 1.333). It's rounded once, from the right scale.
+
+**Cost:** one Hyprland query per scale change. Nothing at rest.
