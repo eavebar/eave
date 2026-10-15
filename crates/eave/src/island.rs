@@ -3227,6 +3227,14 @@ mod tests {
         assert_eq!(motion.edges.rect(), under(rect(500.0, 90.0)));
         let dripping = Rectangle::new(Point::new(500.0, 40.0), Size::new(90.0, 10.0));
         assert!(motion.pour(dripping).is_some_and(|pour| pour.joined()));
+        let frames = run(&mut motion, Instant::now(), |_| {});
+        assert!(frames < 120, "settles in {frames} frames");
+        assert_eq!(motion.shape(), panel);
+        popover(&mut motion, false, panel, true);
+        let frames = run(&mut motion, Instant::now(), |_| {});
+        assert!(frames < 120, "settles back in {frames} frames");
+        assert_eq!(motion.shape(), under(rect(500.0, 90.0)));
+        assert!(motion.closing_done());
     }
 
     #[test]
