@@ -16,7 +16,9 @@
 //!   they belong: what one point does spreads smoothly to the next, the anchors' own curves (the
 //!   corners) aren't flattened.
 //! - **Area.** The outline keeps the area its frame has, pushing out or in along its normals, so
-//!   a side running ahead draws the others in, and one that splats bulges them out.
+//!   a side running ahead draws the others in, and one that splats bulges them out. The top,
+//!   which hangs from the bar, takes no part.
+//! - **The top.** Nothing goes up past it: a point that gets there stops, as against the bar.
 //!
 //! At rest it's the anchors exactly, and the island draws its plain squircle instead.
 
@@ -83,8 +85,8 @@ impl Body {
     /// (a drop rounding off) just moves the anchors. Nothing it has placed jumps.
     pub fn aim(&mut self, rect: Rectangle, corners: [CornerShape; 4]) {
         match self.goal {
-            None => return self.snap(rect, corners),
-            Some(goal) if goal == (rect, corners) => return,
+            None => self.snap(rect, corners),
+            Some(goal) if goal == (rect, corners) => {}
             Some((goal, _)) => {
                 self.place(rect, corners);
                 if goal != rect {
@@ -147,6 +149,7 @@ impl Body {
         let tension = theme::BODY_TENSION * base;
         let pressure = theme::BODY_AREA * base;
         let wanted = frame.width * frame.height * self.fill;
+        let ceiling = self.goal.map_or(frame.y, |(goal, _)| goal.y.min(frame.y));
         let mut left = seconds;
         while left > 0.0 {
             let dt = left.min(SUBSTEP);
@@ -162,11 +165,16 @@ impl Body {
                 let damping = 2.0 * self.damping[i] * k.sqrt();
                 let force = off[i] * -k - self.velocity[i] * damping
                     + spread * tension
-                    + normals[i] * (pressure * swell);
-                self.velocity[i] = self.velocity[i] + force * dt;
+                    + normals[i] * (pressure * swell * hangs(normals[i]));
+                self.velocity[i] += force * dt;
             }
             for i in 0..RING {
-                self.at[i] = self.at[i] + self.velocity[i] * dt;
+                self.at[i] += self.velocity[i] * dt;
+                // Nothing goes up past the top, which hangs from the bar: it stops there.
+                if self.at[i].y < ceiling {
+                    self.at[i].y = ceiling;
+                    self.velocity[i].y = self.velocity[i].y.max(0.0);
+                }
             }
         }
     }
@@ -313,6 +321,12 @@ fn normals(points: &[Point; RING]) -> [Vector; RING] {
             Vector::new(along.y / length, -along.x / length)
         }
     })
+}
+
+/// How much of the area's push a point with the outward `normal` takes: none on the top, which
+/// hangs from the bar, and all of it from the sides down.
+fn hangs(normal: Vector) -> f32 {
+    (1.0 + normal.y).clamp(0.0, 1.0)
 }
 
 fn area_of(points: &[Point; RING]) -> f32 {

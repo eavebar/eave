@@ -1,6 +1,6 @@
-//! Pouring (D-114): a shape that comes out of something flows out of it like something thick.
-//! What it comes out of is a line, the bottom of the notch or the grown edge, for the dormer's
-//! drop (D-86), or a rounded box: an island, for its popover, or the one that opened a dialog.
+//! Pouring: a shape that comes out of something flows out of it like something thick. What it
+//! comes out of is a line, the bottom of the notch or the grown edge, for the dormer's drop
+//! (D-86). Every other morph flows as a body ([`crate::body`], D-118).
 //!
 //! The pour is the smooth union of the two: everywhere their distances are close, the union swells
 //! out past both, so a shape just out of where it comes from sits in a wide, smooth fillet, which
@@ -26,8 +26,6 @@ pub enum From {
     /// along it, and reaches no further than `spread` each way: the fillet flattens into it out
     /// there, short of the notch's lower corners.
     Line { y: f32, x: f32, spread: f32 },
-    /// A box, rounded `radius` at its corners.
-    Box { rect: Rectangle, radius: f32 },
 }
 
 /// The pour's rows, top to bottom: each row's height, and where its span starts and ends across,
@@ -67,62 +65,6 @@ impl Pour {
                     seam: Some(root),
                     rows,
                 })
-            }
-            From::Box {
-                rect,
-                radius: round,
-            } => {
-                let (under, over) = (rect.y + rect.height, shape.y + shape.height);
-                if rect.width <= 0.0
-                    || rect.height <= 0.0
-                    || shape.y - under > 2.0 * blend
-                    || rect.y - over > 2.0 * blend
-                {
-                    return None;
-                }
-                let middle = rect.center();
-                let size = (rect.width / 2.0, rect.height / 2.0);
-                let round = round.clamp(0.0, size.0.min(size.1));
-                let field = move |at: f32, y: f32| {
-                    let from = rounded_box(at - middle.x, y - middle.y, size, round);
-                    smooth_min(from, body(at, y), blend)
-                };
-                // Kept inside what the two reach together: where their edges line up, the union
-                // would swell out past both. Their fillets are in the corners inside.
-                let (top, bottom) = (rect.y.min(shape.y), under.max(over));
-                let low = rect.x.min(shape.x);
-                let high = (rect.x + rect.width).max(shape.x + shape.width);
-                // Inside the box's middle, the shape's, or the box's as far as the shape reaches,
-                // whichever is furthest in on the row.
-                let inside = [
-                    middle.x,
-                    center.x,
-                    middle.x.clamp(shape.x, shape.x + shape.width),
-                ];
-                let span_at = |y: f32| {
-                    let x = inside
-                        .into_iter()
-                        .min_by(|&a, &b| field(a, y).total_cmp(&field(b, y)))
-                        .unwrap_or(middle.x);
-                    span(|at| field(at, y), x, low, high)
-                };
-                // Only rows within a blend of one of their tops or bottoms can have a fillet. In
-                // between, each side is straight, so a line from one band's last row to the next
-                // one's first is exact.
-                let mut bands = [rect.y, under, shape.y, over]
-                    .map(|y| ((y - blend).max(top), (y + blend).min(bottom)));
-                bands.sort_by(|a, b| a.0.total_cmp(&b.0));
-                let mut rows = Vec::new();
-                let mut done = f32::NEG_INFINITY;
-                for (start, end) in bands {
-                    let start = start.max(done);
-                    if end <= start {
-                        continue;
-                    }
-                    rows.extend(each_row(start, end, span_at));
-                    done = end + ROW;
-                }
-                Some(Self { seam: None, rows })
             }
         }
     }
@@ -310,59 +252,6 @@ mod tests {
                 .iter()
                 .all(|(_, span)| span.is_none_or(|(left, right)| left >= 40.0 && right <= 160.0))
         );
-    }
-
-    /// A panel 300 by 200, and a tongue 100 across running `past` on below it, from its top.
-    fn tongue(past: f32) -> (From, Rectangle) {
-        let panel = Rectangle::new(Point::new(100.0, 0.0), Size::new(300.0, 200.0));
-        let tongue = Rectangle::new(Point::new(200.0, 0.0), Size::new(100.0, 200.0 + past));
-        (
-            From::Box {
-                rect: tongue,
-                radius: 15.0,
-            },
-            panel,
-        )
-    }
-
-    #[test]
-    fn a_tongue_flows_out_of_the_shape_in_a_fillet() {
-        let (from, panel) = tongue(60.0);
-        let pour = Pour::new(from, 24.0, panel, 15.0).expect("joined");
-        assert!(pour.joined());
-        let at = |y: f32| {
-            pour.rows
-                .iter()
-                .find(|(row, _)| *row >= y)
-                .and_then(|(_, span)| *span)
-                .unwrap()
-        };
-        // Just under the panel, the fillet reaches out past the tongue's sides.
-        let (left, right) = at(204.0);
-        assert!(left < 195.0 && right > 305.0, "{left} to {right}");
-        // Further down, it's the tongue.
-        let (left, right) = at(230.0);
-        assert!(
-            (left - 200.0).abs() < 1.0 && (right - 300.0).abs() < 1.0,
-            "{left} to {right}"
-        );
-        // It never swells out past what they reach together, where their edges line up.
-        assert!(pour.rows.iter().all(|(y, span)| {
-            *y >= 0.0 && span.is_none_or(|(left, right)| left >= 100.0 && right <= 400.0)
-        }));
-    }
-
-    #[test]
-    fn a_tongue_off_on_its_own_or_with_no_blend_has_none() {
-        let panel = Rectangle::new(Point::new(100.0, 0.0), Size::new(300.0, 200.0));
-        let far = Rectangle::new(Point::new(200.0, 249.0), Size::new(100.0, 50.0));
-        let from = From::Box {
-            rect: far,
-            radius: 15.0,
-        };
-        assert!(Pour::new(from, 24.0, panel, 15.0).is_none());
-        let (from, panel) = tongue(60.0);
-        assert!(Pour::new(from, 0.0, panel, 15.0).is_none());
     }
 
     #[test]
