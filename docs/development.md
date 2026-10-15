@@ -101,7 +101,7 @@ For smoothness: watch animations with Hyprland's debug overlay (`hyprctl keyword
 
 Three things get versions, each by hand and only when the user asks for it:
 
-- **The crates on crates.io:** `eave-api` and the services (`eave-dbus`, `eave-hyprland`, `eave-iwd`, `eave-bluez`, `eave-net`, `eave-pulse`), so plugins in other repositories build and test on their own ([D-50](decisions.md)). The host, `eave-build` and the built-in plugins aren't published.
+- **The crates on crates.io:** `eave-api` and the services (`eave-dbus`, `eave-hyprland`, `eave-iwd`, `eave-bluez`, `eave-mpris`, `eave-net`, `eave-pulse`), so plugins in other repositories build and test on their own ([D-50](decisions.md)). The host, `eave-build` and the built-in plugins aren't published.
 - **eave's release tags:** `vX.Y.Z` on `main`. The AUR package builds `eave-build` from a tag, and a packaged eave-build builds the bar from that same tag ([D-54](decisions.md)).
 - **Plugin repositories** (`eaveshell/eave-claude`, `eaveshell/eave-notifications`, …): they depend on the published crates, and their CI builds with `--locked`.
 

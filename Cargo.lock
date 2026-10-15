@@ -794,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "eave-api"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "iced_futures",
  "iced_runtime",
@@ -894,7 +894,7 @@ dependencies = [
 
 [[package]]
 name = "eave-dbus"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "futures-util",
  "tokio",
@@ -916,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "eave-hyprland"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "futures-util",
  "serde",
