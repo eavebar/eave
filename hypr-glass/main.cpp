@@ -43,6 +43,7 @@ static struct {
     float rim      = 0.35F; // brightness of the lit edge
     float frost    = 1.5F;  // radius of a light blur inside the glass (0 = clear)
     int   pid      = 0;     // only this eave's layers (0 = every eave)
+    int   skip     = 0;     // for measuring: 1 skips the copy, 2 the refraction
 } g_params;
 
 static struct {
@@ -212,6 +213,18 @@ void main() {
     float a = cover(p);
     if (a <= 0.0)
         discard;
+
+    // Deep inside, nothing bends: eight taps a band away settle most of a popover's pixels
+    // without the rings below.
+    float inside = 1.0;
+    for (int i = 0; i < 8; i++) {
+        float ang = float(i) * 0.7853982;
+        inside = min(inside, cover(p + vec2(cos(ang), sin(ang)) * band * 1.05));
+    }
+    if (inside >= 1.0) {
+        fragColor = vec4(look(p) * a, a);
+        return;
+    }
 
     // Rings of samples around the pixel: their mean coverage says how deep into the glass it is
     // (0.5 on the edge, 1 a full band in), and the empty ones point out of it.
@@ -451,7 +464,8 @@ static void drawGlass(const PHLMONITOR& mon) {
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldRead);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, GLFB(target)->getFBID());
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLFB(fbs.backdrop)->getFBID());
-    glBlitFramebuffer(copy.x, copy.y, copy.x + copy.w, copy.y + copy.h, 0, 0, copy.w, copy.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    if (g_params.skip != 1)
+        glBlitFramebuffer(copy.x, copy.y, copy.x + copy.w, copy.y + copy.h, 0, 0, copy.w, copy.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, oldRead);
     timeEnd();
 
@@ -493,7 +507,8 @@ static void drawGlass(const PHLMONITOR& mon) {
 
         glActiveTexture(GL_TEXTURE1);
         job.tex->bind();
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        if (g_params.skip != 2)
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         job.tex->unbind();
         glActiveTexture(GL_TEXTURE0);
         g_timing.pixels += job.box.w * job.box.h;
@@ -585,6 +600,8 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
             g_params.rim = std::stof(value);
         else if (key == "frost")
             g_params.frost = std::stof(value);
+        else if (key == "skip")
+            g_params.skip = std::stoi(value);
         else if (key == "pid")
             g_params.pid = std::stoi(value);
         else
