@@ -813,6 +813,50 @@ impl Bar {
         self.shapes.borrow_mut().entry(island).or_default().clone()
     }
 
+    /// The island in the middle of the top that the dormer, and a dialog nothing on the bar
+    /// opened, come out of when there's no notch (D-106): of the center zone's, the one drawn
+    /// nearest the middle. None with a notch, a solid bar or an empty center: they drop out of
+    /// the top.
+    fn middle_island(&self) -> Option<IslandId> {
+        if self.screen.notch.is_some() || self.config.bar.style == Style::Solid {
+            return None;
+        }
+        let mut islands: Vec<IslandId> = self
+            .instances
+            .iter()
+            .map(Instance::island)
+            .filter(|island| island.zone == Zone::Center)
+            .collect();
+        islands.sort_unstable_by_key(|island| island.index);
+        islands.dedup();
+        // Only those drawn: one with nothing to show isn't there to come out of.
+        let shapes = self.shapes.borrow();
+        let drawn: Vec<(IslandId, Rectangle)> = islands
+            .into_iter()
+            .filter_map(|island| {
+                let shape = shapes.get(&island)?.get();
+                (shape.width > 0.0).then_some((island, shape))
+            })
+            .collect();
+        let middle = self
+            .toast_window()
+            .and_then(|window| self.widths.get(&window))
+            .map(|width| width / 2.0);
+        match middle {
+            Some(middle) => drawn
+                .iter()
+                .min_by(|(_, a), (_, b)| {
+                    (a.center_x() - middle)
+                        .abs()
+                        .total_cmp(&(b.center_x() - middle).abs())
+                })
+                .map(|(island, _)| *island),
+            None => drawn
+                .get(drawn.len().saturating_sub(1) / 2)
+                .map(|(island, _)| *island),
+        }
+    }
+
     /// Whether `island` is on the bar the dialog shows on, to come out of it.
     fn island_shows(&self, island: IslandId) -> bool {
         island.zone != Zone::Dormer
@@ -2203,6 +2247,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             };
 
             if items.is_empty() && popover.is_none() && !collapsible {
+                // Not drawn: nothing can come out of it.
+                bar.shape(island).set(Rectangle::default());
                 return None;
             }
             // On the side facing the middle of the screen; a center island's on its right.
@@ -2424,7 +2470,8 @@ fn dialog_popover<'a>(bar: &'a Bar, dialog: &Dialog) -> island::Popover<'a, Mess
     };
     let home = match dialog.origin {
         Origin::Island(island) => Some(bar.shape(island)),
-        Origin::Top => None,
+        // Without a notch, out of the island in the middle, as the dormer does.
+        Origin::Top => bar.middle_island().map(|island| bar.shape(island)),
     };
     let top = home.is_none();
     island::Popover {
@@ -2552,6 +2599,10 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
     // Its rows hold pictures only, so every message in it is the dormer's own.
     let content = kit::panel(node, &bar.icons, bar.palette())
         .map(|message: AnyMessage| Message::Dormer(message.downcast().unwrap_or(Event::Move(0))));
+    // Out of the notch, or the top edge, as a drop; or without a notch, out of the island in the
+    // middle, the way a dialog comes out of what opened it (D-106).
+    let home = bar.middle_island().map(|island| bar.shape(island));
+    let top = home.is_none();
     island::Popover {
         key: DORMER,
         content,
@@ -2561,11 +2612,13 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         on_hover: None,
         width: style::PANEL_WIDE_WIDTH,
         placement: Placement::Centered { top: session.top },
-        drop: Some(drop_top(bar)),
-        drop_color: drop_color(bar),
-        on_neck: Some(Box::new(|caught| Message::Dormer(Event::Neck(caught)))),
-        sag: Some(bar.notch_sag.clone()),
-        home: None,
+        drop: top.then(|| drop_top(bar)),
+        drop_color: drop_color(bar).filter(|_| top),
+        on_neck: top.then(|| -> Box<dyn Fn(bool) -> Message> {
+            Box::new(|caught| Message::Dormer(Event::Neck(caught)))
+        }),
+        sag: top.then(|| bar.notch_sag.clone()),
+        home,
         on_key: Some(Box::new(move |key, modifiers, _| {
             use keyboard::key::Named;
             match key {
@@ -4064,6 +4117,40 @@ mod tests {
         let _ = update(&mut bar, Message::KeyPressed);
         dormer(&mut bar, dormer::Event::Neck(true));
         assert_eq!(bar.notch_kick, Some((2, bezel::Kick::Flatten)));
+    }
+
+    #[test]
+    fn without_a_notch_the_dormer_comes_out_of_the_island_in_the_middle() {
+        let mut registry = Registry::new();
+        registry.widget::<Notifying>("n");
+        registry.widget::<WithPopover>("p");
+        let (mut bar, _) = Bar::new(
+            registry,
+            config(
+                "[[center]]\nwidget = \"n\"\n[[center]]\nisland = true\n[[center]]\nwidget = \"p\"",
+            ),
+        );
+        let _ = update(&mut bar, Message::WindowOpened(window::Id::unique()));
+        let window = bar.windows[0];
+        let islands: Vec<IslandId> = bar.instances.iter().map(Instance::island).collect();
+        let (first, second) = (islands[0], islands[1]);
+        assert_ne!(first, second);
+        // Nothing drawn yet: nothing to come out of.
+        assert_eq!(bar.middle_island(), None);
+        let drawn = |x: f32| Rectangle::new(Point::new(x, 6.0), Size::new(100.0, 30.0));
+        bar.shape(first).set(drawn(390.0));
+        bar.shape(second).set(drawn(500.0));
+        let _ = update(&mut bar, Message::Width(window, 1000.0));
+        assert_eq!(
+            bar.middle_island(),
+            Some(second),
+            "the one nearer the middle"
+        );
+        bar.shape(first).set(drawn(440.0));
+        assert_eq!(bar.middle_island(), Some(first));
+        // With a notch, out of it.
+        bar.screen.notch = Some(Notch::default());
+        assert_eq!(bar.middle_island(), None);
     }
 
     #[test]
