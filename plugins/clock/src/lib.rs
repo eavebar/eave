@@ -110,10 +110,12 @@ impl Widget for Clock {
             title = title.trailing(ui::button(ui::label("Today"), Message::ThisMonth));
         }
         let week = today.iso_week();
+        // A month is a page: the next one comes in from the right, the one before from the left.
+        let order = i64::from(self.month.year()) * 12 + i64::from(self.month.month0());
         let months = ui::row([
             ui::button(ui::icon(Icon::Back), Message::PreviousMonth),
             ui::fill(),
-            ui::label(self.month.format("%B %Y").to_string()),
+            ui::page(order, ui::label(self.month.format("%B %Y").to_string())),
             ui::fill(),
             ui::button(ui::icon(Icon::Forward), Message::NextMonth),
         ]);
@@ -123,7 +125,7 @@ impl Widget for Clock {
                 ui::label(format!("Week {} · {}", week.week(), week.year())).tone(Tone::Dim),
             ]),
             months,
-            self.calendar(),
+            ui::page(order, self.calendar()),
         ]);
         // It always opens on this month.
         Some(Panel::new(panel).on_open(Message::ThisMonth))

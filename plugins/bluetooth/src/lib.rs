@@ -275,19 +275,20 @@ impl Widget for Bluetooth {
 
     fn popover(&self) -> Option<Panel<Message>> {
         let state = self.state.as_ref()?;
-        let content = match (&self.page, state.adapter.as_ref()) {
-            (_, None) => absent(state.access),
-            (Page::List, Some(adapter)) => self.list_page(adapter),
+        // The list is the first page; a device's details or pairing, one further in.
+        let (order, content) = match (&self.page, state.adapter.as_ref()) {
+            (_, None) => (0, absent(state.access)),
+            (Page::List, Some(adapter)) => (0, self.list_page(adapter)),
             (Page::Details(path), Some(adapter)) => match self.device(path) {
-                Some(device) => self.details_page(device),
-                None => self.list_page(adapter),
+                Some(device) => (1, self.details_page(device)),
+                None => (0, self.list_page(adapter)),
             },
             (Page::Pair(path), Some(adapter)) => match self.device(path) {
-                Some(device) => self.pair_page(device),
-                None => self.list_page(adapter),
+                Some(device) => (1, self.pair_page(device)),
+                None => (0, self.list_page(adapter)),
             },
         };
-        let panel = Panel::new(content)
+        let panel = Panel::new(ui::page(order, content))
             .on_open(Message::Opened)
             .on_close(Message::Closed);
         Some(panel)

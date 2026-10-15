@@ -85,7 +85,7 @@ All motion is driven by the compositor's frame callbacks, and stops asking for f
 | Squish, splat | a popover setting off, landing back | `REACT`, on top of the morph: `SQUISH_OPEN`, `SPLAT_*` |
 | Nudge, push, jelly | a volume change, a workspace switch, a pushed neighbor | `REACT`: `NUDGE_*`, `PUSH_*`, `JELLY_*`; the outline is jelly, poked and settling |
 | Mark slide | switcher, tabs | `SWITCHER_SLIDE`, eased |
-| Hand-over | tabs' pages, alternates | `TAB_FADE` / `ALTERNATE_FADE`, sliding out the old way and in the new |
+| Hand-over | tabs' pages, alternates, a popover's pages (a list to a row's details), a calendar's months (`page`) | `TAB_FADE` / `ALTERNATE_FADE`, sliding out the old way and in the new; a `page` with a higher order comes in from the right ([D-106](decisions.md)) |
 | Count | counters, a count badge's number | `COUNTER_COUNT`, through every value in between |
 | Grow | a count badge coming and going, and its width | `MORPH_*`, about its own middle |
 | Ease | toggle knob, meter fill, slider line | `TOGGLE_SLIDE`, `METER_EASE`, `SLIDER_GROW`, `SLIDER_EASE` |

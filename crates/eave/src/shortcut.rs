@@ -45,7 +45,10 @@ pub fn collect<M: Clone>(node: &Node<M>, out: &mut Vec<(Shortcut, M)>) {
         | Kind::Grid {
             cells: children, ..
         } => children.iter().for_each(|child| collect(child, out)),
-        Kind::Center(content) | Kind::Display(content) | Kind::Scroll { content, .. } => {
+        Kind::Center(content)
+        | Kind::Page { content, .. }
+        | Kind::Display(content)
+        | Kind::Scroll { content, .. } => {
             collect(content, out)
         }
         _ => {}
@@ -76,7 +79,10 @@ fn bindings<'a, M>(node: &'a mut Node<M>, out: &mut Vec<&'a mut Binding>) {
         | Kind::Grid {
             cells: children, ..
         } => children.iter_mut().for_each(|child| bindings(child, out)),
-        Kind::Center(content) | Kind::Display(content) | Kind::Scroll { content, .. } => {
+        Kind::Center(content)
+        | Kind::Page { content, .. }
+        | Kind::Display(content)
+        | Kind::Scroll { content, .. } => {
             bindings(content, out)
         }
         _ => {}

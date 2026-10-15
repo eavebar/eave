@@ -282,20 +282,22 @@ impl Widget for Network {
     }
 
     fn popover(&self) -> Option<Panel<Message>> {
-        let content = match (&self.page, self.ready()) {
-            (Page::Connection, _) => self.connection_page(),
-            (_, None) => self.kernel_page(),
-            (Page::List, Some(station)) => self.list_page(station),
+        // The list is the first page; a network's details or password, or the connection's, one
+        // further in.
+        let (order, content) = match (&self.page, self.ready()) {
+            (Page::Connection, _) => (1, self.connection_page()),
+            (_, None) => (0, self.kernel_page()),
+            (Page::List, Some(station)) => (0, self.list_page(station)),
             (Page::Password(path), Some(_)) => match self.network(path) {
-                Some(network) => self.password_page(network),
-                None => self.list_page(self.station()?),
+                Some(network) => (1, self.password_page(network)),
+                None => (0, self.list_page(self.station()?)),
             },
             (Page::Details(path), Some(station)) => match self.network(path) {
-                Some(network) => self.details_page(station, network),
-                None => self.list_page(station),
+                Some(network) => (1, self.details_page(station, network)),
+                None => (0, self.list_page(station)),
             },
         };
-        let panel = Panel::new(content)
+        let panel = Panel::new(ui::page(order, content))
             .on_open(Message::Opened)
             .on_close(Message::Closed);
         Some(panel)

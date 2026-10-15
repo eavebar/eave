@@ -2314,3 +2314,26 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 **Measured** (Asahi, release, both renderers built in, run on tiny-skia, BlueZ running with one paired device): +0.69 MiB of binary (20,082,304 → 20,803,248 bytes), most of it the agent's `interface` code and the second plugin's popover. A clock alone ~18.8 MB RSS; with `bluetooth` ~19.1–19.5 MB. Idle CPU unchanged: one tick in 20 s either way.
 
 **Cost:** `Icon::Bluetooth` grows eave-api, compatibly: plugins using it need the next eave-api. `eave-bluez` is a new service crate, to publish beside the others (D-50) once third-party plugins want it.
+
+---
+
+## D-106: Pages hand over
+
+**Status:** accepted (2026-10-15).
+
+**What:** `ui::page(order, content)` says that `content` is one page of a sequence the plugin moves through, and `order` says which one. When `order` changes, the host hands over the way tabs do (D-43). The old page slides `TAB_SLIDE` away and fades out, then the new one slides and fades in from the side it's on, over `TAB_FADE` in all. A higher order comes from the right and a lower one from the left. While `order` stays the same, the content just changes. In the bar, a page is just its content.
+- **The old page is kept by the host** (`page.rs`). The plugin only sends the page it's on. Each view's content moves into the widget state with its own tree as it's diffed, and a new order keeps the old content there until it's gone. The same order is diffed in place, so a page keeps its state, like a scrolled list or a field.
+- **Turning around** mid-way goes back from what's on screen, as tabs do. A third page while the old one is still leaving lets it finish leaving.
+- **Used by** network (the list at 0; a network's details, its password and the connection at 1), bluetooth (the list at 0; a device's details and pairing at 1), and the clock's calendar (each month numbered `year * 12 + month`, both its title and its grid).
+- **The content no longer flashes black when a popover changes size.** The content of a popover waits until the shape is halfway out of the island, and that rule ran on every change of size too. It measured from the island, so a page that changed the panel's height by more than about half covered the content with the island's color until the shape got there. Once the content has shown, a change of size now only springs the shape (`PopoverMotion::out`).
+
+**Why:** a page change was the one change in a popover that didn't move: the shape sprang to the new size while the text changed in a frame, and often went black first. Only the plugin knows which page comes after which, so it says so with a number. The host turns that number into a direction.
+
+**Alternatives:**
+- **the host spotting a new page by itself**, from a fingerprint of the content or a changed `header`: it can't tell a new page from the same page changing, like the details filling in as iwd answers, and it can't tell forward from back.
+- **a key without an order**: it can say "another page" but not which way it went, and a calendar going back a month would slide the wrong way.
+- **a crossfade**: iced has no group opacity, and the host fades by covering with the island's color, so two pages crossing would cover each other where they overlap. Fading out and then in is what tabs and alternates already do.
+- **keeping the old node and drawing it again**: drawing a node needs the host's icons and palette at view time, and a fresh widget state for it would lose the old page's scroll position as it leaves. Moving the built content into the widget state keeps both.
+
+**Measured:** no dependency is added, and nothing runs while no page changes. Only a page that's leaving is held, until it's gone.
+
