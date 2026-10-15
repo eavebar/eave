@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="eave_glass_v1">
+  <copyright>
+    Copyright (C) 2026 Francesco Mengarelli
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <description summary="glass behind eave's islands">
+    A private protocol between eave (the status bar) and hypr-eave (its
+    Hyprland plugin). The client draws its islands opaque, in their own fill
+    color, exactly as it would without the plugin. It tells the compositor
+    which parts of each frame are islands that may turn to glass, and in
+    which fill color, and the compositor lets the frosted, refracted backdrop
+    through where a pixel is that fill color. In return the compositor tells
+    the client how bright it is behind its surface, so islands over something
+    bright can turn light and stay readable.
+
+    When the global is absent the client draws as it would anyway: nothing
+    depends on it.
+  </description>
+
+  <interface name="eave_glass_manager_v1" version="1">
+    <description summary="glass for eave's surfaces"/>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the manager">
+        Objects created through it are not affected.
+      </description>
+    </request>
+
+    <enum name="error">
+      <entry name="already_exists" value="0"
+             summary="the surface already has an eave_glass_surface_v1"/>
+    </enum>
+
+    <request name="get_glass">
+      <description summary="glass for a surface">
+        Raises already_exists if the surface already has one.
+      </description>
+      <arg name="id" type="new_id" interface="eave_glass_surface_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="eave_glass_surface_v1" version="1">
+    <description summary="the glass of one surface">
+      All requests set double-buffered state, applied on the surface's next
+      wl_surface.commit, so what they say lands with the frame it describes.
+      Coordinates are surface-local, in logical pixels.
+
+      Once the wl_surface is destroyed the object is inert.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="no more glass">
+        The glass goes on the surface's next commit.
+      </description>
+    </request>
+
+    <enum name="kind">
+      <entry name="glass_dark" value="0"
+             summary="a dark island: its fill color turns to glass, its ink goes lighter"/>
+      <entry name="glass_light" value="1"
+             summary="a light island: its fill color turns to glass, its ink goes darker"/>
+      <entry name="solid" value="2"
+             summary="content that never lets glass through, over any island"/>
+    </enum>
+
+    <request name="set_regions">
+      <description summary="what is glass this frame">
+        An array of records, each six native-endian 32-bit integers:
+        x, y, width, height (signed), kind (see the kind enum) and fill (an
+        ARGB color, the island's exact fill; ignored for solid).
+
+        Only pixels inside a glass record and outside every solid record
+        may turn to glass, and only where they are the record's fill color:
+        the rest of the island, its text, icons and other content, is
+        kept. Where records of both glass kinds overlap, the later one wins.
+        The initial value is empty: no glass. Records past the compositor's
+        limit (64) are ignored.
+      </description>
+      <arg name="records" type="array"/>
+    </request>
+
+    <request name="set_look">
+      <description summary="how the glass looks">
+        Lengths are logical pixels. The initial value is the compositor's
+        defaults.
+      </description>
+      <arg name="band" type="fixed" summary="how far in from the edge the glass bends"/>
+      <arg name="strength" type="fixed" summary="how far the lookup moves at the very edge"/>
+      <arg name="chroma" type="fixed" summary="spread between red and blue, a fraction of the bend"/>
+      <arg name="rim" type="fixed" summary="brightness of the lit edge"/>
+      <arg name="frost" type="fixed" summary="spread of each blur step, 0 for clear glass"/>
+      <arg name="depth" type="uint" summary="how many times the blur halves the backdrop, 1 to 6"/>
+      <arg name="tint" type="fixed" summary="how much the glass takes the color behind it, 0 to 1"/>
+      <arg name="ink" type="uint" enum="ink" summary="what grey ink over glass looks like"/>
+      <arg name="contrast" type="fixed" summary="with ink readable: the contrast ratio it reaches"/>
+      <arg name="ink_blur" type="fixed" summary="how wide an area the ink's color is chosen over"/>
+    </request>
+
+    <enum name="ink">
+      <entry name="own" value="0" summary="as the client drew it"/>
+      <entry name="invert" value="1" summary="the opposite of the glass behind"/>
+      <entry name="readable" value="2"
+             summary="the opposite of the glass behind, as light or dark as it takes to reach contrast"/>
+    </enum>
+
+    <request name="set_report">
+      <description summary="ask for backdrop reports">
+        0 stops them. Otherwise backdrop events come with cells of this many
+        logical pixels. The initial value is 0.
+      </description>
+      <arg name="cell" type="uint"/>
+    </request>
+
+    <event name="backdrop">
+      <description summary="how bright it is behind the surface">
+        A grid of cells, cell logical pixels square, from the surface's top
+        left, row by row: one byte each, the relative luminance of the
+        frosted backdrop, 0 to 255. Sent when it changes noticeably, at most
+        about ten times a second, and once more after it settles. An empty
+        grid (no cells) means there's nothing to report any more.
+      </description>
+      <arg name="cell" type="uint"/>
+      <arg name="cols" type="uint"/>
+      <arg name="rows" type="uint"/>
+      <arg name="cells" type="array"/>
+    </event>
+
+    <event name="active">
+      <description summary="whether glass is drawn for this surface">
+        Sent once on creation and whenever it changes. While inactive
+        (turned off, or on an output the compositor can't draw glass on)
+        islands should draw as they would without glass: dark.
+      </description>
+      <arg name="active" type="uint"/>
+    </event>
+  </interface>
+</protocol>
