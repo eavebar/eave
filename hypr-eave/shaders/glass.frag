@@ -33,7 +33,7 @@ uniform float contrast;
 uniform float margin;        // s px
 
 // What eave said about this frame: boxes in s px (x0, y0, x1, y1), and each one's fill color
-// with its kind in w (0 a dark island, 1 a light one, 2 solid content).
+// with, in w, -1 for solid content, or for an island which way its ink goes: 0 lighter, 1 darker.
 const int MAX = 64;
 uniform int  count;
 uniform vec4 boxes[MAX];
@@ -79,30 +79,31 @@ vec3 wideLook(vec2 s) {
 }
 
 // Which island s belongs to: the nearest one eave said may turn to glass, within `margin` of it
-// (an island's jelly and squish reach a little past the shape it reports), and its fill. -1 for
-// none, and 2 inside solid content, whatever it's over.
-int region(vec2 s, out vec3 fill) {
-    int   kind    = -1;
+// (an island's jelly and squish reach a little past the shape it reports), with its fill and which
+// way its ink goes. False for none, and inside solid content, whatever it's over.
+bool region(vec2 s, out vec3 fill, out float darker) {
+    bool  found   = false;
     float nearest = margin;
     fill          = vec3(0.0);
+    darker        = 0.0;
     for (int i = 0; i < MAX; i++) {
         if (i >= count)
             break;
         vec4  b = boxes[i];
-        int   k = int(fills[i].w + 0.5);
         float d = length(max(max(b.xy - s, s - b.zw), vec2(0.0)));
-        if (k == 2) {
+        if (fills[i].w < 0.0) {
             if (d <= 0.0)
-                return 2;
+                return false;
             continue;
         }
         if (d <= nearest) {
             nearest = d;
-            kind    = k;
+            found   = true;
             fill    = fills[i].rgb;
+            darker  = fills[i].w;
         }
     }
-    return kind;
+    return found;
 }
 
 // `color`, made just light (`lighter`) or just dark enough to stand `contrast` to one against
@@ -144,29 +145,35 @@ vec3 body(vec3 glass) {
     return mix(glass, rich, tint);
 }
 
-// Replaces the surface's pixel, which is already drawn. A dark island's fill becomes glass by a
-// screen, so lighter ink stays; a light one's by a multiply, so darker ink stays.
-void put(vec2 s, vec3 glass, float a, vec3 fill, bool light) {
+// What the surface's pixel, already drawn, becomes, with the ink going lighter or darker. Which
+// way is the island's (eave decides it over what's behind the whole island, with hysteresis), never
+// the pixel's, so it can't flip partway through a letter; the glass gives way instead, so the ink
+// can always reach it.
+vec3 shade(vec2 s, vec3 glass, vec3 fill, bool lighterInk) {
     vec4 t      = layer(s);
     vec3 c      = t.rgb / max(t.a, 1e-4);
     vec3 b      = body(glass);
     vec3 behind = body(wideLook(s));
-    // Which way the ink goes is the island's: lighter on a dark one, darker on a light one (eave
-    // turns an island light, with hysteresis, over something bright). Never per pixel, so it can't
-    // flip partway through a letter; the glass gives way instead, so the ink can always reach it.
-    bool lighterInk = !light;
     if (ink == 2) {
         float y = dot(pow(behind, vec3(2.2)), W);
         b       = makeRoom(b, y, lighterInk);
         behind  = makeRoom(behind, y, lighterInk);
     }
 
+    // A dark fill becomes glass by a screen, a light one by a multiply: what's drawn on it stays.
     vec3 col;
-    if (light)
+    if (luma(fill) >= 0.5)
         col = clamp(c / max(fill, vec3(1e-4)), 0.0, 1.0) * b;
     else {
         vec3 k = clamp((c - fill) / max(vec3(1.0) - fill, vec3(1e-4)), 0.0, 1.0);
-        col    = k + (vec3(1.0) - k) * b;
+        if (lighterInk)
+            col = k + (vec3(1.0) - k) * b;
+        else {
+            // Screened on bright glass, colors would wash out: laid over it by how much of the
+            // pixel they cover instead, they keep theirs.
+            float cover = max(k.r, max(k.g, k.b));
+            col         = mix(b, k / max(cover, 1e-4), cover);
+        }
     }
 
     if (ink != 0) {
@@ -179,6 +186,21 @@ void put(vec2 s, vec3 glass, float a, vec3 fill, bool light) {
         vec3  drawn    = mix(b, ink == 1 ? opposite : readable(opposite, behind, lighterInk), amount);
         col            = mix(col, drawn, grey);
     }
+    return col;
+}
+
+// Replaces the surface's pixel: shaded once, or both ways while the island's ink turns.
+void put(vec2 s, vec3 glass, float a, vec3 fill, float darker) {
+    // Its own ink goes the way it's drawn.
+    if (ink == 0)
+        darker = luma(fill) >= 0.5 ? 1.0 : 0.0;
+    vec3 col;
+    if (darker <= 0.0)
+        col = shade(s, glass, fill, true);
+    else if (darker >= 1.0)
+        col = shade(s, glass, fill, false);
+    else
+        col = mix(shade(s, glass, fill, true), shade(s, glass, fill, false), darker);
     a *= fade;
     fragColor = vec4(col * a, a);
 }
@@ -188,11 +210,10 @@ void main() {
     float a = cover(s);
     if (a <= 0.0)
         discard;
-    vec3 fill;
-    int  kind = region(s, fill);
-    if (kind != 0 && kind != 1)
+    vec3  fill;
+    float darker;
+    if (!region(s, fill, darker))
         discard; // not an island eave said may turn to glass, or content over one
-    bool light = kind == 1;
 
     // Deep inside, nothing bends: eight taps a band away settle most of a popover's pixels
     // without the rings below.
@@ -202,7 +223,7 @@ void main() {
         inside    = min(inside, cover(s + vec2(cos(ang), sin(ang)) * band * 1.05));
     }
     if (inside >= 1.0) {
-        put(s, look(s), a, fill, light);
+        put(s, look(s), a, fill, darker);
         return;
     }
 
@@ -242,5 +263,5 @@ void main() {
     float lit = max(dot(n, sun), 0.0) + 0.35 * max(dot(n, -sun), 0.0);
     col += rim * lit * pow(edge, 3.0);
 
-    put(s, col, a, fill, light);
+    put(s, col, a, fill, darker);
 }

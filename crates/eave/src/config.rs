@@ -60,8 +60,10 @@
 //! screen = { corners = 12 }
 //! ```
 //!
-//! `theme` is `"system"` (the default), `"light"` or `"dark"` (D-92). `"system"` follows the
-//! desktop's dark mode, as the settings portal tells it, and is dark when it has no preference.
+//! `theme` is `"system"` (the default), `"light"`, `"dark"` or `"glass"` (D-92, D-111). `"system"`
+//! follows the desktop's dark mode, as the settings portal tells it, and is dark when it has no
+//! preference. `"glass"` turns the islands to liquid glass with the hypr-eave plugin loaded in
+//! Hyprland, and looks dark without it; `[glass]` says how it looks.
 //!
 //! Two more say when the bar and the notifications show (D-88):
 //!
@@ -409,6 +411,8 @@ pub enum Theme {
     System,
     Light,
     Dark,
+    /// Liquid glass, with hypr-eave (D-111): dark without it.
+    Glass,
 }
 
 /// Entries in bar order, plus a warning for everything that was skipped.
@@ -429,11 +433,10 @@ pub struct Config {
     pub warnings: Vec<String>,
 }
 
-/// `[glass]`: the islands as liquid glass, with the hypr-eave plugin loaded in Hyprland. Without
+/// `[glass]`: how the glass theme looks, with the hypr-eave plugin loaded in Hyprland. Without
 /// it there's nothing to turn on, and the bar draws as it would anyway.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Glass {
-    pub enabled: bool,
     /// How far in from an island's edge the glass bends, in logical pixels.
     pub band: f32,
     /// How far what's behind moves at the very edge.
@@ -458,7 +461,6 @@ pub struct Glass {
 impl Default for Glass {
     fn default() -> Self {
         Self {
-            enabled: true,
             band: 12.0,
             strength: 22.0,
             chroma: 0.18,
@@ -554,9 +556,10 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
         Some(toml::Value::String(name)) if name == "system" => config.theme = Theme::System,
         Some(toml::Value::String(name)) if name == "light" => config.theme = Theme::Light,
         Some(toml::Value::String(name)) if name == "dark" => config.theme = Theme::Dark,
-        Some(_) => config
-            .warnings
-            .push("`theme` must be \"system\", \"light\" or \"dark\", using \"system\"".into()),
+        Some(toml::Value::String(name)) if name == "glass" => config.theme = Theme::Glass,
+        Some(_) => config.warnings.push(
+            "`theme` must be \"system\", \"light\", \"dark\" or \"glass\", using \"system\"".into(),
+        ),
         None => {}
     }
     if let Some(value) = table.remove("notch") {
@@ -1096,7 +1099,7 @@ fn bar(value: toml::Value, warnings: &mut Vec<String>) -> Bar {
 fn glass(value: toml::Value, warnings: &mut Vec<String>) -> Glass {
     let mut glass = Glass::default();
     let toml::Value::Table(table) = value else {
-        warnings.push("`glass` must be a table, like { enabled = false }, ignoring it".into());
+        warnings.push("`glass` must be a table, like { tint = 0.5 }, ignoring it".into());
         return glass;
     };
     for (key, value) in &table {
@@ -1115,10 +1118,6 @@ fn glass(value: toml::Value, warnings: &mut Vec<String>) -> Glass {
             }
         };
         match key.as_str() {
-            "enabled" => match value {
-                toml::Value::Boolean(enabled) => glass.enabled = *enabled,
-                _ => warnings.push("`glass.enabled` must be true or false, using true".into()),
-            },
             "band" => number(&mut glass.band, 0.0, 64.0),
             "strength" => number(&mut glass.strength, 0.0, 128.0),
             "chroma" => number(&mut glass.chroma, 0.0, 1.0),
@@ -1141,7 +1140,7 @@ fn glass(value: toml::Value, warnings: &mut Vec<String>) -> Glass {
                 ),
             },
             _ => warnings.push(format!(
-                "`glass` takes enabled, band, strength, chroma, rim, frost, depth, tint, ink, \
+                "`glass` takes band, strength, chroma, rim, frost, depth, tint, ink, \
                  contrast and ink-blur, ignoring `{key}`"
             )),
         }
@@ -1189,12 +1188,10 @@ mod tests {
     fn glass_takes_its_look_and_warns_about_the_rest() {
         assert_eq!(parse("").unwrap().glass, Glass::default());
         let config = parse(
-            "glass = { enabled = false, band = 8, tint = 0.5, depth = 4, ink = \"own\", \
-             rim = 9, depth2 = 1 }",
+            "glass = { band = 8, tint = 0.5, depth = 4, ink = \"own\", rim = 9, depth2 = 1 }",
         )
         .unwrap();
         let glass = config.glass;
-        assert!(!glass.enabled);
         assert_eq!((glass.band, glass.tint, glass.depth), (8.0, 0.5, 4));
         assert_eq!(glass.ink, Ink::Own);
         assert_eq!(glass.rim, Glass::default().rim, "out of range");
@@ -1288,11 +1285,12 @@ mod tests {
     }
 
     #[test]
-    fn the_theme_follows_the_system_unless_it_says_light_or_dark() {
+    fn the_theme_follows_the_system_unless_it_says_light_dark_or_glass() {
         assert_eq!(parse("").unwrap().theme, Theme::System);
         assert_eq!(parse("theme = \"light\"").unwrap().theme, Theme::Light);
         assert_eq!(parse("theme = \"dark\"").unwrap().theme, Theme::Dark);
         assert_eq!(parse("theme = \"system\"").unwrap().theme, Theme::System);
+        assert_eq!(parse("theme = \"glass\"").unwrap().theme, Theme::Glass);
         let odd = parse("theme = \"sepia\"").unwrap();
         assert_eq!(odd.theme, Theme::System);
         assert_eq!(odd.warnings.len(), 1);

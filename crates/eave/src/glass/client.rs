@@ -97,7 +97,7 @@ pub fn events() -> impl iced::futures::Stream<Item = Event> {
 }
 
 /// Tells the glass about the frame being drawn: called as it's drawn, after everything else in it.
-/// `look` is `None` while the config turns glass off.
+/// `look` is `None` without the glass theme.
 pub fn present(look: Option<&config::Glass>, records: Vec<super::frame::Record>) {
     let Some(surface) = layershellev::layer_surfaces()
         .into_iter()
@@ -169,7 +169,11 @@ pub fn present(look: Option<&config::Glass>, records: Vec<super::frame::Record>)
         glass.object.set_report(report);
         glass.report = Some(report);
     }
-    let regions = super::frame::encode(&records);
+    // Never more than fits in one message, which `fit` sees to: past it, the request would cut the
+    // bar's connection.
+    debug_assert!(records.len() <= crate::theme::GLASS_MAX_REGIONS);
+    let regions =
+        super::frame::encode(&records[..records.len().min(crate::theme::GLASS_MAX_REGIONS)]);
     if glass.regions.as_ref() != Some(&regions) {
         glass.object.set_regions(regions.clone());
         glass.regions = Some(regions);

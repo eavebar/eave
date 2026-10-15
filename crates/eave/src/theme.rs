@@ -42,11 +42,17 @@ pub fn surface_height(grow: f32, island: f32) -> u32 {
 /// theme, since they stand for the hardware around the picture (D-92).
 pub const BEZEL: Color = Color::BLACK;
 
-/// With glass (hypr-eave), an island turns light once what's behind it is brighter than this, and
-/// dark again once it's dimmer than the lower one: apart, so one over something in between doesn't
-/// flicker. Brightness is the luma of the frosted backdrop, 0 to 1.
-pub const GLASS_TO_LIGHT: f32 = 0.6;
-pub const GLASS_TO_DARK: f32 = 0.5;
+/// With glass (hypr-eave), an island's ink turns dark once what's behind it is brighter than this,
+/// and light again once it's dimmer than the lower one: apart, so one over something in between
+/// doesn't flicker. Brightness is the luma of the frosted backdrop, 0 to 1.
+pub const GLASS_TO_DARK_INK: f32 = 0.6;
+pub const GLASS_TO_LIGHT_INK: f32 = 0.5;
+/// The most records a frame tells the glass: as many as hypr-eave reads (`MAX_REGIONS`), well
+/// inside one Wayland message.
+pub const GLASS_MAX_REGIONS: usize = 64;
+/// How far past an island's shape its pixels may reach while it moves, for hypr-eave
+/// (`ISLAND_MARGIN`): what's further from every island changes nothing.
+pub const GLASS_MARGIN: f32 = 12.0;
 /// How coarse the glass's report of what's behind the bar is, in logical pixels.
 pub const GLASS_REPORT_CELL: u32 = 16;
 /// How far past where they rest the notch and the grown edge are kept from glass: a kick moves

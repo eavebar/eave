@@ -30,8 +30,8 @@
     which parts of each frame are islands that may turn to glass, and in
     which fill color, and the compositor lets the frosted, refracted backdrop
     through where a pixel is that fill color. In return the compositor tells
-    the client how bright it is behind its surface, so islands over something
-    bright can turn light and stay readable.
+    the client how bright it is behind its surface, so the ink of islands
+    over something bright can turn dark and stay readable.
 
     When the global is absent the client draws as it would anyway: nothing
     depends on it.
@@ -76,19 +76,19 @@
     </request>
 
     <enum name="kind">
-      <entry name="glass_dark" value="0"
-             summary="a dark island: its fill color turns to glass, its ink goes lighter"/>
-      <entry name="glass_light" value="1"
-             summary="a light island: its fill color turns to glass, its ink goes darker"/>
-      <entry name="solid" value="2"
+      <entry name="glass" value="0"
+             summary="an island: its fill color turns to glass"/>
+      <entry name="solid" value="1"
              summary="content that never lets glass through, over any island"/>
     </enum>
 
     <request name="set_regions">
       <description summary="what is glass this frame">
-        An array of records, each six native-endian 32-bit integers:
-        x, y, width, height (signed), kind (see the kind enum) and fill (an
-        ARGB color, the island's exact fill; ignored for solid).
+        An array of records, each seven native-endian 32-bit integers:
+        x, y, width, height (signed), kind (see the kind enum), fill (an
+        ARGB color, the island's exact fill) and ink (0 to 255: which way
+        the island's grey ink goes over the glass, 0 lighter, 255 darker,
+        and in between while it turns). Fill and ink are ignored for solid.
 
         A glass record is the island's shape as the client drew it. A pixel
         belongs to the nearest one, if it's close: an island's pixels may
@@ -97,8 +97,9 @@
         record: the rest of the island, its text, icons and other content,
         is kept. Pixels near no glass record are never touched.
 
-        The initial value is empty: no glass. Records past the compositor's
-        limit (64) are ignored.
+        The initial value is empty: no glass. At most 64 records: the
+        compositor ignores the rest. 64 also keeps the request well inside
+        one Wayland message (4096 bytes).
       </description>
       <arg name="records" type="array"/>
     </request>
@@ -157,7 +158,7 @@
       <description summary="whether glass is drawn for this surface">
         Sent once on creation and whenever it changes. While inactive
         (turned off, or on an output the compositor can't draw glass on)
-        islands should draw as they would without glass: dark.
+        islands should draw as they would without glass.
       </description>
       <arg name="active" type="uint"/>
     </event>

@@ -411,7 +411,8 @@ namespace Glass {
             fills[count * 4 + 0] = ((r.fill >> 16) & 0xFF) / 255.F;
             fills[count * 4 + 1] = ((r.fill >> 8) & 0xFF) / 255.F;
             fills[count * 4 + 2] = (r.fill & 0xFF) / 255.F;
-            fills[count * 4 + 3] = sc<float>(r.kind);
+            // w: -1 for solid content, else which way the island's ink goes, 0 to 1.
+            fills[count * 4 + 3] = r.kind == EAVE_GLASS_SURFACE_V1_KIND_SOLID ? -1.F : r.ink / 255.F;
             count++;
         }
 

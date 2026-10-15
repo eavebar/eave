@@ -1,12 +1,13 @@
 //! Glass: the islands as liquid glass, drawn by the hypr-eave plugin in Hyprland (`hypr-eave/`),
 //! which eave talks to over a private Wayland protocol (`protocol/eave-glass-v1.xml`).
 //!
-//! eave draws its islands as it would anyway, opaque. With each frame it tells the plugin which
-//! islands may turn to glass, in which fill color and tone, and which pictures never do ([`frame`]);
-//! the plugin lets the frosted, refracted backdrop through where an island is its fill. The plugin
-//! tells eave whether there's glass, and how bright it is behind the bar ([`tone`]), so an island
-//! over something bright can turn light and keep its ink readable. Without the plugin there's no
-//! glass to tell, and nothing changes.
+//! Glass is a theme, `theme = "glass"`. eave draws its islands as the dark theme would, opaque.
+//! With each frame it tells the plugin which islands may turn to glass, in which fill color and
+//! which way their ink goes, and which pictures never do ([`frame`]); the plugin lets the frosted,
+//! refracted backdrop through where an island is its fill, and turns grey ink into a readable
+//! opposite of the glass behind it. The plugin tells eave whether there's glass, and how bright it
+//! is behind the bar ([`tone`]), so the ink over something bright can turn dark. Without the
+//! plugin there's no glass to tell, and the theme looks dark.
 
 mod client;
 pub mod frame;
@@ -17,8 +18,7 @@ use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::{Element, Event, Length, Rectangle, Size, Vector};
 
-pub use client::{Event as GlassEvent, active, events};
-pub use frame::Tone;
+pub use client::{Event as GlassEvent, events};
 
 use crate::config;
 
@@ -26,17 +26,21 @@ use crate::config;
 /// an overlay of its own, since islands with popovers draw theirs in overlays, which come after
 /// the rest of the bar; it's the last of them.
 pub struct Present {
-    /// `None` while the config turns glass off.
+    /// `None` without the glass theme.
     look: Option<config::Glass>,
     /// What's drawn outside the islands that's never glass: the notch and the grown edge.
     solid: Vec<Rectangle>,
+    /// Whether this is the first bar's frame: the one with glass. Records are gathered for every
+    /// bar's frame alike, and the others' are dropped, so they can't land on its glass.
+    primary: bool,
 }
 
 impl Present {
-    pub fn new(glass: &config::Glass, solid: Vec<Rectangle>) -> Self {
+    pub fn new(look: Option<config::Glass>, solid: Vec<Rectangle>, primary: bool) -> Self {
         Self {
-            look: glass.enabled.then_some(*glass),
+            look,
             solid,
+            primary,
         }
     }
 }
@@ -78,6 +82,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Present {
         Some(overlay::Element::new(Box::new(Sender {
             look: self.look,
             solid: &self.solid,
+            primary: self.primary,
         })))
     }
 }
@@ -85,6 +90,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Present {
 struct Sender<'a> {
     look: Option<config::Glass>,
     solid: &'a [Rectangle],
+    primary: bool,
 }
 
 impl<M> overlay::Overlay<M, iced::Theme, iced::Renderer> for Sender<'_> {
@@ -103,9 +109,10 @@ impl<M> overlay::Overlay<M, iced::Theme, iced::Renderer> for Sender<'_> {
         for rect in self.solid {
             frame::opaque(*rect);
         }
-        client::present(self.look.as_ref(), frame::take());
-        // For the next frame: a frame that turns glass on is drawn again once it's there.
-        frame::gather(self.look.is_some() && active());
+        let records = frame::take();
+        if self.primary {
+            client::present(self.look.as_ref(), frame::fit(records));
+        }
     }
 }
 

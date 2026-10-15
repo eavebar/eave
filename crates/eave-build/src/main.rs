@@ -415,7 +415,7 @@ fn build(config_path: &Path, sources: &mut Sources, summary: bool) -> Result<()>
     } else {
         eprintln!("eave-build: {} is up to date", target.display());
     }
-    if glass_enabled(&text) {
+    if glass_theme(&text) {
         build_glass(&eave_dir)?;
     }
 
@@ -505,14 +505,10 @@ fn read_config(text: &str) -> Result<(Option<String>, Vec<String>)> {
     Ok((eave, widgets))
 }
 
-/// Whether config.toml leaves glass on: `[glass] enabled`, true unless it says otherwise.
-fn glass_enabled(text: &str) -> bool {
+/// Whether config.toml asks for glass: `theme = "glass"`.
+fn glass_theme(text: &str) -> bool {
     let table: toml::Table = text.parse().unwrap_or_default();
-    table
-        .get("glass")
-        .and_then(|glass| glass.get("enabled"))
-        .and_then(toml::Value::as_bool)
-        .unwrap_or(true)
+    table.get("theme").and_then(toml::Value::as_str) == Some("glass")
 }
 
 /// Builds hypr-eave, the Hyprland plugin that draws glass, against the Hyprland installed now, and
@@ -1366,12 +1362,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn glass_is_built_unless_the_config_turns_it_off() {
-        assert!(glass_enabled(""));
-        assert!(glass_enabled("[glass]\nband = 8"));
-        assert!(!glass_enabled("[glass]\nenabled = false"));
+    fn glass_is_built_for_the_glass_theme() {
+        assert!(glass_theme("theme = \"glass\"\n[glass]\nband = 8"));
+        assert!(!glass_theme(""));
+        assert!(!glass_theme("theme = \"dark\""));
         assert!(
-            glass_enabled("not toml ["),
+            !glass_theme("not toml ["),
             "a broken file is the bar's to report"
         );
     }

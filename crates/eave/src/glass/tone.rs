@@ -1,5 +1,5 @@
-//! How bright it is behind the bar, as the glass sees it, so an island over something bright can
-//! turn light and keep its ink readable.
+//! How bright it is behind the bar, as the glass sees it, so the ink of an island over something
+//! bright can turn dark and stay readable.
 
 use iced::Rectangle;
 
@@ -45,15 +45,16 @@ impl Backdrop {
         (!cells.is_empty()).then(|| cells.iter().sum::<f32>() / cells.len() as f32)
     }
 
-    /// Whether an island at `rect` should be light, given whether it is now. Apart, so an island
-    /// over something in between doesn't flicker. An empty grid turns every island back.
-    pub fn light(&self, rect: Rectangle, now: bool) -> bool {
+    /// Whether the ink of an island at `rect` should go darker, given whether it does now. Apart,
+    /// so an island over something in between doesn't flicker. An empty grid turns every island
+    /// back.
+    pub fn darker(&self, rect: Rectangle, now: bool) -> bool {
         if self.brightness.is_empty() {
             return false;
         }
         match self.behind(rect) {
-            Some(brightness) if now => brightness > theme::GLASS_TO_DARK,
-            Some(brightness) => brightness > theme::GLASS_TO_LIGHT,
+            Some(brightness) if now => brightness > theme::GLASS_TO_LIGHT_INK,
+            Some(brightness) => brightness > theme::GLASS_TO_DARK_INK,
             None => now,
         }
     }
@@ -75,14 +76,14 @@ mod tests {
     #[test]
     fn an_empty_grid_turns_islands_back() {
         let grid = Backdrop::new(0, 0, 0, &[]).unwrap();
-        assert!(!grid.light(
+        assert!(!grid.darker(
             Rectangle::new(iced::Point::ORIGIN, iced::Size::new(10.0, 10.0)),
             true
         ));
     }
 
     #[test]
-    fn turns_light_and_back_with_a_gap_between() {
+    fn ink_turns_dark_and_back_with_a_gap_between() {
         // Columns of 16 px: dark, middling, bright.
         let grid = Backdrop::new(16, 3, 1, &[0, 140, 255]).unwrap();
         let at = |col: f32| {
@@ -91,9 +92,9 @@ mod tests {
                 iced::Size::new(10.0, 10.0),
             )
         };
-        assert!(!grid.light(at(0.0), false));
-        assert!(!grid.light(at(1.0), false), "0.55 isn't above 0.6");
-        assert!(grid.light(at(1.0), true), "but stays light");
-        assert!(grid.light(at(2.0), false));
+        assert!(!grid.darker(at(0.0), false));
+        assert!(!grid.darker(at(1.0), false), "0.55 isn't above 0.6");
+        assert!(grid.darker(at(1.0), true), "but stays dark");
+        assert!(grid.darker(at(2.0), false));
     }
 }

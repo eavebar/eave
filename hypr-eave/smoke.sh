@@ -14,10 +14,17 @@ reloads=${1:-20}
 dir=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/hypr-eave-smoke.XXXXXX")
 fail() { echo "FAIL: $*"; exit 1; }
 
+# The user's config, in the glass theme.
+mkdir -p "$dir/config/eave"
+{
+    echo 'theme = "glass"'
+    grep -v '^theme *=' "${XDG_CONFIG_HOME:-$HOME/.config}/eave/config.toml" 2>/dev/null || true
+} > "$dir/config/eave/config.toml"
+
 cat > "$dir/hyprland.lua" <<EOF
 hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 2 })
 hl.config({ misc = { disable_hyprland_logo = true, disable_splash_rendering = true } })
-hl.on("hyprland.start", function() hl.exec_cmd("$eave") end)
+hl.on("hyprland.start", function() hl.exec_cmd("XDG_CONFIG_HOME=$dir/config $eave") end)
 EOF
 
 before=$(ls "$XDG_RUNTIME_DIR/hypr")
@@ -71,6 +78,9 @@ while [ $i -lt "$reloads" ]; do
 done
 glass "$reloads reloads"
 echo "ok: $reloads reloads"
+regions=$(ctl hypreave | sed -n 's/.*surface: \([0-9]*\) glass regions, \([0-9]*\) solid.*/\1 \2/p' | head -1)
+[ -n "$regions" ] && [ $((${regions% *} + ${regions#* })) -le 64 ] || fail "more regions than fit: $regions"
+echo "ok: $regions regions (glass, solid)"
 
 ctl eval 'hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 2, transform = 1 })' > /dev/null
 sleep 1

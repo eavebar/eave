@@ -6,7 +6,7 @@
 // frosts what's on screen around it; right after, it lets that through where the surface is the
 // fill color, refracted at the islands' edges. The shape comes only from the buffer drawn this
 // frame and what eave said with it, so the glass can't lag a morph. In return the plugin tells
-// eave how bright it is behind its surface, so islands over something bright can turn light.
+// eave how bright it is behind its surface, so the ink of islands over something bright can turn dark.
 #pragma once
 
 #include <chrono>
@@ -52,8 +52,9 @@ namespace Glass {
     // A record of eave_glass_surface_v1.set_regions, surface-local logical px.
     struct SRegion {
         int32_t  x = 0, y = 0, w = 0, h = 0;
-        uint32_t kind = EAVE_GLASS_SURFACE_V1_KIND_GLASS_DARK;
+        uint32_t kind = EAVE_GLASS_SURFACE_V1_KIND_GLASS;
         uint32_t fill = 0xFF000000; // ARGB
+        uint8_t  ink  = 0;          // which way grey ink goes: 0 lighter, 255 darker
 
         bool     operator==(const SRegion&) const = default;
     };

@@ -154,16 +154,22 @@ namespace Glass {
             auto* glass = Glass::glassOf(key);
             if (!glass)
                 return;
-            constexpr size_t RECORD = 6 * sizeof(int32_t);
-            const size_t     n      = std::min(array->size / RECORD, MAX_REGIONS);
+            constexpr size_t FIELDS = 7;
+            const size_t     n      = std::min(array->size / (FIELDS * sizeof(int32_t)), MAX_REGIONS);
             const auto*      data   = sc<const int32_t*>(array->data);
             auto&            out    = glass->m_pending.regions;
             out.clear();
             for (size_t i = 0; i < n; i++) {
-                const int32_t* r = data + i * 6;
+                const int32_t* r = data + i * FIELDS;
                 if (r[2] <= 0 || r[3] <= 0 || sc<uint32_t>(r[4]) > EAVE_GLASS_SURFACE_V1_KIND_SOLID)
                     continue;
-                out.push_back({.x = r[0], .y = r[1], .w = r[2], .h = r[3], .kind = sc<uint32_t>(r[4]), .fill = sc<uint32_t>(r[5])});
+                out.push_back({.x    = r[0],
+                               .y    = r[1],
+                               .w    = r[2],
+                               .h    = r[3],
+                               .kind = sc<uint32_t>(r[4]),
+                               .fill = sc<uint32_t>(r[5]),
+                               .ink  = sc<uint8_t>(std::clamp(r[6], 0, 255))});
             }
         });
         m_resource->setSetLook([key, generation](CEaveGlassSurfaceV1*, wl_fixed_t band, wl_fixed_t strength, wl_fixed_t chroma, wl_fixed_t rim, wl_fixed_t frost, uint32_t depth,

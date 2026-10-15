@@ -83,8 +83,12 @@ pub struct Bar {
     shapes: RefCell<HashMap<IslandId, island::Shape>>,
     /// Whether the glass plugin draws glass behind the bar ([`glass`]).
     glass: bool,
-    /// With glass, the islands over something bright, which draw light.
-    light_islands: HashSet<IslandId>,
+    /// With glass, the islands over something bright, whose ink goes darker.
+    darker_ink: HashSet<IslandId>,
+    /// The island in the middle's shape, as last drawn: the dormer's or a dialog's.
+    center_shape: island::Shape,
+    /// Whether its ink goes darker, over something bright.
+    center_darker: bool,
     /// The dialog asked for, while where its top goes is looked up: whose, and where it comes
     /// out of.
     asked: Option<(u64, Origin)>,
@@ -410,7 +414,9 @@ impl Bar {
             dialog: None,
             shapes: RefCell::default(),
             glass: false,
-            light_islands: HashSet::new(),
+            darker_ink: HashSet::new(),
+            center_shape: island::Shape::default(),
+            center_darker: false,
             asked: None,
             touched: None,
             warned: Vec::new(),
@@ -1331,7 +1337,7 @@ impl Bar {
 
     /// How the bar shows right now: outside fullscreen, or over a fullscreen window (D-88).
     /// Which way round the palette is: as `theme` says, or for `"system"` as the desktop
-    /// prefers, dark unless it prefers light.
+    /// prefers, dark unless it prefers light. Glass is drawn dark.
     pub fn scheme(&self) -> Scheme {
         match (self.config.theme, self.desktop) {
             (config::Theme::Light, _) | (config::Theme::System, ColorScheme::Light) => {
@@ -1343,6 +1349,12 @@ impl Bar {
 
     fn palette(&self) -> &'static Palette {
         self.scheme().palette()
+    }
+
+    /// Whether islands may turn to glass: the glass theme, with hypr-eave drawing it. Glass draws
+    /// with the dark palette, and looks dark without the plugin.
+    fn glass_on(&self) -> bool {
+        self.glass && self.config.theme == config::Theme::Glass
     }
 
     fn showing(&self) -> Showing {
@@ -1977,7 +1989,8 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         Message::Glass(glass::GlassEvent::Active(active)) => {
             bar.glass = active;
             if !active {
-                bar.light_islands.clear();
+                bar.darker_ink.clear();
+                bar.center_darker = false;
             }
             Task::none()
         }
@@ -1986,14 +1999,16 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
                 return Task::none();
             }
             let shapes = bar.shapes.borrow();
-            let light = shapes
+            let darker = shapes
                 .iter()
                 .filter(|(_, shape)| shape.get().width > 0.0)
-                .filter(|(id, shape)| backdrop.light(shape.get(), bar.light_islands.contains(id)))
+                .filter(|(id, shape)| backdrop.darker(shape.get(), bar.darker_ink.contains(id)))
                 .map(|(id, _)| *id)
                 .collect();
             drop(shapes);
-            bar.light_islands = light;
+            bar.darker_ink = darker;
+            let center = bar.center_shape.get();
+            bar.center_darker = center.width > 0.0 && backdrop.darker(center, bar.center_darker);
             Task::none()
         }
         Message::CheckFullscreen => {
@@ -2390,6 +2405,9 @@ fn capitalized(name: &str) -> String {
 /// Every surface is a bar.
 pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     let palette = bar.palette();
+    // What's drawn tells the glass about itself while there's glass to tell.
+    let glass_on = bar.glass_on();
+    glass::frame::gather(glass_on);
     let notices = bar
         .notices
         .as_ref()
@@ -2435,18 +2453,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                 .map(|instance| instance.entry.attach)
                 .unwrap_or_default();
             // Glass, with the plugin, but where it stands for the hardware: attached to an edge,
-            // or in a solid bar. Light over something bright. Popovers build with the bar's
-            // palette, so an island with one stays as the bar is.
-            let glass = bar.glass
-                && bar.config.glass.enabled
-                && band.is_none()
-                && !(attach.top || attach.left || attach.right);
-            let light = glass && popover.is_none() && bar.light_islands.contains(&island);
-            let palette = if light {
-                Scheme::Light.palette()
-            } else {
-                palette
-            };
+            // or in a solid bar.
+            let glass = glass_on && band.is_none() && !(attach.top || attach.left || attach.right);
             let expanded = bar.expanded.contains(&island);
             let collapsing = bar.collapsing.contains(&island);
             let mut items = Vec::new();
@@ -2498,8 +2506,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             });
             Some((
                 Island::new(items)
-                    .theme(light.then(|| Scheme::Light.theme()))
                     .glass(glass)
+                    .ink(bar.darker_ink.contains(&island))
                     .align(align)
                     .popover(popover)
                     .nudges(nudges)
@@ -2648,7 +2656,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         .into_iter()
         .map(|rect| rect.expand(style::GLASS_BEZEL_MARGIN))
         .collect();
-    let present = glass::Present::new(&bar.config.glass, solid);
+    let look = (bar.config.theme == config::Theme::Glass).then_some(bar.config.glass);
+    let present = glass::Present::new(look, solid, bar.toast_window() == Some(window));
     stack![bezel, islands, center_view(bar, window), present].into()
 }
 
@@ -2666,7 +2675,11 @@ fn center_view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         (None, Some(session)) => dormer_popover(bar, session),
         (None, None) => return Space::new().into(),
     };
+    // Glass, once it lets go of the notch.
     let island = Island::new([(DORMER, Space::new().into())])
+        .glass(bar.glass_on())
+        .ink(bar.center_darker)
+        .shape(bar.center_shape.clone())
         .align(Horizontal::Center)
         .popover(Some(popover))
         .corners(bar.screen.island_corners(Place::default()))
