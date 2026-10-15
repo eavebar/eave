@@ -177,16 +177,16 @@ pub const PUSH_MOVING: f32 = 20.0;
 /// of REACT's stiffness: a side pushed in pushes the others out (the bulge), and the top, which
 /// hangs from the bar, takes no part. `SKIN_ROOM` is how far the skin may go out past its frame.
 pub const SKIN_TRAVEL: f32 = 200.0;
-pub const SKIN_STRETCH: f32 = 3.0;
-pub const SKIN_CARRY: f32 = 3.4;
-pub const OPEN_CARRY: f32 = 0.0;
-pub const SKIN_BOW: f32 = 0.4;
-pub const SKIN_AREA: f32 = 0.6;
-pub const SKIN_ROOM: f32 = 8.0;
+pub const SKIN_STRETCH: f32 = 5.0;
+pub const SKIN_CARRY: f32 = 5.0;
+pub const OPEN_CARRY: f32 = 0.5;
+pub const SKIN_BOW: f32 = 0.8;
+pub const SKIN_AREA: f32 = 0.3;
+pub const SKIN_ROOM: f32 = 10.0;
 /// A shape lands on where it goes (D-111): it heads this share of its way past it, and stops dead
 /// as it gets there, so it arrives at speed and what it carries goes into the skin. Anything but a
 /// popover opening, which eases in.
-pub const LAND_PAST: f32 = 0.15;
+pub const LAND_PAST: f32 = 0.2;
 /// A drop bounces as it falls into place so the bounce peaks as it arrives: when its bottom will be
 /// this close to where it's going, in logical pixels, by the time REACT peaks.
 pub const DROP_LAND: f32 = 1.0;

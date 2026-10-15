@@ -22,7 +22,7 @@ use crate::theme;
 
 /// Springs across the top and the bottom, and down each side.
 const ACROSS: usize = 24;
-const DOWN: usize = 6;
+const DOWN: usize = 12;
 const RING: usize = 2 * (ACROSS + DOWN);
 
 /// How fast to poke a piece of the ring so the edge goes out about `peak` there, at its furthest
