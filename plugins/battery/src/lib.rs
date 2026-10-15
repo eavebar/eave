@@ -3,7 +3,8 @@
 //! `/sys/class/power_supply`, with every system battery combined into one. Hidden when there's no
 //! battery (a desktop). The popover has the state, the time left and the power draw.
 //!
-//! It sends a notification when the battery runs low and when it's done charging ([`notify`]).
+//! It sends a notification when the charger goes in, when the battery runs low and when it's done
+//! charging ([`notify`]).
 
 use eave_api::ui::{self, Icon, Item, Panel, Tone};
 use eave_api::{Effect, Registry, Subscription, Task, Widget};
@@ -25,6 +26,8 @@ pub struct Config {
     critical: u8,
     /// Whether to send notifications: battery low, and charged.
     notify: bool,
+    /// Whether to send one when the charger goes in, too (if `notify`).
+    charging: bool,
 }
 
 impl Default for Config {
@@ -33,6 +36,7 @@ impl Default for Config {
             warning: 20,
             critical: 10,
             notify: true,
+            charging: true,
         }
     }
 }
@@ -95,6 +99,8 @@ pub struct Battery {
     warned: bool,
     /// The low battery notification's id, once the server gave it.
     warning: Option<u32>,
+    /// The id of the notification that the charger went in, once the server gave it.
+    plugged: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +108,8 @@ pub enum Message {
     Read(Reading),
     /// The low battery notification went up, with this id.
     Warned(u32),
+    /// The notification that the charger went in went up, with this id.
+    Plugged(u32),
 }
 
 /// A notification to send or take away.
@@ -109,8 +117,10 @@ pub enum Message {
 enum Alert {
     /// Running low, at this percent.
     Low(u8),
-    /// The charger is in: the low battery notification can go.
-    Plugged,
+    /// The charger went in, at this percent: say so, and the low battery notification can go.
+    Plugged(u8),
+    /// The charger came out: the notification that it went in can go.
+    Unplugged,
     /// Done charging, at this percent.
     Charged(u8),
 }
@@ -125,6 +135,7 @@ impl Widget for Battery {
             reading: Reading::default(),
             warned: false,
             warning: None,
+            plugged: None,
         };
         (battery, Task::none())
     }
@@ -142,6 +153,10 @@ impl Widget for Battery {
             Message::Warned(id) if !self.warned => Effect::task(close(id)),
             Message::Warned(id) => {
                 self.warning = Some(id);
+                Effect::none()
+            }
+            Message::Plugged(id) => {
+                self.plugged = Some(id);
                 Effect::none()
             }
         }
@@ -282,16 +297,27 @@ impl Battery {
             return None;
         }
         let percent = self.percent();
+        // Only a change: a bar starting with the charger in has nothing to say.
+        let plug = match (plugged(before), plugged(reading)) {
+            (Some(was), Some(is)) if was != is => Some(is),
+            _ => None,
+        };
         match reading.state {
             // Once per discharge, also when the bar starts on a low battery.
             State::Discharging if percent <= self.config.critical && !self.warned => {
                 self.warned = true;
                 Some(Alert::Low(percent))
             }
+            _ if plug == Some(true) => {
+                self.warned = false;
+                Some(Alert::Plugged(percent))
+            }
+            // Charging with no plug seen going in: the low battery notification still goes.
             State::Charging | State::Full | State::NotCharging if self.warned => {
                 self.warned = false;
-                Some(Alert::Plugged)
+                Some(Alert::Plugged(percent))
             }
+            _ if plug == Some(false) => Some(Alert::Unplugged),
             // Only right after charging: plugging in a full battery isn't news.
             _ if before.state == State::Charging && self.charged() => Some(Alert::Charged(percent)),
             _ => None,
@@ -312,7 +338,25 @@ impl Battery {
 
     fn send(&mut self, alert: Alert) -> Task<Message> {
         let note = match alert {
-            Alert::Plugged => return self.warning.take().map_or_else(Task::none, close),
+            Alert::Unplugged => return self.plugged.take().map_or_else(Task::none, close),
+            Alert::Plugged(percent) => {
+                let low = self.warning.take().map_or_else(Task::none, close);
+                if !self.config.charging {
+                    return low;
+                }
+                let note = self.plugged_note(percent);
+                let send = Task::future(async move {
+                    match notify::send(note).await {
+                        Ok(id) => Some(Message::Plugged(id)),
+                        Err(error) => {
+                            eprintln!("eave-battery: notification not sent: {error}");
+                            None
+                        }
+                    }
+                })
+                .and_then(Task::done);
+                return Task::batch([low, send]);
+            }
             Alert::Low(percent) => {
                 let left = match self.reading.time_to_empty {
                     0 => String::new(),
@@ -323,6 +367,8 @@ impl Battery {
                     summary: "Battery low".into(),
                     body: format!("{percent}% left{left}. Plug in the charger."),
                     critical: true,
+                    expires: None,
+                    replaces: 0,
                 }
             }
             Alert::Charged(percent) => notify::Note {
@@ -333,6 +379,8 @@ impl Battery {
                     _ => format!("{percent}%. You can unplug the charger."),
                 },
                 critical: false,
+                expires: None,
+                replaces: 0,
             },
         };
         let low = matches!(alert, Alert::Low(_));
@@ -346,6 +394,31 @@ impl Battery {
             }
         })
         .and_then(Task::done)
+    }
+
+    /// That the charger went in: charging, and till when if the kernel says, or held where it is.
+    fn plugged_note(&self, percent: u8) -> notify::Note {
+        let (summary, body) = match self.reading.state {
+            State::Full => ("Plugged in", format!("{percent}%, charged.")),
+            State::NotCharging => ("Plugged in", format!("{percent}%, not charging.")),
+            // Just in, the battery may still read discharging: it's about to charge.
+            _ => match self.reading.time_to_full {
+                0 => ("Charging", format!("{percent}%")),
+                seconds => (
+                    "Charging",
+                    format!("{percent}%, full in about {}.", duration(seconds)),
+                ),
+            },
+        };
+        notify::Note {
+            icon: "battery-good-charging",
+            summary: summary.into(),
+            body,
+            critical: false,
+            expires: Some(PLUGGED_SHOWN),
+            // Plugged in again while the last one shows: it takes its place.
+            replaces: self.plugged.unwrap_or(0),
+        }
     }
 
     fn charging(&self) -> bool {
@@ -366,6 +439,22 @@ impl Battery {
             _ => Tone::Normal,
         }
     }
+}
+
+/// Milliseconds the notification that the charger went in shows for: it's news, not a warning.
+const PLUGGED_SHOWN: i32 = 4000;
+
+/// Whether the charger is in: as the machine says, or failing that as the battery does. `None`
+/// when neither can tell.
+fn plugged(reading: &Reading) -> Option<bool> {
+    if !reading.present {
+        return None;
+    }
+    reading.ac_online.or(match reading.state {
+        State::Charging | State::Full | State::NotCharging => Some(true),
+        State::Discharging => Some(false),
+        State::Unknown => None,
+    })
 }
 
 fn close(id: u32) -> Task<Message> {
@@ -476,9 +565,74 @@ mod tests {
         assert_eq!(read(&mut widget, 9.0, State::Unknown), None);
         assert_eq!(
             read(&mut widget, 9.0, State::Charging),
-            Some(Alert::Plugged)
+            Some(Alert::Plugged(9))
         );
         assert_eq!(read(&mut widget, 30.0, State::Charging), None);
+    }
+
+    fn plug(battery: &mut Battery, percentage: f64, state: State, ac: bool) -> Option<Alert> {
+        let before = std::mem::replace(
+            &mut battery.reading,
+            Reading {
+                present: true,
+                percentage,
+                state,
+                ac_online: Some(ac),
+                ..Reading::default()
+            },
+        );
+        battery.alert(&before)
+    }
+
+    #[test]
+    fn says_when_the_charger_goes_in() {
+        let (mut widget, _) = Battery::new(Config::default());
+        assert_eq!(
+            plug(&mut widget, 45.0, State::Discharging, false),
+            None,
+            "starting is no change"
+        );
+        // The charger is in before the battery says it's charging.
+        assert_eq!(
+            plug(&mut widget, 45.0, State::Discharging, true),
+            Some(Alert::Plugged(45))
+        );
+        assert_eq!(plug(&mut widget, 45.0, State::Charging, true), None);
+        assert_eq!(
+            plug(&mut widget, 46.0, State::Discharging, false),
+            Some(Alert::Unplugged)
+        );
+        // Without a charger to read, the battery says.
+        let mut widget = battery(45.0, State::Discharging);
+        assert_eq!(
+            read(&mut widget, 45.0, State::Charging),
+            Some(Alert::Plugged(45))
+        );
+        assert_eq!(read(&mut widget, 45.0, State::Unknown), None);
+    }
+
+    #[test]
+    fn starting_plugged_in_is_no_news() {
+        let (mut widget, _) = Battery::new(Config::default());
+        assert_eq!(plug(&mut widget, 60.0, State::Charging, true), None);
+        assert_eq!(plug(&mut widget, 61.0, State::Charging, true), None);
+    }
+
+    #[test]
+    fn a_full_battery_plugged_in_says_so() {
+        let mut widget = battery(100.0, State::Discharging);
+        assert_eq!(
+            read(&mut widget, 100.0, State::Full),
+            Some(Alert::Plugged(100))
+        );
+        assert_eq!(widget.plugged_note(100).summary, "Plugged in");
+        let mut widget = battery(45.0, State::Discharging);
+        read(&mut widget, 45.0, State::Charging);
+        let note = widget.plugged_note(45);
+        assert_eq!(
+            (note.summary.as_str(), note.expires),
+            ("Charging", Some(4000))
+        );
     }
 
     #[test]
@@ -498,9 +652,12 @@ mod tests {
             Some(Alert::Charged(100))
         );
         assert_eq!(read(&mut widget, 100.0, State::Full), None);
-        // Plugging in a battery that's already full isn't news.
+        // Plugging in a battery that's already full isn't charging it.
         let mut full = battery(100.0, State::Discharging);
-        assert_eq!(read(&mut full, 100.0, State::Full), None);
+        assert_ne!(
+            read(&mut full, 100.0, State::Full),
+            Some(Alert::Charged(100))
+        );
     }
 
     #[test]

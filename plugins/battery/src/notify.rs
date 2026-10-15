@@ -19,6 +19,10 @@ pub struct Note {
     pub body: String,
     /// Shown until dismissed, never expiring, even under do not disturb.
     pub critical: bool,
+    /// Milliseconds it shows for, or until dismissed when `None`.
+    pub expires: Option<i32>,
+    /// The notification it takes the place of, if it's still up: 0 for none.
+    pub replaces: u32,
 }
 
 /// Shows `note`, and returns its id.
@@ -38,13 +42,13 @@ pub async fn send(note: Note) -> zbus::Result<u32> {
             "Notify",
             &(
                 "Battery",
-                0u32,
+                note.replaces,
                 note.icon,
                 note.summary.as_str(),
                 note.body.as_str(),
                 actions,
                 hints,
-                -1i32,
+                note.expires.unwrap_or(-1),
             ),
         )
         .await?;
