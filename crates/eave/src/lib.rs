@@ -4,6 +4,7 @@ mod alternate;
 mod app;
 mod apps;
 mod bezel;
+mod body;
 mod calibrate;
 mod clip;
 mod code;

@@ -217,6 +217,22 @@ pub const TONGUE_LAG: f32 = 1.8;
 pub const TONGUE_WIDTH: f32 = 0.5;
 pub const POUR_BLEND: f32 = 24.0;
 pub const POUR_FULL: f32 = 24.0;
+/// The body (D-118): while a shape morphs, its outline is a ring of points, each pulled toward
+/// its place on where the shape is going on `MORPH`'s tempo, damped `BODY_DAMPING` (under 1, it
+/// goes past and bounces back). A point going out along the outline's normal there swings in
+/// `BODY_LEAD` of the time, one coming in, in `BODY_LAG` of it, as a share of how far the
+/// furthest point goes, raised to `BODY_FOCUS`, so the middle of a side going out runs ahead of
+/// its corners and the middle of one coming in hangs on.
+/// `BODY_TENSION` pulls each point toward its neighbors, as a share of `MORPH`'s stiffness: higher
+/// is smoother and stiffer. `BODY_AREA` keeps the area its frame has, likewise.
+pub const BODY_RESPONSE: f32 = 0.45;
+pub const BODY_DAMPING: f32 = 0.6;
+pub const BODY_LEAD: f32 = 0.55;
+pub const BODY_LAG: f32 = 1.3;
+pub const BODY_LAND: f32 = 0.85;
+pub const BODY_FOCUS: f32 = 2.5;
+pub const BODY_TENSION: f32 = 1.5;
+pub const BODY_AREA: f32 = 0.3;
 /// A drop bounces as it falls into place so the bounce peaks as it arrives: when its bottom will be
 /// this close to where it's going, in logical pixels, by the time REACT peaks.
 pub const DROP_LAND: f32 = 1.0;
