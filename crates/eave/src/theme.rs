@@ -620,7 +620,8 @@ const fn grey(value: f32) -> Color {
 /// Black islands and white ink.
 pub static DARK: Palette = Palette {
     scheme: Scheme::Dark,
-    island_bg: Color::BLACK,
+    // glass-spike: translucent, so the refraction behind shows through. Fades cover with this, so they look off.
+    island_bg: Color { a: 0.3, ..Color::BLACK },
     hover_bg: white(0.08),
     pressed_bg: white(0.14),
     separator: white(0.10),
