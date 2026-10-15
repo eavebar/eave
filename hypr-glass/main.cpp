@@ -52,6 +52,8 @@ static struct {
     int   depth    = 3;     // how many times the blur halves the backdrop: each doubles its reach
     float clear    = 0.7F;  // how much of the backdrop shows through the island's color
     bool  invert   = false; // ink: the opposite of the glass behind each pixel
+    bool  colored  = true;  // the glass tinted by what's behind it instead of darkened
+    float tint     = 0.35F; // how strong that tint is (0 = clear glass)
     bool  report   = true;  // tell eave how bright it is behind each surface, so islands can turn light
     std::vector<int> pids;  // only these eaves' layers (none = every eave)
     int   skip     = 0;     // for measuring: 1 skips the copy, 2 the refraction
@@ -162,7 +164,7 @@ static std::string timingStats() {
 // needs its own sampler type.
 struct SProgram {
     GLuint id = 0;
-    GLint  backdrop, mask, attached, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, clear, invert, mixed, rect;
+    GLint  backdrop, mask, attached, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, clear, invert, mixed, colored, tint, rect;
 };
 static SProgram g_progs[2]; // [0] sampler2D, [1] samplerExternalOES
 static GLuint   g_vao = 0, g_vbo = 0;
@@ -198,6 +200,8 @@ uniform float rim;
 uniform float clear;    // how much of the backdrop the island's color lets through
 uniform bool  invert;   // ink: the opposite of the glass behind each pixel, not its own
 uniform bool  mixed;    // light islands may show (eave hears how bright it is behind)
+uniform bool  colored;  // the glass tinted by what's behind it, not by the island's color
+uniform float tint;     // how strong that tint is
 uniform sampler2D attached; // per column of the surface: how far down it's attached to the top
 out vec4 fragColor;
 
@@ -227,6 +231,11 @@ void put(vec3 glass, float a) {
     vec3 ink = t.rgb / max(t.a, 1e-4);
     vec3 dark  = clear * glass;
     vec3 light = vec3(1.0 - clear) + clear * glass;
+    if (colored) {
+        // Tinted by what's behind instead of by black or white: the same color, richer, over it.
+        vec3 rich = clamp(mix(vec3(luma(glass)), glass, 1.6), 0.0, 1.0);
+        dark = light = mix(glass, rich, tint);
+    }
     vec3 col = mix(ink + (1.0 - ink) * dark, ink * light, lightness);
     if (invert) {
         // How much of the pixel is ink rather than island, for the grey ink only: the opposite
@@ -524,6 +533,8 @@ static SProgram* ensureProgram(bool external) {
     p.clear    = at("clear");
     p.invert   = at("invert");
     p.mixed    = at("mixed");
+    p.colored  = at("colored");
+    p.tint     = at("tint");
     p.attached = at("attached");
     p.rect     = at("rect");
 
@@ -974,6 +985,8 @@ static void keyGlass(SJob& job) {
     glUniform1f(prog->clear, g_params.clear);
     glUniform1i(prog->invert, g_params.invert);
     glUniform1i(prog->mixed, g_params.report);
+    glUniform1i(prog->colored, g_params.colored);
+    glUniform1f(prog->tint, g_params.tint);
     glUniform4f(prog->rect, job.box.x, job.box.y, job.box.w, job.box.h);
 
     glActiveTexture(GL_TEXTURE1);
@@ -1086,8 +1099,8 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     }
 
     if (key.empty() || key == "show")
-        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\ndepth {}\nclear {}\ninvert {}\nreport {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength,
-                           g_params.chroma, g_params.rim, g_params.frost, g_params.depth, g_params.clear, g_params.invert, g_params.report, pidList(), sc<int>(g_timing.mode));
+        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\ndepth {}\nclear {}\ncolored {}\ntint {}\ninvert {}\nreport {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength,
+                           g_params.chroma, g_params.rim, g_params.frost, g_params.depth, g_params.clear, g_params.colored, g_params.tint, g_params.invert, g_params.report, pidList(), sc<int>(g_timing.mode));
 
     if (key == "stats")
         return timingStats() + std::format("reports read {}, posted {}, pending {}\n", g_report.read, g_report.posted, g_report.fence != nullptr);
@@ -1115,6 +1128,10 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
             g_params.depth = std::stoi(value);
         else if (key == "clear")
             g_params.clear = std::stof(value);
+        else if (key == "colored")
+            setBool(g_params.colored);
+        else if (key == "tint")
+            g_params.tint = std::stof(value);
         else if (key == "invert")
             setBool(g_params.invert);
         else if (key == "report") {
