@@ -32,7 +32,7 @@ namespace Glass {
     struct SGlassProgram {
         GLuint id = 0;
         GLint  mask, surfSize, fbOrigin, toFb, toSurf, backdrop, bdOrigin, bdScale, bdLimit, wide, wideScale, wideLimit, wideSize, fade, band, strength, chroma, rim, tint,
-            ink, contrast, count, boxes, fills, fbSize, rect;
+            ink, contrast, margin, count, boxes, fills, fbSize, rect;
     };
     static SGlassProgram g_glass[2];
 
@@ -147,6 +147,7 @@ namespace Glass {
         p.tint      = at("tint");
         p.ink       = at("ink");
         p.contrast  = at("contrast");
+        p.margin    = at("margin");
         p.count     = at("count");
         p.boxes     = at("boxes");
         p.fills     = at("fills");
@@ -234,6 +235,9 @@ namespace Glass {
 #endif
         return true;
     }
+
+    // How far past the shape eave reports an island's pixels may reach while it wobbles, logical px.
+    constexpr float ISLAND_MARGIN = 12.F;
 
     // How far around a surface the glass reads: the bend, the frost's reach, and a margin.
     static float reach(const SLook& look, float scale) {
@@ -446,6 +450,7 @@ namespace Glass {
         glUniform1f(prog->tint, lk.tint);
         glUniform1i(prog->ink, job.sdr ? lk.ink : sc<int>(EAVE_GLASS_SURFACE_V1_INK_OWN));
         glUniform1f(prog->contrast, lk.contrast);
+        glUniform1f(prog->margin, ISLAND_MARGIN * S);
         glUniform1i(prog->count, count);
         glUniform4fv(prog->boxes, MAX_REGIONS, boxes.data());
         glUniform4fv(prog->fills, MAX_REGIONS, fills.data());

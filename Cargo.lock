@@ -788,6 +788,8 @@ dependencies = [
  "toml",
  "toml_edit",
  "ureq",
+ "wayland-client",
+ "wayland-scanner",
  "winit-core",
  "zune-jpeg",
 ]

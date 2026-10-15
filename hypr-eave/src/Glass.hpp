@@ -40,6 +40,8 @@ namespace Glass {
         int   ink      = EAVE_GLASS_SURFACE_V1_INK_READABLE;
         float contrast = 4.5F;  // ink readable: the contrast ratio it reaches
         float inkBlur  = 12.F;  // ink: how far apart the taps of the wider blur its color is chosen on are
+
+        bool  operator==(const SLook&) const = default;
     };
 
     constexpr size_t MAX_REGIONS = 64;
@@ -49,6 +51,8 @@ namespace Glass {
         int32_t  x = 0, y = 0, w = 0, h = 0;
         uint32_t kind = EAVE_GLASS_SURFACE_V1_KIND_GLASS_DARK;
         uint32_t fill = 0xFF000000; // ARGB
+
+        bool     operator==(const SRegion&) const = default;
     };
 
     // What eave said, double-buffered: requests set the pending one, the surface's commit makes it
@@ -57,6 +61,8 @@ namespace Glass {
         std::vector<SRegion> regions;
         SLook                look;
         uint32_t             reportCell = 0;
+
+        bool                 operator==(const SState&) const = default;
     };
 
     // How bright it is behind a surface, read back without stalling: drawn into a small grid, read

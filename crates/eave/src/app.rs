@@ -81,7 +81,9 @@ pub struct Bar {
     dialog: Option<Dialog>,
     /// Each island's shape as it was last drawn, for a dialog to come out of and go back into.
     shapes: RefCell<HashMap<IslandId, island::Shape>>,
-    /// glass-spike: the islands over something bright, which draw light (see `glass`).
+    /// Whether the glass plugin draws glass behind the bar ([`glass`]).
+    glass: bool,
+    /// With glass, the islands over something bright, which draw light.
     light_islands: HashSet<IslandId>,
     /// The dialog asked for, while where its top goes is looked up: whose, and where it comes
     /// out of.
@@ -345,8 +347,8 @@ pub enum Message {
     Unreveal(u64, u64),
     /// Hyprland's windows or workspaces changed: whether one covers the screen may have too.
     CheckFullscreen,
-    /// glass-spike: how bright it is behind the bar, from the compositor's glass.
-    Backdrop(glass::Backdrop),
+    /// From the glass plugin: whether there's glass, and how bright it is behind the bar.
+    Glass(glass::GlassEvent),
     /// Whether a window covers the screen, as of the check with this number.
     Fullscreen(u64, bool),
     /// The focused workspace changed.
@@ -407,6 +409,7 @@ impl Bar {
             recent: Recent::default(),
             dialog: None,
             shapes: RefCell::default(),
+            glass: false,
             light_islands: HashSet::new(),
             asked: None,
             touched: None,
@@ -1969,7 +1972,19 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             bar.sinking = None;
             bar.move_to(Layer::Top)
         }
-        Message::Backdrop(backdrop) => {
+        // Drawn again, which asks for glass.
+        Message::Glass(glass::GlassEvent::Ready) => Task::none(),
+        Message::Glass(glass::GlassEvent::Active(active)) => {
+            bar.glass = active;
+            if !active {
+                bar.light_islands.clear();
+            }
+            Task::none()
+        }
+        Message::Glass(glass::GlassEvent::Backdrop(backdrop)) => {
+            if !bar.glass {
+                return Task::none();
+            }
             let shapes = bar.shapes.borrow();
             let light = shapes
                 .iter()
@@ -2415,9 +2430,18 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                     .filter(|_| island == notice_island)
                     .map(|panel| notices_view(bar, panel)),
             };
-            // glass-spike: light over something bright. Popovers build with the bar's palette,
-            // so an island with one stays as the bar is.
-            let light = popover.is_none() && bar.light_islands.contains(&island);
+            let attach = instances()
+                .next()
+                .map(|instance| instance.entry.attach)
+                .unwrap_or_default();
+            // Glass, with the plugin, but where it stands for the hardware: attached to an edge,
+            // or in a solid bar. Light over something bright. Popovers build with the bar's
+            // palette, so an island with one stays as the bar is.
+            let glass = bar.glass
+                && bar.config.glass.enabled
+                && band.is_none()
+                && !(attach.top || attach.left || attach.right);
+            let light = glass && popover.is_none() && bar.light_islands.contains(&island);
             let palette = if light {
                 Scheme::Light.palette()
             } else {
@@ -2472,13 +2496,10 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                 leaving,
                 on_gone: collapsing.then_some(Message::Collapsed(island)),
             });
-            let attach = instances()
-                .next()
-                .map(|instance| instance.entry.attach)
-                .unwrap_or_default();
             Some((
                 Island::new(items)
                     .theme(light.then(|| Scheme::Light.theme()))
+                    .glass(glass)
                     .align(align)
                     .popover(popover)
                     .nudges(nudges)
@@ -2620,7 +2641,15 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     let bezel = Lift::new(bezel, stays || bar.out(), by);
     let islands = Lift::new(islands, bar.out(), by);
     // Always a stack, so the islands' state stays put when the dormer comes and goes.
-    stack![bezel, islands, center_view(bar, window)].into()
+    // Last: what this frame says about glass goes out with it. The notch and the grown edge are
+    // never glass, a little past where they rest, since they move when kicked.
+    let solid = bar
+        .bezel_rects(window)
+        .into_iter()
+        .map(|rect| rect.expand(style::GLASS_BEZEL_MARGIN))
+        .collect();
+    let present = glass::Present::new(&bar.config.glass, solid);
+    stack![bezel, islands, center_view(bar, window), present].into()
 }
 
 /// The island in the middle at the top, for the dormer or a widget's dialog: a dot where it comes
@@ -3172,6 +3201,8 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
     // Always: the dormer's keybind comes this way, and what may change whether a window covers
     // the screen. Every other event stops in the filter.
     subscriptions.push(Subscription::run(hyprland_events).filter_map(hyprland));
+    // The glass plugin, if Hyprland has it loaded: quiet otherwise.
+    subscriptions.push(Subscription::run(glass::events).map(Message::Glass));
     // Notifications say how long ago they came: a minute at a time, while they show.
     let timed = bar
         .toasts
@@ -3228,9 +3259,6 @@ fn hyprland(update: eave_hyprland::Update<()>) -> Option<Message> {
         Event::Custom(data) => match data.as_str() {
             eave_hyprland::CLICK => Some(Message::Clicked),
             eave_hyprland::DORMER => Some(Message::Dormer(dormer::Event::Toggle)),
-            data if data.starts_with(glass::EVENT) => {
-                glass::Backdrop::parse(&data[glass::EVENT.len()..]).map(Message::Backdrop)
-            }
             data => {
                 let mut words = data.split_whitespace();
                 match (words.next()?, words.next(), words.next(), words.next()) {

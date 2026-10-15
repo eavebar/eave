@@ -425,7 +425,64 @@ pub struct Config {
     pub monitors: Vec<(String, MonitorScreen)>,
     pub bar: Bar,
     pub notifications: Notifications,
+    pub glass: Glass,
     pub warnings: Vec<String>,
+}
+
+/// `[glass]`: the islands as liquid glass, with the hypr-eave plugin loaded in Hyprland. Without
+/// it there's nothing to turn on, and the bar draws as it would anyway.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Glass {
+    pub enabled: bool,
+    /// How far in from an island's edge the glass bends, in logical pixels.
+    pub band: f32,
+    /// How far what's behind moves at the very edge.
+    pub strength: f32,
+    /// How far apart red and blue bend, as a fraction of the bend.
+    pub chroma: f32,
+    /// How bright the lit edge is.
+    pub rim: f32,
+    /// How much it's frosted, 0 for clear glass, and how far: each step of depth doubles it.
+    pub frost: f32,
+    pub depth: u32,
+    /// How much it takes the color behind it, 0 to 1.
+    pub tint: f32,
+    /// What grey ink over glass looks like.
+    pub ink: Ink,
+    /// With `ink = "readable"`: the contrast ratio it reaches.
+    pub contrast: f32,
+    /// How wide an area the ink's color is chosen over, in logical pixels.
+    pub ink_blur: f32,
+}
+
+impl Default for Glass {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            band: 12.0,
+            strength: 22.0,
+            chroma: 0.18,
+            rim: 0.7,
+            frost: 2.0,
+            depth: 3,
+            tint: 0.35,
+            ink: Ink::Readable,
+            contrast: 4.5,
+            ink_blur: 12.0,
+        }
+    }
+}
+
+/// Grey ink (text, symbols) over glass.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Ink {
+    /// As the bar draws it.
+    Own,
+    /// The opposite of the glass behind it.
+    Invert,
+    /// The opposite of the glass behind it, as light or dark as it takes to read.
+    #[default]
+    Readable,
 }
 
 /// Reads `config.toml`. A missing file is an empty bar. A file that can't be read or parsed is an
@@ -519,6 +576,9 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
     }
     if let Some(value) = table.remove("notifications") {
         config.notifications = notifications(value, &mut config.warnings);
+    }
+    if let Some(value) = table.remove("glass") {
+        config.glass = glass(value, &mut config.warnings);
     }
 
     for zone in Zone::ALL {
@@ -1033,6 +1093,62 @@ fn bar(value: toml::Value, warnings: &mut Vec<String>) -> Bar {
 }
 
 /// `notifications = { fullscreen = "critical" }`.
+fn glass(value: toml::Value, warnings: &mut Vec<String>) -> Glass {
+    let mut glass = Glass::default();
+    let toml::Value::Table(table) = value else {
+        warnings.push("`glass` must be a table, like { enabled = false }, ignoring it".into());
+        return glass;
+    };
+    for (key, value) in &table {
+        // A number in a range, or a warning and the default.
+        let mut number = |out: &mut f32, low: f32, high: f32| {
+            let number = match value {
+                toml::Value::Float(number) => Some(*number as f32),
+                toml::Value::Integer(number) => Some(*number as f32),
+                _ => None,
+            };
+            match number.filter(|number| (low..=high).contains(number)) {
+                Some(number) => *out = number,
+                None => warnings.push(format!(
+                    "`glass.{key}` must be a number from {low} to {high}, using {out}"
+                )),
+            }
+        };
+        match key.as_str() {
+            "enabled" => match value {
+                toml::Value::Boolean(enabled) => glass.enabled = *enabled,
+                _ => warnings.push("`glass.enabled` must be true or false, using true".into()),
+            },
+            "band" => number(&mut glass.band, 0.0, 64.0),
+            "strength" => number(&mut glass.strength, 0.0, 128.0),
+            "chroma" => number(&mut glass.chroma, 0.0, 1.0),
+            "rim" => number(&mut glass.rim, 0.0, 2.0),
+            "frost" => number(&mut glass.frost, 0.0, 8.0),
+            "tint" => number(&mut glass.tint, 0.0, 1.0),
+            "contrast" => number(&mut glass.contrast, 1.0, 21.0),
+            "ink-blur" => number(&mut glass.ink_blur, 0.0, 64.0),
+            "depth" => match value.as_integer() {
+                Some(depth @ 1..=6) => glass.depth = depth as u32,
+                _ => warnings.push("`glass.depth` must be 1 to 6, using 3".into()),
+            },
+            "ink" => match value.as_str() {
+                Some("own") => glass.ink = Ink::Own,
+                Some("invert") => glass.ink = Ink::Invert,
+                Some("readable") => glass.ink = Ink::Readable,
+                _ => warnings.push(
+                    "`glass.ink` must be \"own\", \"invert\" or \"readable\", using \"readable\""
+                        .into(),
+                ),
+            },
+            _ => warnings.push(format!(
+                "`glass` takes enabled, band, strength, chroma, rim, frost, depth, tint, ink, \
+                 contrast and ink-blur, ignoring `{key}`"
+            )),
+        }
+    }
+    glass
+}
+
 fn notifications(value: toml::Value, warnings: &mut Vec<String>) -> Notifications {
     let mut notifications = Notifications::default();
     let toml::Value::Table(table) = value else {
@@ -1068,6 +1184,22 @@ fn notifications(value: toml::Value, warnings: &mut Vec<String>) -> Notification
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glass_takes_its_look_and_warns_about_the_rest() {
+        assert_eq!(parse("").unwrap().glass, Glass::default());
+        let config = parse(
+            "glass = { enabled = false, band = 8, tint = 0.5, depth = 4, ink = \"own\", \
+             rim = 9, depth2 = 1 }",
+        )
+        .unwrap();
+        let glass = config.glass;
+        assert!(!glass.enabled);
+        assert_eq!((glass.band, glass.tint, glass.depth), (8.0, 0.5, 4));
+        assert_eq!(glass.ink, Ink::Own);
+        assert_eq!(glass.rim, Glass::default().rim, "out of range");
+        assert_eq!(config.warnings.len(), 2, "{:?}", config.warnings);
+    }
 
     #[test]
     fn the_bar_always_shows_but_hides_in_fullscreen_unless_it_says_otherwise() {

@@ -196,7 +196,8 @@ namespace Glass {
 
         m_listeners.commit = surface->m_events.commit.listen([this, key] {
             guarded("commit", [&] {
-                m_current = m_pending;
+                const bool changed = m_current != m_pending;
+                m_current          = m_pending;
                 // Stopped asking for reports: say there's nothing to report, once.
                 if (!m_current.reportCell && !m_report.sent.empty()) {
                     sendBackdrop(0, 0, 0, {});
@@ -209,7 +210,9 @@ namespace Glass {
                     return;
                 }
                 // The glass reads around every pixel it draws, so a change to what eave says is
-                // a change to all of it.
+                // a change to all of it. The frame's own damage is grown in onRenderBegin.
+                if (!changed)
+                    return;
                 auto hl = Desktop::View::CWLSurface::fromResource(m_surface.lock());
                 if (const auto box = hl ? hl->getSurfaceBoxGlobal() : std::nullopt)
                     g_pHyprRenderer->damageBox(*box);

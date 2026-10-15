@@ -30,6 +30,7 @@ uniform float rim;
 uniform float tint;
 uniform int   ink;           // 0 its own, 1 the opposite of the glass behind, 2 that, made to read
 uniform float contrast;
+uniform float margin;        // s px
 
 // What eave said about this frame: boxes in s px (x0, y0, x1, y1), and each one's fill color
 // with its kind in w (0 a dark island, 1 a light one, 2 solid content).
@@ -77,22 +78,29 @@ vec3 wideLook(vec2 s) {
     return sum / 9.0;
 }
 
-// Which record s is in: -1 none, 2 solid content (whatever else it's in), or the last island's
-// kind, with its fill.
+// Which island s belongs to: the nearest one eave said may turn to glass, within `margin` of it
+// (an island's jelly and squish reach a little past the shape it reports), and its fill. -1 for
+// none, and 2 inside solid content, whatever it's over.
 int region(vec2 s, out vec3 fill) {
-    int kind = -1;
-    fill     = vec3(0.0);
+    int   kind    = -1;
+    float nearest = margin;
+    fill          = vec3(0.0);
     for (int i = 0; i < MAX; i++) {
         if (i >= count)
             break;
-        vec4 b = boxes[i];
-        if (s.x < b.x || s.y < b.y || s.x >= b.z || s.y >= b.w)
+        vec4  b = boxes[i];
+        int   k = int(fills[i].w + 0.5);
+        float d = length(max(max(b.xy - s, s - b.zw), vec2(0.0)));
+        if (k == 2) {
+            if (d <= 0.0)
+                return 2;
             continue;
-        int k = int(fills[i].w + 0.5);
-        if (k == 2)
-            return 2;
-        kind = k;
-        fill = fills[i].rgb;
+        }
+        if (d <= nearest) {
+            nearest = d;
+            kind    = k;
+            fill    = fills[i].rgb;
+        }
     }
     return kind;
 }

@@ -90,10 +90,13 @@
         x, y, width, height (signed), kind (see the kind enum) and fill (an
         ARGB color, the island's exact fill; ignored for solid).
 
-        Only pixels inside a glass record and outside every solid record
-        may turn to glass, and only where they are the record's fill color:
-        the rest of the island, its text, icons and other content, is
-        kept. Where records of both glass kinds overlap, the later one wins.
+        A glass record is the island's shape as the client drew it. A pixel
+        belongs to the nearest one, if it's close: an island's pixels may
+        reach a little past the shape while it moves. It may turn to glass
+        only where it's that island's fill color, and not inside a solid
+        record: the rest of the island, its text, icons and other content,
+        is kept. Pixels near no glass record are never touched.
+
         The initial value is empty: no glass. Records past the compositor's
         limit (64) are ignored.
       </description>
@@ -135,8 +138,8 @@
     <event name="backdrop">
       <description summary="how bright it is behind the surface">
         A grid of cells, cell logical pixels square, from the surface's top
-        left, row by row: one byte each, the relative luminance of the
-        frosted backdrop, 0 to 255. Sent when it changes noticeably, at most
+        left, row by row: one byte each, how bright the frosted backdrop is
+        there (the luma of its encoded color), 0 to 255. Sent when it changes noticeably, at most
         about ten times a second, and once more after it settles. An empty
         grid (no cells) means there's nothing to report any more.
       </description>
