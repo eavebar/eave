@@ -2548,4 +2548,4 @@ The fillet's rows are only where it can be: within a blend of either one's top o
 
 **Variants:** to be picked by the user side by side, as D-83 and D-111 were.
 
-**Cost:** no dependency; four springs per island. While a tongue is out, each frame draws it and builds its fillet: about 170 rows of two bisections, ~80 µs in release on the M1 Pro. At rest nothing.
+**Cost:** no dependency; four springs per island. While a tongue is out, each frame draws it and builds its fillet: about 170 rows of two bisections, ~80 µs in release on the M1 Pro. At rest nothing. **Measured** (Asahi aarch64, release, tiny-skia, the user's config, 10 s idle after 10 s, two runs): binary 20,868,800 bytes, as on main at D-111. RSS 23.6 MB (23.5 on main at D-111). Idle CPU 1 tick over 10 s. CPU while morphing wasn't measured end to end. x86_64 wasn't built (no cross pkg-config here); nothing in this change is arch-specific.
