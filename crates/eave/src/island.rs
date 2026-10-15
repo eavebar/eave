@@ -33,7 +33,9 @@ use iced::{
     Color, Element, Event, Length, Padding, Point, Rectangle, Size, Transformation, Vector, window,
 };
 
+use crate::bezel::Sag;
 use crate::field::AnyFocused;
+use crate::hand::{self, rubber_band};
 use crate::jelly::{self, Jelly, Side};
 use crate::neck;
 use crate::spring::{FADE, HAND, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
@@ -41,7 +43,6 @@ use crate::squircle::{self, CornerShape, squircle_corners, warp};
 use crate::squish::{self, Squish};
 use crate::theme::{self, Palette};
 use crate::wall::{self, Walls};
-use crate::zones::Sag;
 
 pub struct Island<'a, M> {
     /// Each item's key, which follows it when items before it come or go.
@@ -1493,9 +1494,7 @@ impl Motion {
             return Vector::ZERO;
         };
         let distance = at.distance(shape.position() + grab);
-        let near = (1.0 - distance / theme::DRAG_REACH).clamp(0.0, 1.0);
-        let near = near * near * near * (near * (6.0 * near - 15.0) + 10.0);
-        let near = near * (1.0 - theme::DRAG_FOLLOW);
+        let near = hand::near(distance) * (1.0 - theme::DRAG_FOLLOW);
         Vector::new(self.x.value * near, self.y.value * near)
     }
 
@@ -1553,16 +1552,6 @@ fn slots(widths: &[f32], groups: &[Option<&str>]) -> Vec<f32> {
 /// reaction's size (`REACT_SIZE`).
 fn react(peak: f32) -> f32 {
     REACT.kick(peak * theme::REACT_SIZE)
-}
-
-/// Moves almost one to one at first, then gives less and less, approaching `limit` without ever
-/// reaching it.
-fn rubber_band(distance: f32, limit: f32) -> f32 {
-    if limit <= 0.0 {
-        return 0.0;
-    }
-    let pulled = distance.abs() * theme::DRAG_RESISTANCE;
-    (limit * (1.0 - 1.0 / (1.0 + pulled / limit))).copysign(distance)
 }
 
 /// Where a popover goes: as tall as the panel and never narrower than the island, with its top

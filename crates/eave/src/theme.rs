@@ -208,6 +208,11 @@ pub const EDGE_PULL: f32 = 4.0;
 pub const EDGE_PULL_WIDTH: f32 = 48.0;
 pub const EDGE_DENT: f32 = 3.0;
 pub const EDGE_DENT_WIDTH: f32 = 140.0;
+/// Without a notch, a click this wide in the middle of the top, above the islands, brings the
+/// dormer out, as one on the notch does (D-106).
+pub const EDGE_CLICK_WIDTH: f32 = 240.0;
+/// How far a press may move before it's a drag, not a click, in logical pixels.
+pub const CLICK_SLOP: f32 = 4.0;
 /// The furthest the outline reaches out of the island: it stays inside `EDGE_GAP` above and at
 /// the sides, and `DRAG_ROOM` below.
 pub const NUDGE_BUMP_ROOM: f32 = 4.0;

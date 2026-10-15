@@ -3,6 +3,7 @@
 mod alternate;
 mod app;
 mod apps;
+mod bezel;
 mod calibrate;
 mod clip;
 mod code;
@@ -17,6 +18,7 @@ mod ease;
 mod field;
 mod glide;
 mod gulp;
+mod hand;
 mod handover;
 mod highlight;
 mod icon;
