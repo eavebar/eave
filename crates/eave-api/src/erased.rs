@@ -26,6 +26,11 @@ impl AnyMessage {
         }
     }
 
+    /// The message, if it's an `M`, without taking it.
+    pub fn downcast_ref<M: Any>(&self) -> Option<&M> {
+        self.value.downcast_ref::<M>()
+    }
+
     pub fn downcast<M: Any + Clone + Send + Sync>(self) -> Option<M> {
         let value = self.value.downcast::<M>().ok()?;
         Some(Arc::try_unwrap(value).unwrap_or_else(|shared| (*shared).clone()))

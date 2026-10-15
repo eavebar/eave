@@ -1317,6 +1317,103 @@ impl<M> Node<M> {
         })
     }
 
+    /// Puts what `fill` gives for each [`bay`] in its place: in a row or column, its nodes take
+    /// the bay's place among the others, and none leave no gap; anywhere else, they go in a
+    /// column. `fill` gets each bay's name and subject.
+    #[doc(hidden)]
+    pub fn fill_bays(&mut self, fill: &mut dyn FnMut(&str, &str) -> Vec<Node<M>>) {
+        if let Kind::Bay { name, subject } = &self.0 {
+            let mut nodes = fill(name, subject);
+            *self = match nodes.len() {
+                0 => empty(),
+                1 => nodes.remove(0),
+                _ => column(nodes),
+            };
+            return;
+        }
+        let one = |node: &mut Node<M>, fill: &mut dyn FnMut(&str, &str) -> Vec<Node<M>>| {
+            node.fill_bays(fill)
+        };
+        let all = |nodes: &mut Vec<Node<M>>, fill: &mut dyn FnMut(&str, &str) -> Vec<Node<M>>| {
+            for mut node in std::mem::take(nodes) {
+                match &node.0 {
+                    Kind::Bay { name, subject } => nodes.extend(fill(name, subject)),
+                    _ => {
+                        node.fill_bays(fill);
+                        nodes.push(node);
+                    }
+                }
+            }
+        };
+        match &mut self.0 {
+            Kind::Alternate {
+                options: children, ..
+            }
+            | Kind::Row(children)
+            | Kind::Column(children)
+            | Kind::Grid {
+                cells: children, ..
+            }
+            | Kind::List(children)
+            | Kind::Timeline(children) => all(children, fill),
+            Kind::Step {
+                leading, content, ..
+            } => {
+                leading.iter_mut().for_each(|child| one(child, fill));
+                one(content, fill);
+            }
+            Kind::Cover {
+                fallback: content, ..
+            }
+            | Kind::Button { content, .. }
+            | Kind::Gulp(content)
+            | Kind::Center(content)
+            | Kind::Display(content)
+            | Kind::Mark(content)
+            | Kind::Counted { content, .. }
+            | Kind::Scroll { content, .. }
+            | Kind::Detail { value: content, .. } => one(content, fill),
+            Kind::ListItem {
+                leading, trailing, ..
+            }
+            | Kind::Header {
+                leading, trailing, ..
+            } => leading
+                .iter_mut()
+                .chain(trailing.iter_mut())
+                .for_each(|child| one(child, fill)),
+            Kind::Section { trailing, .. }
+            | Kind::TextInput { trailing, .. }
+            | Kind::TextArea { trailing, .. } => {
+                trailing.iter_mut().for_each(|child| one(child, fill))
+            }
+            Kind::Tabs(pages) => pages.iter_mut().for_each(|(_, page)| one(page, fill)),
+            Kind::Switcher { options, .. } => {
+                options.iter_mut().for_each(|(child, _)| one(child, fill))
+            }
+            Kind::Label { .. }
+            | Kind::Heading { .. }
+            | Kind::Icon { .. }
+            | Kind::AppIcon { .. }
+            | Kind::Image { .. }
+            | Kind::Sprite { .. }
+            | Kind::Counter { .. }
+            | Kind::Separator
+            | Kind::Empty
+            | Kind::Fill
+            | Kind::Slider { .. }
+            | Kind::Toggle { .. }
+            | Kind::Meter { .. }
+            | Kind::Badge { .. }
+            | Kind::Keys { .. }
+            | Kind::Markdown { .. }
+            | Kind::Literal { .. }
+            | Kind::Divider { .. }
+            | Kind::Diff { .. }
+            | Kind::Bay { .. } => {}
+        }
+    }
+
     #[doc(hidden)]
     pub fn into_kind(self) -> Kind<M> {
         self.0
@@ -2596,5 +2693,34 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn bays_take_what_fills_them_or_leave_no_gap() {
+        let mut node: Node<u8> = column([
+            label("a"),
+            bay("player", "spotify"),
+            bay("other", "x"),
+            center(bay("player", "y")),
+        ]);
+        let mut asked = Vec::new();
+        node.fill_bays(&mut |name, subject| {
+            asked.push(format!("{name}:{subject}"));
+            match subject {
+                "spotify" => vec![label("b"), label("c")],
+                "y" => vec![label("d"), label("e")],
+                _ => Vec::new(),
+            }
+        });
+        assert_eq!(asked, ["player:spotify", "other:x", "player:y"]);
+        let Kind::Column(children) = node.into_kind() else {
+            panic!("still a column");
+        };
+        // In a column, the nodes take the bay's place; elsewhere, they go in one.
+        assert_eq!(children.len(), 4);
+        assert!(matches!(children[2].kind(), Kind::Label { text, .. } if text == "c"));
+        assert!(
+            matches!(children[3].kind(), Kind::Center(inner) if matches!(inner.kind(), Kind::Column(two) if two.len() == 2))
+        );
     }
 }
