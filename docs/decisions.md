@@ -2258,3 +2258,17 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 - a dormer action with a key: works only while the dormer is open, not in the chat.
 
 **Cost:** one optional field on `Kind::Button`. eave-api grows, compatibly: plugins using it need the next eave-api.
+
+---
+
+## D-101: Pausing and muting show for a moment
+
+**Status:** accepted (2026-10-15).
+
+**What:** the media item hands its cover over to a pause or play sign for 1.5 s after the followed player pauses or plays, whether from the bar, its window, a headphone button or a media key. The volume item nudges down on mute, putting the struck speaker back at once if the percent was showing, and nudges up on unmute, showing the percent it came back to for 1.5 s. Both go off the service's own readings, so a click and a key look the same, and each change shows once: a change we made ourselves already shows, and its reading only confirms it.
+
+**Why:** a pause showed only as the item dimming, and a mute only as the stroke through a speaker that might be collapsed or on a hidden bar, so a key press had no answer you'd notice. The flash is the same move the volume and brightness already make for a level (`LEVEL_SHOWN`): an `alternate` that hands over and back, guarded by a change counter, with no new motion or primitive. The nudge brings a collapsed item or a hidden bar out to show it (D-58).
+
+**Alternatives:**
+- an OSD (still a maybe on the roadmap): a new surface and host feature for what the items can already say in place.
+- flashing the mute in the media item: the sound's state belongs to the volume item.
