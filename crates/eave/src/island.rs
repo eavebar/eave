@@ -39,7 +39,7 @@ use crate::field::AnyFocused;
 use crate::hand::{self, rubber_band};
 use crate::jelly::{self, Jelly, Side};
 use crate::pour;
-use crate::spring::{FADE, HAND, HANG, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
+use crate::spring::{FADE, HAND, LAG, LEAD, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
 use crate::squircle::{self, CornerShape, squircle_corners, warp};
 use crate::squish::{self, Squish};
 use crate::theme::{self, Palette};
@@ -336,9 +336,6 @@ struct State {
     shape_band: Cell<Option<f32>>,
     /// The color `shape` was filled with, so a new theme, or a drop turning, fills it again.
     shape_fill: Cell<Color>,
-    /// Whether `shape` was last built pouring out of the island, without its reach up or its
-    /// shoulders.
-    shape_poured: Cell<bool>,
     /// The popover panel's widget state, while there is one.
     panel: Option<Tree>,
     /// Whether the pointer is over the island, which shows the toggle.
@@ -520,6 +517,11 @@ struct Edges {
     goal: [f32; 4],
     /// Whether they land on it, stopping dead, rather than ease into it.
     hits: bool,
+    /// The tongue's edges (left, top, right, bottom), heading where the edges go (D-112). Only
+    /// the two along the way the shape changes most are its own; across, it's the shape's.
+    tongue: [Spring; 4],
+    /// Whether that way is up and down.
+    vertical: bool,
 }
 
 impl Edges {
@@ -531,6 +533,8 @@ impl Edges {
             bottom: Spring::new(rect.y + rect.height, MORPH),
             goal: edges_of(rect),
             hits: false,
+            tongue: edges_of(rect).map(|edge| Spring::new(edge, MORPH)),
+            vertical: true,
         }
     }
 
@@ -545,6 +549,28 @@ impl Edges {
         }
         self.goal = goal;
         self.hits = hits;
+        // The tongue runs along the way the shape changes most: its end going out runs on ahead,
+        // its end coming in hangs on behind. A shape sliding along as a whole has none.
+        let values = [self.left, self.top, self.right, self.bottom].map(|edge| edge.value);
+        let travel =
+            |a: usize, b: usize| (goal[a] - values[a]).abs().max((goal[b] - values[b]).abs());
+        self.vertical = travel(1, 3) >= travel(0, 2);
+        let along = if self.vertical { [1, 3] } else { [0, 2] };
+        let sliding =
+            (goal[along[0]] - values[along[0]]) * (goal[along[1]] - values[along[1]]) > 0.0;
+        for (i, spring) in self.tongue.iter_mut().enumerate() {
+            spring.target = goal[i];
+            let outward = if i < 2 {
+                goal[i] < values[i]
+            } else {
+                goal[i] > values[i]
+            };
+            spring.feel = match (along.contains(&i) && !sliding, outward) {
+                (false, _) => MORPH,
+                (true, true) => LEAD,
+                (true, false) => LAG,
+            };
+        }
         let [left, top, right, bottom] = self.springs_mut();
         let [goal_left, goal_top, goal_right, goal_bottom] = goal;
         // Up and down, a shape always lands against the top, which hangs from the bar.
@@ -577,7 +603,7 @@ impl Edges {
         let goal = self.goal;
         for (spring, goal) in self.springs_mut().into_iter().zip(goal) {
             if spring.target != goal && (spring.value - goal) * (spring.target - goal) >= 0.0 {
-                *spring = Spring::new(goal, spring.feel);
+                *spring = Spring::new(goal, MORPH);
             }
         }
     }
@@ -705,9 +731,6 @@ struct PopoverMotion {
     joined: bool,
     /// Whether an opening drop has bounced as it arrived.
     arrived: bool,
-    /// Whether it pours out of the island itself, which stays drawn while it does (D-112): not a
-    /// drop, nor out of another island.
-    from_island: bool,
     /// How much the island's items show: they make way for the panel.
     items: Spring,
     /// How much the panel's content shows.
@@ -736,7 +759,6 @@ impl Default for PopoverMotion {
             touched: None,
             joined: false,
             arrived: false,
-            from_island: false,
             items: Spring::new(1.0, FADE),
             panel: Spring::new(0.0, FADE),
             out: false,
@@ -1079,15 +1101,10 @@ impl Motion {
             self.told_gone = false;
         }
 
-        let from_island = self.drop.is_none() && self.home.is_none();
         let popover_state = &mut self.popover;
-        let mut pours = false;
         match popover {
             Some(open) => {
-                // Out of an island, it pours from a sliver under it (D-112).
-                pours = !popover_state.present && self.drop.is_none();
                 popover_state.present = true;
-                popover_state.from_island = from_island;
                 if open && !popover_state.open {
                     popover_state.closed = false;
                 }
@@ -1100,17 +1117,7 @@ impl Motion {
                 popover_state.open = open;
             }
             None if popover_state.present => {
-                // Taken away without closing: back to the island, wherever it got to. Poured all
-                // the way back in, it's the island again at once, and the island catches it.
-                if popover_state.from_island && self.edges.rect().height < 1.0 {
-                    self.edges = Edges::at(island);
-                    self.jelly = Jelly::default();
-                    let bump = jelly::poke(theme::POUR_CATCH);
-                    self.jelly.kick(Side::Bottom, |along| {
-                        -bump * 0.5 * (1.0 - (std::f32::consts::TAU * along).cos())
-                    });
-                }
-                let popover_state = &mut self.popover;
+                // Taken away without closing: back to the island, wherever it got to.
                 let (items, panel) = (popover_state.items, popover_state.panel);
                 *popover_state = PopoverMotion {
                     items: Spring {
@@ -1125,9 +1132,6 @@ impl Motion {
                 };
             }
             None => {}
-        }
-        if pours {
-            self.edges = Edges::at(self.home(island));
         }
         self.aim();
     }
@@ -1214,12 +1218,6 @@ impl Motion {
         let (stops_out, stops_back) = (slice(&out), slice(&back));
         let popover = &mut self.popover;
         let mut bounce = false;
-        // Pouring, the top hangs back behind the rest (D-112). A drop goes by its stops instead.
-        self.edges.top.feel = if popover.present && self.drop.is_none() {
-            HANG
-        } else {
-            MORPH
-        };
         match (popover.opening(), popover.rect) {
             (Some(panel), _) => {
                 // A drop swells where it comes out and falls as a ball first, heading on to each
@@ -1245,7 +1243,7 @@ impl Motion {
                 popover.out |= popover.panel.value >= 1.0 - REST_DISTANCE;
                 popover.panel.target = if popover.out
                     || popover.items.value < REST_DISTANCE
-                        && self.edges.progress(ball.unwrap_or(home), panel) > 0.5
+                        && self.edges.progress(ball.unwrap_or(island), panel) > 0.5
                 {
                     1.0
                 } else {
@@ -1294,9 +1292,8 @@ impl Motion {
         if self.popover.opening().is_some() {
             // Opening has nothing to hit (D-44).
             carry *= theme::OPEN_CARRY;
-        } else if self.popover.present {
-            // Going back, it vanishes as it lands: what it pours back into catches it instead
-            // (D-86, D-112).
+        } else if self.drop.is_some() && self.popover.present {
+            // A drop vanishes as it lands: it reacts as its neck catches it instead (D-86).
             carry = 0.0;
         }
         let bow = |along: f32| {
@@ -1310,9 +1307,7 @@ impl Motion {
                 .zip([Side::Left, Side::Top, Side::Right, Side::Bottom])
         {
             let change = now - was;
-            // Pouring, the top climbs up through what it comes out of: it hangs from the bar
-            // once there, and isn't pushed on the way (D-112).
-            if change == 0.0 || side == Side::Top && self.popover.present {
+            if change == 0.0 {
                 continue;
             }
             let speeding = was * now >= 0.0 && now.abs() > was.abs();
@@ -1325,45 +1320,16 @@ impl Motion {
         }
     }
 
-    /// Where the shape rests: the island, or with a popover, what it pours out of (D-112): for a
-    /// drop, a dot where it comes out, and otherwise a sliver under the island, or under the other
+    /// Where the shape rests: the island, or for a drop, a dot where it comes out, or the other
     /// island it comes out of, wherever that's drawn right now.
     fn home(&self, island: Rectangle) -> Rectangle {
-        let under = |rect: Rectangle| {
-            Rectangle::new(
-                Point::new(rect.x, rect.y + rect.height),
-                Size::new(rect.width, 0.0),
-            )
-        };
         match (self.drop, &self.home) {
             (Some(y), _) => {
                 Rectangle::new(Point::new(island.center_x(), y + self.sag()), Size::ZERO)
             }
-            (None, Some(home)) if self.popover.present => under(home.get()),
             (None, Some(home)) => home.get(),
-            (None, None) if self.popover.present => under(island),
             (None, None) => island,
         }
-    }
-
-    /// Whether a popover pours out of the island itself, which is drawn as well, under it.
-    fn pours_from_island(&self) -> bool {
-        self.popover.present && self.popover.from_island
-    }
-
-    /// How far a popover's top still is from where it goes, from 0 there to 1 where it pours out
-    /// from. 0 without a popover.
-    fn remaining(&self) -> f32 {
-        let (Some(island), Some(panel), true) =
-            (self.island, self.popover.rect, self.popover.present)
-        else {
-            return 0.0;
-        };
-        let way = self.home(island).y - panel.y;
-        if way.abs() < 1.0 {
-            return 0.0;
-        }
-        ((self.edges.top.value - panel.y) / way).clamp(0.0, 1.0)
     }
 
     /// Where a drop goes by between home and the panel, in the order it goes out (`out`) or back:
@@ -1436,29 +1402,83 @@ impl Motion {
         )
     }
 
-    /// The pour between what a popover comes out of and the drawn `shape` ([`pour::Pour`]),
-    /// while they're close enough to flow together (D-112). A drop's neck blends less while the
-    /// drop is smaller than its ball, so a dot coming out or going in has hardly any. Anything
-    /// else's blends less the closer its top is to where it goes, and not at all once there.
-    fn pour(&self, shape: Rectangle) -> Option<pour::Pour> {
-        let island = self.island?;
-        if let Some(y) = self.drop {
-            let size = (shape.width.min(shape.height) / theme::DROP_BALL).min(1.0);
-            let from = pour::From::Line {
-                y: y + self.sag(),
-                x: island.center_x(),
-                spread: theme::NECK_SPREAD,
-            };
-            let radius = self.drop_corner(shape).radius;
-            return pour::Pour::new(from, theme::NECK_BLEND * size, shape, radius);
-        }
-        if !self.popover.present {
+    /// The neck between where a drop comes out and the drawn `shape` ([`pour::Pour`]), while
+    /// they're close enough to flow together. It blends less while the drop is smaller than its
+    /// ball, so a dot coming out or going in has hardly any.
+    fn neck(&self, shape: Rectangle) -> Option<pour::Pour> {
+        let (Some(y), Some(island)) = (self.drop, self.island) else {
             return None;
-        }
-        let rect = self.home.as_ref().map_or(island, |home| home.get());
-        let radius = self.corner.radius;
+        };
+        let size = (shape.width.min(shape.height) / theme::DROP_BALL).min(1.0);
+        let from = pour::From::Line {
+            y: y + self.sag(),
+            x: island.center_x(),
+            spread: theme::NECK_SPREAD,
+        };
+        let radius = self.drop_corner(shape).radius;
+        pour::Pour::new(from, theme::NECK_BLEND * size, shape, radius)
+    }
+
+    /// The morph's tongue (D-112), drawn `shape`: where it runs on ahead of the shape or hangs on
+    /// behind it, `TONGUE_WIDTH` of it across, about its middle. `None` while it's inside it.
+    fn tongue(&self, shape: Rectangle) -> Option<Rectangle> {
+        let edges = &self.edges;
+        let [left, top, right, bottom] = edges.tongue.map(|spring| spring.value);
+        let rect = if edges.vertical {
+            let width = shape.width * theme::TONGUE_WIDTH;
+            Rectangle::new(
+                Point::new(shape.center_x() - width / 2.0, top),
+                Size::new(width, bottom - top),
+            )
+        } else {
+            let height = shape.height * theme::TONGUE_WIDTH;
+            Rectangle::new(
+                Point::new(left, shape.center_y() - height / 2.0),
+                Size::new(right - left, height),
+            )
+        };
+        let out = [
+            shape.x - rect.x,
+            shape.y - rect.y,
+            rect.x + rect.width - (shape.x + shape.width),
+            rect.y + rect.height - (shape.y + shape.height),
+        ]
+        .into_iter()
+        .fold(0.0_f32, f32::max);
+        (rect.width >= 1.0 && rect.height >= 1.0 && out >= 0.5).then_some(rect)
+    }
+
+    /// How round the tongue `rect` is at its corners: as the shape's, or all round if it's thinner.
+    fn tongue_corner(&self, rect: Rectangle, shape: Rectangle) -> CornerShape {
+        let corner = match self.drop {
+            Some(_) => self.drop_corner(shape),
+            None => self.corner,
+        };
+        CornerShape::new(
+            corner.radius.min(rect.width.min(rect.height) / 2.0),
+            corner.smoothing,
+        )
+    }
+
+    /// The fillet joining the tongue `rect` to the drawn `shape` ([`pour::Pour`]): wider the
+    /// further it's out of it, up to `POUR_BLEND`.
+    fn tongue_pour(&self, rect: Rectangle, shape: Rectangle) -> Option<pour::Pour> {
+        let out = [
+            shape.x - rect.x,
+            shape.y - rect.y,
+            rect.x + rect.width - (shape.x + shape.width),
+            rect.y + rect.height - (shape.y + shape.height),
+        ]
+        .into_iter()
+        .fold(0.0_f32, f32::max);
+        let blend = theme::POUR_BLEND * (out / theme::POUR_FULL).min(1.0);
+        let radius = self.tongue_corner(rect, shape).radius;
+        let body = match self.drop {
+            Some(_) => self.drop_corner(shape).radius,
+            None => self.corner.radius,
+        };
         let from = pour::From::Box { rect, radius };
-        pour::Pour::new(from, theme::POUR_BLEND * self.remaining(), shape, radius)
+        pour::Pour::new(from, blend, shape, body)
     }
 
     /// Bounces a drop down (`way` 1) or up (−1): it lurches that way and back, its sides lean into
@@ -1492,8 +1512,8 @@ impl Motion {
             return;
         }
         let joined = self
-            .pour(self.shape() + self.offset())
-            .is_some_and(|pour| pour.joined());
+            .neck(self.shape() + self.offset())
+            .is_some_and(|neck| neck.joined());
         let popover = &mut self.popover;
         let was = std::mem::replace(&mut popover.joined, joined);
         if was && !joined && popover.open {
@@ -1563,6 +1583,7 @@ impl Motion {
             &mut self.popover.panel,
         ]
         .into_iter()
+        .chain(&mut edges.tongue)
         .chain(
             self.items
                 .iter_mut()
@@ -1973,41 +1994,22 @@ fn draw_island<M>(
     if let Some(out) = shape_out {
         out.set(shape + motion.offset());
     }
-    // Pouring out of the island, the island stays where it is, and the shape comes out from
-    // under it (D-112). Once the shape's top is where it goes, it covers the island.
-    let home = motion
-        .island
-        .filter(|_| motion.pours_from_island() && motion.remaining() > 0.0);
-    let shown = shape.width >= 1.0 && shape.height >= 1.0;
-    if !shown && home.is_none() {
-        return;
-    }
     let fill = motion.fill(Palette::of(theme).island_bg);
-    if let Some(island) = home {
+    // The morph's tongue, under the shape, and the fillet joining them (D-112).
+    if motion.island.is_some()
+        && let Some(tongue) = motion.tongue(shape)
+    {
+        let corner = motion.tongue_corner(tongue, shape);
+        let pour = motion.tongue_pour(tongue, shape);
+        let reach = pour.as_ref().map_or(Size::ZERO, pour::Pour::reach);
+        let far = Size::new(
+            (tongue.x + tongue.width + 1.0).max(reach.width),
+            (tongue.y + tongue.height + 1.0).max(reach.height),
+        );
         renderer.with_translation(motion.offset(), |renderer| {
-            let outline = Rectangle::new(
-                Point::new(island.x - bleed.left, island.y - bleed.top),
-                Size::new(
-                    island.width + bleed.left + bleed.right,
-                    island.height + bleed.top + bleed.bottom,
-                ),
-            );
-            let sides = [bleed.left <= 0.0, bleed.right <= 0.0];
-            let hanging = shoulders
-                .filter(|_| bleed.top > 0.0)
-                .map(|shoulder| (band.unwrap_or(0.0), shoulder, sides));
-            let flare =
-                shoulders.map_or(0.0, |shoulder| shoulder.radius * (1.0 + shoulder.smoothing));
-            let pour = motion.pour(shape);
-            let reach = pour.as_ref().map_or(Size::ZERO, pour::Pour::reach);
-            // From the surface's origin, as far as the island and the pour reach.
-            let far = Size::new(
-                (outline.x + outline.width + flare + 1.0).max(reach.width),
-                (outline.y + outline.height + 1.0).max(reach.height),
-            );
             let mut frame = Frame::new(renderer, far);
             frame.fill(
-                &island_path(outline, own_corners, hanging, band.is_some()),
+                &squircle::squircle(tongue, corner.radius, corner.smoothing),
                 fill,
             );
             if let Some(path) = pour.and_then(|pour| pour.path()) {
@@ -2016,26 +2018,11 @@ fn draw_island<M>(
             renderer.draw_geometry(frame.into_geometry());
         });
     }
-    // Nor does it reach up past its top, or hang from the edge, until it covers the island: its
-    // top corners square off as it gets there instead.
-    let hangs = shoulders.is_some() && bleed.top > 0.0;
-    let squaring = home
-        .filter(|_| hangs)
-        .map(|_| (theme::POUR_SQUARE * motion.remaining()).min(1.0));
-    let (bleed, shoulders, band) = if home.is_some() {
-        (Padding { top: 0.0, ..bleed }, None, None)
-    } else {
-        (bleed, shoulders, band)
-    };
-    if state.shape_poured.replace(home.is_some()) != home.is_some() {
-        state.shape.clear();
+    if shape.width < 1.0 || shape.height < 1.0 {
+        return;
     }
     // Squeezed by the same few pixels whatever the island's width, about its center.
-    let scale = if shown {
-        (1.0 - 2.0 * motion.inset.value / shape.width).max(0.5)
-    } else {
-        1.0
-    };
+    let scale = (1.0 - 2.0 * motion.inset.value / shape.width).max(0.5);
     let center = shape.center();
     let transformation = Transformation::translate(center.x, center.y)
         * Transformation::scale(scale)
@@ -2056,15 +2043,10 @@ fn draw_island<M>(
         state.shape.clear();
     }
     // A drop is a ball, and rounds off into the panel's corners as it unfolds (D-86).
-    let mut corners = match motion.drop {
+    let corners = match motion.drop {
         Some(_) => [motion.drop_corner(shape); 4],
         None => own_corners,
     };
-    if let Some(round) = squaring {
-        for corner in &mut corners[..2] {
-            corner.radius *= round;
-        }
-    }
     if state.shape_corners.replace(corners) != corners {
         state.shape.clear();
     }
@@ -2085,76 +2067,76 @@ fn draw_island<M>(
             shape.height + bleed.top + bleed.bottom,
         ),
     );
-    // The pour, under the shape, flowing from what's above while they're close (D-112). Where
-    // the shape is drawn, moved, but not from where it flows, another island or the notch: that
-    // stays put. Out of the island, it was drawn with the island.
+    // The neck, under the drop, flowing from what's above while they're close. Where the drop is
+    // drawn, moved, but not from where it flows: that stays put.
     let moved = shape + motion.offset();
-    if let Some(pour) = motion.pour(moved).filter(|_| !motion.popover.from_island)
-        && let Some(path) = pour.path()
+    if let Some(neck) = motion.neck(moved)
+        && let Some(path) = neck.path()
     {
-        // From the surface's origin, as far as the pour reaches.
-        let mut frame = Frame::new(renderer, pour.reach());
+        // From the surface's origin, as far as the neck reaches.
+        let mut frame = Frame::new(renderer, neck.reach());
         frame.fill(&path, fill);
         renderer.draw_geometry(frame.into_geometry());
     }
     renderer.with_translation(motion.offset(), |renderer| {
         renderer.with_transformation(transformation, |renderer| {
             let frame_size = Size::new(body.width + 2.0 * room.x, body.height + 2.0 * room.y);
-            // Not while it has no size yet: the skin can't bend nothing.
-            let geometry = shown.then(|| {
-                state.shape.draw(renderer, frame_size, |frame| {
-                    let size = body.size();
-                    let outline = Rectangle::new(Point::ORIGIN + room, size);
-                    // The jelly bends the shape itself: its sides are where they'd be without the
-                    // reach, and what reaches past one moves with it.
-                    let jellied = Rectangle::new(
-                        Point::ORIGIN + room + Vector::new(bleed.left, bleed.top),
-                        shape.size(),
-                    );
-                    // Bent by the jelly and stretched by the drag while they move, both paths the
-                    // same way.
-                    let bend = |path: Path| {
-                        if bent {
-                            warp(&path, |at| {
-                                let at = motion.jelly.displace(jellied, at);
-                                if pulled {
-                                    at + motion.pull(jellied, at)
-                                } else {
-                                    at
-                                }
-                            })
-                        } else {
-                            path
-                        }
-                    };
-                    // Hanging from the top edge, where the surface starts, if it's attached there and
-                    // has shoulders: on the sides that don't reach on, and no further than the frame.
-                    // In a solid bar, flowing out of its bottom instead (D-89).
-                    let hanging = shoulders.filter(|_| bleed.top > 0.0).map(|shoulder| {
-                        let most = room.x / (1.0 + shoulder.smoothing);
-                        let shoulder =
-                            CornerShape::new(shoulder.radius.min(most), shoulder.smoothing);
-                        let sides = [bleed.left <= 0.0, bleed.right <= 0.0];
-                        (room.y + band.unwrap_or(0.0) - body.y, shoulder, sides)
-                    });
-                    // Black on black, with no border: what touches the notch or the bezel reads as
-                    // one shape with it (D-74).
-                    let outline = island_path(outline, corners, hanging, band.is_some());
-                    frame.fill(&bend(outline), fill);
-                })
-            });
-            if let Some(geometry) = geometry {
-                renderer.with_translation(Vector::new(body.x, body.y) - room, |renderer| {
-                    renderer.draw_geometry(geometry);
+            let geometry = state.shape.draw(renderer, frame_size, |frame| {
+                let size = body.size();
+                let outline = Rectangle::new(Point::ORIGIN + room, size);
+                // The jelly bends the shape itself: its sides are where they'd be without the
+                // reach, and what reaches past one moves with it.
+                let jellied = Rectangle::new(
+                    Point::ORIGIN + room + Vector::new(bleed.left, bleed.top),
+                    shape.size(),
+                );
+                // Bent by the jelly and stretched by the drag while they move, both paths the
+                // same way.
+                let bend = |path: Path| {
+                    if bent {
+                        warp(&path, |at| {
+                            let at = motion.jelly.displace(jellied, at);
+                            if pulled {
+                                at + motion.pull(jellied, at)
+                            } else {
+                                at
+                            }
+                        })
+                    } else {
+                        path
+                    }
+                };
+                // Hanging from the top edge, where the surface starts, if it's attached there and
+                // has shoulders: on the sides that don't reach on, and no further than the frame.
+                // In a solid bar, flowing out of its bottom instead (D-89).
+                let hanging = shoulders.filter(|_| bleed.top > 0.0).map(|shoulder| {
+                    let most = room.x / (1.0 + shoulder.smoothing);
+                    let shoulder = CornerShape::new(shoulder.radius.min(most), shoulder.smoothing);
+                    let sides = [bleed.left <= 0.0, bleed.right <= 0.0];
+                    (room.y + band.unwrap_or(0.0) - body.y, shoulder, sides)
                 });
-            }
+                // Black on black, with no border: what touches the notch or the bezel reads as
+                // one shape with it (D-74).
+                let outline = match hanging {
+                    Some((edge, shoulder, sides)) => Path::new(|builder| {
+                        if band.is_some() {
+                            squircle::flowing(builder, outline, corners, edge, shoulder, sides);
+                        } else {
+                            squircle::hanging(builder, outline, corners, edge, shoulder, sides);
+                        }
+                    }),
+                    None => squircle_corners(outline, corners),
+                };
+                frame.fill(&bend(outline), fill);
+            });
+            renderer.with_translation(Vector::new(body.x, body.y) - room, |renderer| {
+                renderer.draw_geometry(geometry);
+            });
 
             // Nothing pokes out of the shape while it changes, but where the drag stretched it.
-            // The island's items stay in the island while something pours out of it.
             let grab = shape.position() + motion.grab.unwrap_or_default();
             let clip = stretched(shape, motion.pull(shape, grab));
-            let layer = home.map_or(clip, |island| clip.union(&island));
-            renderer.with_layer(layer, |renderer| {
+            renderer.with_layer(clip, |renderer| {
                 for ((key, item), (tree, child)) in keys
                     .iter()
                     .zip(items)
@@ -2165,11 +2147,7 @@ fn draw_island<M>(
                     if shown < REST_DISTANCE {
                         continue;
                     }
-                    let (squished, down) = match home {
-                        Some(_) => (Squish::NONE, 0.0),
-                        None => motion.squish_at(shape, bounds.center_x() + dx),
-                    };
-                    let (clip, shape) = home.map_or((clip, shape), |island| (island, island));
+                    let (squished, down) = motion.squish_at(shape, bounds.center_x() + dx);
                     let kicked = motion.kicked(*key);
                     let squished = Squish {
                         x: squished.x * kicked.x,
@@ -2215,27 +2193,6 @@ fn draw_island<M>(
             });
         });
     });
-}
-
-/// An island's `outline`, reach and all, rounded by its `corners`. If it's `hanging` from an edge
-/// (where, its shoulders, and on which sides), it hangs from there, or in a solid bar (`band`)
-/// flows out of it (D-89).
-fn island_path(
-    outline: Rectangle,
-    corners: [CornerShape; 4],
-    hanging: Option<(f32, CornerShape, [bool; 2])>,
-    band: bool,
-) -> Path {
-    match hanging {
-        Some((edge, shoulder, sides)) => Path::new(|builder| {
-            if band {
-                squircle::flowing(builder, outline, corners, edge, shoulder, sides);
-            } else {
-                squircle::hanging(builder, outline, corners, edge, shoulder, sides);
-            }
-        }),
-        None => squircle_corners(outline, corners),
-    }
 }
 
 thread_local! {
@@ -2314,7 +2271,6 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             shape_corners: Cell::new([CornerShape::SQUARE; 4]),
             shape_band: Cell::new(None),
             shape_fill: Cell::new(Color::TRANSPARENT),
-            shape_poured: Cell::new(false),
             panel: None,
             hovered: false,
             toggle_shown: false,
@@ -3126,20 +3082,6 @@ mod tests {
         assert_eq!(motion.item(4, 50.0), (0.0, 1.0));
     }
 
-    /// The sliver under `island` a popover pours out of and back into (D-112).
-    fn under(island: Rectangle) -> Rectangle {
-        Rectangle::new(
-            Point::new(island.x, island.y + island.height),
-            Size::new(island.width, 0.0),
-        )
-    }
-
-    /// The host taking a closed popover away.
-    fn take_away(motion: &mut Motion) {
-        let island = motion.island.unwrap();
-        motion.arrange(island, [(1, 10.0)].into_iter(), None);
-    }
-
     fn popover(motion: &mut Motion, open: bool, panel: Rectangle, fits: bool) {
         let island = motion.island.unwrap();
         motion.arrange(island, [(1, 10.0)].into_iter(), Some(open));
@@ -3168,7 +3110,7 @@ mod tests {
         let (mut joined, mut let_go, mut content_early) = (false, false, false);
         let mut bounced: f32 = 0.0;
         run(&mut motion, Instant::now(), |motion| {
-            let neck = motion.pour(motion.shape() + motion.offset());
+            let neck = motion.neck(motion.shape() + motion.offset());
             let now = neck.as_ref().is_some_and(|neck| neck.joined());
             let_go |= joined && !now;
             joined |= now;
@@ -3185,7 +3127,7 @@ mod tests {
             0.0,
             "unfolded, it has the panel's corners"
         );
-        assert!(motion.pour(motion.shape()).is_none(), "far from the notch");
+        assert!(motion.neck(motion.shape()).is_none(), "far from the notch");
 
         popover(&mut motion, false, panel, true);
         let (mut round_again, mut caught) = (false, false);
@@ -3231,20 +3173,6 @@ mod tests {
         home.set(rect(500.0, 90.0));
         run(&mut motion, Instant::now(), |_| {});
         assert_eq!(motion.edges.rect(), rect(500.0, 90.0));
-        // With its popover, it pours out from under it (D-112).
-        let panel = middle(Size::new(300.0, 200.0), 1000.0, 1000.0, 40.0);
-        popover(&mut motion, true, panel, true);
-        assert_eq!(motion.edges.rect(), under(rect(500.0, 90.0)));
-        let dripping = Rectangle::new(Point::new(500.0, 40.0), Size::new(90.0, 10.0));
-        assert!(motion.pour(dripping).is_some_and(|pour| pour.joined()));
-        let frames = run(&mut motion, Instant::now(), |_| {});
-        assert!(frames < 120, "settles in {frames} frames");
-        assert_eq!(motion.shape(), panel);
-        popover(&mut motion, false, panel, true);
-        let frames = run(&mut motion, Instant::now(), |_| {});
-        assert!(frames < 120, "settles back in {frames} frames");
-        assert_eq!(motion.shape(), under(rect(500.0, 90.0)));
-        assert!(motion.closing_done());
     }
 
     #[test]
@@ -3261,7 +3189,71 @@ mod tests {
         sag.set(-3.0);
         assert_eq!(motion.home(rect(100.0, 120.0)).y, 37.0);
         let ball = Rectangle::new(Point::new(147.0, 38.0), Size::new(26.0, 26.0));
-        assert!(motion.pour(ball).is_some_and(|neck| neck.joined()));
+        assert!(motion.neck(ball).is_some_and(|neck| neck.joined()));
+    }
+
+    /// Plays the motion to rest, and returns how far the tongue got out of the shape each way
+    /// (left, top, right, bottom) at the most, checking its fillet is somewhere.
+    fn tongue_range(motion: &mut Motion) -> [f32; 4] {
+        let mut most = [0.0f32; 4];
+        run(motion, Instant::now(), |motion| {
+            let shape = motion.shape();
+            let Some(tongue) = motion.tongue(shape) else {
+                return;
+            };
+            let out = [
+                shape.x - tongue.x,
+                shape.y - tongue.y,
+                tongue.x + tongue.width - (shape.x + shape.width),
+                tongue.y + tongue.height - (shape.y + shape.height),
+            ];
+            for side in 0..4 {
+                most[side] = most[side].max(out[side]);
+            }
+            if let Some(path) = motion
+                .tongue_pour(tongue, shape)
+                .and_then(|pour| pour.path())
+            {
+                assert!(
+                    path.raw()
+                        .iter()
+                        .flat_map(|event| [event.from(), event.to()])
+                        .all(|at| at.x.is_finite() && at.y.is_finite()),
+                    "a finite fillet"
+                );
+            }
+        });
+        assert!(motion.tongue(motion.shape()).is_none(), "none at rest");
+        most
+    }
+
+    #[test]
+    fn a_popover_pours_down_ahead_and_drains_back_up_behind() {
+        let island = rect(100.0, 120.0);
+        let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 300.0));
+        let mut motion = settled(island, &[1]);
+        popover(&mut motion, true, panel, true);
+        let out = tongue_range(&mut motion);
+        assert!(out[3] > 20.0, "runs on ahead, down: {out:?}");
+        assert!(out[0] < 0.5 && out[1] < 0.5 && out[2] < 0.5, "only down: {out:?}");
+        assert_eq!(motion.shape(), panel);
+
+        popover(&mut motion, false, panel, true);
+        let out = tongue_range(&mut motion);
+        assert!(out[3] > 20.0, "hangs on behind, under: {out:?}");
+        assert_eq!(motion.shape(), island);
+    }
+
+    #[test]
+    fn an_island_growing_sideways_runs_on_that_way_and_one_sliding_doesnt() {
+        let island = rect(100.0, 120.0);
+        let mut motion = settled(island, &[1]);
+        motion.arrange(rect(100.0, 260.0), [(1, 110.0)].into_iter(), None);
+        let out = tongue_range(&mut motion);
+        assert!(out[2] > 10.0, "runs on ahead, right: {out:?}");
+        motion.arrange(rect(400.0, 260.0), [(1, 410.0)].into_iter(), None);
+        let out = tongue_range(&mut motion);
+        assert!(out.iter().all(|out| *out < 0.5), "sliding: {out:?}");
     }
 
     #[test]
@@ -3270,18 +3262,16 @@ mod tests {
         let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 200.0));
         let mut motion = settled(island, &[1]);
 
-        // The surface hasn't grown yet: nothing moves, under the island it pours out of.
+        // The surface hasn't grown yet: nothing moves.
         popover(&mut motion, true, panel, false);
         assert!(!motion.step(Instant::now()));
-        assert_eq!(motion.edges.rect(), under(island));
+        assert_eq!(motion.edges.rect(), island);
 
         popover(&mut motion, true, panel, true);
         let mut panel_before_halfway = false;
         let mut panel_while_items = false;
         let frames = run(&mut motion, Instant::now(), |motion| {
-            if motion.edges.progress(under(island), panel) < 0.4
-                && motion.popover.panel.value > 0.01
-            {
+            if motion.edges.progress(island, panel) < 0.4 && motion.popover.panel.value > 0.01 {
                 panel_before_halfway = true;
             }
             panel_while_items |= both_show(motion);
@@ -3303,64 +3293,11 @@ mod tests {
             }
         });
         assert!(!items_while_panel, "the items wait for the panel to go");
-        assert_eq!(motion.edges.rect(), under(island), "poured back in");
+        assert_eq!(motion.edges.rect(), island);
         assert_eq!(motion.item(1, 10.0), (0.0, 1.0));
         assert_eq!(motion.popover.panel.value, 0.0);
         assert!(motion.closing_done());
         assert!(!motion.closing_done(), "said only once");
-        take_away(&mut motion);
-        assert_eq!(motion.edges.rect(), island, "the island again at once");
-    }
-
-    #[test]
-    fn a_popover_pours_out_of_its_island_top_last() {
-        let island = rect(100.0, 120.0);
-        let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 200.0));
-        let mut motion = settled(island, &[1]);
-        popover(&mut motion, true, panel, true);
-        assert_eq!(
-            motion.edges.rect(),
-            under(island),
-            "a sliver under the island"
-        );
-        let (mut joined, mut hung) = (true, false);
-        run(&mut motion, Instant::now(), |motion| {
-            let shape = motion.shape();
-            if shape.height >= 1.0 {
-                joined &= motion.pour(shape).is_none_or(|pour| pour.joined());
-            }
-            // Whatever it is, its outline is somewhere: a NaN aborts the tessellator.
-            if let Some(path) = motion.pour(shape).and_then(|pour| pour.path()) {
-                assert!(
-                    path.raw()
-                        .iter()
-                        .flat_map(|event| [event.from(), event.to()])
-                        .all(|at| at.x.is_finite() && at.y.is_finite()),
-                    "a finite pour"
-                );
-            }
-            // The top hangs back: it's still in the island once the bottom's most of the way.
-            let bottom = (shape.y + shape.height - 38.0) / (206.0 - 38.0);
-            hung |= bottom > 0.6 && shape.y > island.y + 8.0;
-        });
-        assert!(joined, "it never comes apart from the island");
-        assert!(hung, "the top hangs back");
-        assert_eq!(motion.shape(), panel);
-        assert!(motion.pour(panel).is_none(), "nothing pours at rest");
-        assert!(!motion.step(Instant::now()), "nor asks for frames");
-
-        // Back in: it vanishes into the island, which catches it.
-        popover(&mut motion, false, panel, true);
-        run(&mut motion, Instant::now(), |_| {});
-        assert_eq!(motion.shape(), under(island));
-        take_away(&mut motion);
-        assert!(motion.jelly.value(Side::Bottom, 0.5) == 0.0);
-        motion.step(Instant::now());
-        motion.step(Instant::now() + FRAME);
-        assert!(
-            motion.jelly.value(Side::Bottom, 0.5) < 0.0,
-            "the island's bottom gives"
-        );
     }
 
     #[test]
@@ -3531,7 +3468,7 @@ mod tests {
     }
 
     #[test]
-    fn opening_stretches_the_way_it_grows() {
+    fn opening_stretches_the_way_it_grows_and_closing_splats_against_the_top() {
         // Only down: the bottom leads, and the sides draw in to keep its area.
         let island = rect(100.0, 120.0);
         let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(120.0, 300.0));
@@ -3552,10 +3489,16 @@ mod tests {
         );
         assert_eq!(motion.shape(), panel);
 
-        // Closing, it pours back into the island: nothing to land on (D-112).
+        // Closing: the bottom carries on up into the top as it lands, and the sides bulge.
         popover(&mut motion, false, panel, true);
-        skin_range(&mut motion);
-        assert_eq!(motion.shape(), under(island));
+        let (out, inward, flattest) = skin_range(&mut motion);
+        assert!(inward[3] < -1.0, "lands flatter: {inward:?}");
+        assert!(out[0] > 0.2 && out[2] > 0.2, "and wider: {out:?}");
+        assert!(
+            flattest.height < island.height + 12.0,
+            "flattest as it lands, not on the way: {flattest:?}"
+        );
+        assert_eq!(motion.shape(), island);
         assert!(motion.closing_done());
     }
 
@@ -3576,7 +3519,7 @@ mod tests {
     }
 
     #[test]
-    fn a_popover_growing_right_leans_right() {
+    fn a_popover_growing_right_leans_right_and_lands_from_the_right() {
         // As wide as the island going down, and 100 px wider to the right: the left side stays.
         let island = rect(100.0, 200.0);
         let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(300.0, 40.0));
@@ -3587,9 +3530,15 @@ mod tests {
         assert!(right > 0.5, "leans right: {out:?} {inward:?}");
         assert!(left < right / 3.0, "the left barely: {out:?} {inward:?}");
 
+        // Back right to left: the right side carries on in, past the island's.
         popover(&mut motion, false, panel, true);
-        skin_range(&mut motion);
-        assert_eq!(motion.shape(), under(island));
+        let (out, inward, _) = skin_range(&mut motion);
+        assert!(inward[2] < -1.0, "the right side carries on in: {inward:?}");
+        assert!(
+            out[0].max(-inward[0]) < -inward[2] / 2.0,
+            "the left moves less: {out:?} {inward:?}"
+        );
+        assert_eq!(motion.shape(), island);
     }
 
     #[test]
@@ -3645,19 +3594,16 @@ mod tests {
     }
 
     #[test]
-    fn a_panel_far_below_pours_out_lets_go_and_pours_back() {
+    fn the_dormer_drops_from_the_top_and_splats_back_into_it() {
         // A dot at the top center, and the dormer well down the screen.
         let island = rect(490.0, 20.0);
         let panel = centered(Size::new(480.0, 360.0), 1000.0, 200.0);
         let mut motion = settled(island, &[1]);
 
-        // Every edge eases in, so the frame glides down and never passes where it goes, and the
-        // pour lets go of it on the way.
+        // Every edge rides MORPH, so the frame glides down whole and never passes where it goes.
         popover(&mut motion, true, panel, true);
-        let mut let_go = false;
         let frames = run(&mut motion, Instant::now(), |motion| {
             let edges = motion.edges.rect();
-            let_go |= edges.height >= 1.0 && motion.pour(edges).is_none_or(|pour| !pour.joined());
             assert!(
                 edges.y >= island.y - 0.5 && edges.y <= panel.y + 0.5,
                 "the top glides"
@@ -3666,12 +3612,17 @@ mod tests {
             assert!(edges.width <= panel.width + 0.5);
         });
         assert!(frames < 90, "settles in {frames} frames");
-        assert!(let_go, "the pour lets go");
         assert_eq!(motion.shape(), panel);
 
+        // Back up: it lands flatter, against the top, and nowhere on the way.
         popover(&mut motion, false, panel, true);
-        skin_range(&mut motion);
-        assert_eq!(motion.shape(), under(island));
+        let (_, inward, flattest) = skin_range(&mut motion);
+        assert!(inward[3] < -0.5, "splats: {inward:?}");
+        assert!(
+            flattest.y - island.y < 2.0 && flattest.height < island.height * 1.5,
+            "splats as it lands, not on the way: {flattest:?}"
+        );
+        assert_eq!(motion.shape(), island);
         assert!(motion.closing_done());
     }
 

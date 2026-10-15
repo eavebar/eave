@@ -60,7 +60,7 @@ impl Pour {
                 }
                 let field = move |at: f32, y: f32| smooth_min(y - root, body(at, y), blend);
                 // From half a row under the root: on it, every row reaches all the way along it.
-                let rows = rows(root + ROW / 2.0, bottom, |y| {
+                let rows = each_row(root + ROW / 2.0, bottom, |y| {
                     span(|at| field(at, y), x, x - spread, x + spread)
                 });
                 Some(Self {
@@ -72,8 +72,12 @@ impl Pour {
                 rect,
                 radius: round,
             } => {
-                let under = rect.y + rect.height;
-                if rect.width <= 0.0 || rect.height <= 0.0 || shape.y - under > 2.0 * blend {
+                let (under, over) = (rect.y + rect.height, shape.y + shape.height);
+                if rect.width <= 0.0
+                    || rect.height <= 0.0
+                    || shape.y - under > 2.0 * blend
+                    || rect.y - over > 2.0 * blend
+                {
                     return None;
                 }
                 let middle = rect.center();
@@ -83,14 +87,11 @@ impl Pour {
                     let from = rounded_box(at - middle.x, y - middle.y, size, round);
                     smooth_min(from, body(at, y), blend)
                 };
-                // From a blend above where they meet, but not above the box: up there it's only
-                // the box, which is drawn anyway.
-                let top = rect.y.max(under.min(shape.y) - blend);
-                if bottom <= top {
-                    return None;
-                }
-                let low = rect.x.min(shape.x) - blend;
-                let high = (rect.x + rect.width).max(shape.x + shape.width) + blend;
+                // Kept inside what the two reach together: where their edges line up, the union
+                // would swell out past both. Their fillets are in the corners inside.
+                let (top, bottom) = (rect.y.min(shape.y), under.max(over));
+                let low = rect.x.min(shape.x);
+                let high = (rect.x + rect.width).max(shape.x + shape.width);
                 // Inside the box's middle, the shape's, or the box's as far as the shape reaches,
                 // whichever is furthest in on the row.
                 let inside = [
@@ -98,13 +99,29 @@ impl Pour {
                     center.x,
                     middle.x.clamp(shape.x, shape.x + shape.width),
                 ];
-                let rows = rows(top, bottom, |y| {
+                let span_at = |y: f32| {
                     let x = inside
                         .into_iter()
                         .min_by(|&a, &b| field(a, y).total_cmp(&field(b, y)))
                         .unwrap_or(middle.x);
                     span(|at| field(at, y), x, low, high)
-                });
+                };
+                // Only rows within a blend of one of their tops or bottoms can have a fillet. In
+                // between, each side is straight, so a line from one band's last row to the next
+                // one's first is exact.
+                let mut bands = [rect.y, under, shape.y, over]
+                    .map(|y| ((y - blend).max(top), (y + blend).min(bottom)));
+                bands.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut rows = Vec::new();
+                let mut done = f32::NEG_INFINITY;
+                for (start, end) in bands {
+                    let start = start.max(done);
+                    if end <= start {
+                        continue;
+                    }
+                    rows.extend(each_row(start, end, span_at));
+                    done = end + ROW;
+                }
                 Some(Self { seam: None, rows })
             }
         }
@@ -172,7 +189,7 @@ impl Pour {
 }
 
 /// The rows from `top` down to `bottom`, `ROW` apart, the last on `bottom`, each with its `span`.
-fn rows(
+fn each_row(
     top: f32,
     bottom: f32,
     span: impl Fn(f32) -> Option<(f32, f32)>,
@@ -295,14 +312,13 @@ mod tests {
         );
     }
 
-    /// An island 100 across and 30 tall, and a panel under it reaching 200 to its right, its top
-    /// `top` down.
-    fn island_and_panel(top: f32) -> (From, Rectangle) {
-        let island = Rectangle::new(Point::new(100.0, 0.0), Size::new(100.0, 30.0));
-        let panel = Rectangle::new(Point::new(100.0, top), Size::new(300.0, 200.0));
+    /// A panel 300 by 200, and a tongue 100 across running `past` on below it, from its top.
+    fn tongue(past: f32) -> (From, Rectangle) {
+        let panel = Rectangle::new(Point::new(100.0, 0.0), Size::new(300.0, 200.0));
+        let tongue = Rectangle::new(Point::new(200.0, 0.0), Size::new(100.0, 200.0 + past));
         (
             From::Box {
-                rect: island,
+                rect: tongue,
                 radius: 15.0,
             },
             panel,
@@ -310,35 +326,39 @@ mod tests {
     }
 
     #[test]
-    fn a_panel_pours_out_of_its_island_to_one_side() {
-        let (from, panel) = island_and_panel(20.0);
+    fn a_tongue_flows_out_of_the_shape_in_a_fillet() {
+        let (from, panel) = tongue(60.0);
         let pour = Pour::new(from, 24.0, panel, 15.0).expect("joined");
         assert!(pour.joined());
-        // Where they meet, the fillet reaches out past the island's left and right, and the panel
-        // to the right reaches much further that way.
-        let (y, span) = pour.rows.iter().find(|(y, _)| *y >= 20.0).unwrap();
-        let (left, right) = span.unwrap();
-        assert!(left < 100.0 && right > 300.0, "at {y}: {left} to {right}");
-        assert!(
-            right - 150.0 > 2.0 * (150.0 - left),
-            "lopsided: {left} to {right}"
-        );
-        // Above, it's the island and the fillet off its sides, in one span a row.
-        let (_, above) = pour.rows.iter().find(|(y, _)| *y >= 10.0).unwrap();
-        let (left, right) = above.unwrap();
-        assert!(
-            left < 100.0 && right > 200.0 && right < 260.0,
-            "{left} to {right}"
-        );
+        let at = |y: f32| {
+            pour.rows
+                .iter()
+                .find(|(row, _)| *row >= y)
+                .and_then(|(_, span)| *span)
+                .unwrap()
+        };
+        // Just under the panel, the fillet reaches out past the tongue's sides.
+        let (left, right) = at(204.0);
+        assert!(left < 195.0 && right > 305.0, "{left} to {right}");
+        // Further down, it's the tongue.
+        let (left, right) = at(230.0);
+        assert!((left - 200.0).abs() < 1.0 && (right - 300.0).abs() < 1.0, "{left} to {right}");
+        // It never swells out past what they reach together, where their edges line up.
+        assert!(pour.rows.iter().all(|(y, span)| {
+            *y >= 0.0 && span.is_none_or(|(left, right)| left >= 100.0 && right <= 400.0)
+        }));
     }
 
     #[test]
-    fn a_panel_far_under_its_island_lets_go_and_none_without_blend() {
-        let (from, panel) = island_and_panel(30.0 + 2.0 * 24.0 + 1.0);
+    fn a_tongue_off_on_its_own_or_with_no_blend_has_none() {
+        let panel = Rectangle::new(Point::new(100.0, 0.0), Size::new(300.0, 200.0));
+        let far = Rectangle::new(Point::new(200.0, 249.0), Size::new(100.0, 50.0));
+        let from = From::Box {
+            rect: far,
+            radius: 15.0,
+        };
         assert!(Pour::new(from, 24.0, panel, 15.0).is_none());
-        let (from, panel) = island_and_panel(30.0 + 24.0);
-        assert!(!Pour::new(from, 24.0, panel, 15.0).unwrap().joined());
-        let (from, panel) = island_and_panel(20.0);
+        let (from, panel) = tongue(60.0);
         assert!(Pour::new(from, 0.0, panel, 15.0).is_none());
     }
 
