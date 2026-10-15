@@ -43,6 +43,8 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 
 Every item from here on is a plugin, written against `eave-api` like a third-party one. Anything a built-in widget needs goes into the API or the kit, not into a private shortcut.
 
+- [ ] **Glass** ([D-111](decisions.md)). It works with the hypr-eave plugin: eave_glass_v1 both ways, region-exact keying, light islands, `eave-build` building the plugin, a nested smoke test. Still to do: the user's sign-off on the look, popovers following the backdrop, an animated light/dark switch, a build on x86_64, and the upstream asks that would remove its private accesses.
+
 ## Known issues
 
 - [ ] **New images on the GPU may wait for another redraw.** iced_wgpu 0.14 uploads a new `image::Handle` (covers, app icons, sprite frames) on a worker thread. When it's done, the worker asks for a redraw with `window::Action::RedrawAll`, but iced_layershell 0.19 ignores that action (the `_ => {}` arm in `run_action`, `multi_window.rs`). The image then shows only at the next frame something else asks for. `image::allocate` doesn't help on its own: its callback also waits for a rendered frame. In the bar, animations usually hide this. `eave calibrate` works around it by asking for frames while a pattern is on its way ([D-71](decisions.md)). The fix: handle `RedrawAll` (and `RelayoutAll`) in iced_layershell upstream, or in a patched copy under `vendor/` like softbuffer ([D-25](decisions.md)). Then drop the calibrator's workaround.

@@ -240,6 +240,36 @@ bind = SUPER, M, event, eave-action volume mute
 
 `eave popover <widget>` and `eave action <widget> <id>` do the same from a script or any other shortcut tool. `<widget>` is the name in `widget = "…"`, without its owner (`claude` for `fran/eave-claude`). The built-in widgets' action ids are listed in [plugins.md](plugins.md#action-ids).
 
+## Glass
+
+The islands can be liquid glass: what's behind them shows through, frosted and bent at their edges ([D-111](decisions.md)). That takes `hypr-eave`, a Hyprland plugin in this repository. `eave-build` builds it against the Hyprland you have whenever glass is on (the default) and Hyprland's headers are installed (`pkg-config hyprland`; on Arch they come with the `hyprland` package). It installs it as `~/.local/share/eave/hypr-eave.so`. Load it from Hyprland's config:
+
+```lua
+-- hyprland.lua (Hyprland 0.56+)
+hl.plugin.load(os.getenv("HOME") .. "/.local/share/eave/hypr-eave.so")
+```
+
+Without it, the bar looks as it always has. A plugin only loads into the Hyprland it was built for. After updating Hyprland, run `eave-build`, then restart Hyprland. A rebuilt plugin also takes effect only when Hyprland restarts: loading the same path again gets the code already in memory.
+
+Over something bright, an island turns light so its text stays readable. The notch, the grown edge, islands attached to an edge and a solid bar stay black: they stand for the screen's border. Tune it, or turn it off, in config.toml:
+
+```toml
+[glass]
+enabled = true     # false: the bar as without the plugin
+band = 12          # how far in from the edge it bends, logical px
+strength = 22      # how far what's behind moves at the edge
+chroma = 0.18      # red and blue bending apart
+rim = 0.7          # the lit edge
+frost = 2          # 0 is clear glass
+depth = 3          # 1 to 6: how far the frost reaches
+tint = 0.35        # 0 to 1: how much it takes the color behind it
+ink = "readable"   # "own", "invert" or "readable": grey text and symbols over glass
+contrast = 4.5     # with "readable": the contrast ratio it reaches
+ink-blur = 12      # how wide an area the ink's color is chosen over
+```
+
+To turn it off for every client at once: `plugin:hypreave:enabled = false` in Hyprland's config. `hyprctl hypreave` shows what the plugin knows: the surfaces with glass, their regions and look, its reports and buffers.
+
 ## Notifications
 
 With `widget = "eaveshell/eave-notifications"` in config.toml, eave is your notification daemon ([D-48](decisions.md), [D-50](decisions.md)). Only one program can be. If mako, dunst or swaync is already running, eave waits in line and takes over as soon as it quits. Until then, the bell is dimmed and the popover says which daemon has them. To switch, stop starting the other daemon (remove its `exec-once`, or `systemctl --user disable --now mako`), then quit it.
