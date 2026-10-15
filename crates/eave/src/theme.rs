@@ -118,6 +118,13 @@ pub const NUDGE_KICK: f32 = 2.5;
 /// How much a kicked item squishes per pixel it's out: narrower by this share, taller by the
 /// bulge of it. About 7 % narrower at the furthest.
 pub const NUDGE_KICK_SQUISH: f32 = 0.03;
+/// How close an island comes to the screen's edges, in logical pixels, however it's pushed,
+/// dragged or jellied (D-104): they're walls. A push that gets there bounces back off with
+/// `WALL_BOUNCE` of its speed, and the side that hit squashes in by `WALL_SQUASH` of it, bulging
+/// the sides next to it.
+pub const WALL_GAP: f32 = 2.0;
+pub const WALL_BOUNCE: f32 = 0.5;
+pub const WALL_SQUASH: f32 = 0.3;
 /// How long the squash of an island showing or hiding its collapsible items lasts: a nudge's
 /// motion, slowed down to this.
 pub const COLLAPSE_SQUASH: Duration = Duration::from_millis(450);

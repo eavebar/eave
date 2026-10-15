@@ -40,6 +40,7 @@ use crate::spring::{FADE, HAND, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
 use crate::squircle::{self, CornerShape, squircle_corners, warp};
 use crate::squish::{self, Squish};
 use crate::theme::{self, Palette};
+use crate::wall::{self, Walls};
 use crate::zones::Sag;
 
 pub struct Island<'a, M> {
@@ -79,6 +80,8 @@ pub struct Island<'a, M> {
     height: f32,
     /// Where it puts its shape as it's drawn, if given: for another island to come out of it.
     shape: Option<Shape>,
+    /// The screen's edges it keeps clear of, if any (D-104).
+    walls: Option<Walls>,
 }
 
 /// An island's shape as it was last drawn, in surface coordinates: a popover it's turning into
@@ -180,7 +183,14 @@ impl<'a, M> Island<'a, M> {
             shows: Padding::ZERO,
             height: theme::ISLAND_HEIGHT as f32,
             shape: None,
+            walls: None,
         }
+    }
+
+    /// Keeps `WALL_GAP` from these edges of the screen, and bounces off them (D-104).
+    pub fn walls(mut self, walls: Walls) -> Self {
+        self.walls = Some(walls);
+        self
     }
 
     /// Puts its shape here every time it's drawn.
@@ -358,6 +368,12 @@ struct Motion {
     jelly: Jelly,
     /// The shelves an up or down nudge holds out of the top and the bottom (D-105).
     shelves: [ShelfMotion; 2],
+    /// The screen's edges it keeps clear of, how wide the surface is, and its corners (D-104).
+    walls: Option<(Walls, f32, [CornerShape; 4])>,
+    /// How far it can go up, right, down and left from where it rests before it's too close to
+    /// a wall, and what that was worked out for: where it rests and its walls.
+    rooms: [f32; 4],
+    rooms_for: Option<(Rectangle, Walls, f32, [CornerShape; 4])>,
     /// How much slower than usual the last nudge plays: the push springs and the jelly run on
     /// time divided by it. 1 unless the nudge said how long it should last.
     pace: f32,
@@ -402,6 +418,9 @@ impl Default for Motion {
             push_y: Spring::new(0.0, REACT),
             jelly: Jelly::default(),
             shelves: [ShelfMotion::default(); 2],
+            walls: None,
+            rooms: [f32::INFINITY; 4],
+            rooms_for: None,
             pace: 1.0,
             stretch_x: Spring::new(0.0, REACT),
             stretch_y: Spring::new(0.0, REACT),
@@ -621,13 +640,132 @@ impl Motion {
         self.inset.target = theme::PRESS_INSET;
     }
 
-    /// Pulls toward the pointer, harder to move the further it goes.
+    /// Pulls toward the pointer, harder to move the further it goes, and never into a wall.
     fn drag(&mut self, to: Point) {
         let Some(from) = self.press else {
             return;
         };
-        self.x.target = rubber_band(to.x - from.x, theme::DRAG_LIMIT_X);
-        self.y.target = rubber_band(to.y - from.y, theme::DRAG_LIMIT_Y);
+        let [up, right, _, left] = self.room();
+        let (dx, dy) = (to.x - from.x, to.y - from.y);
+        let across = if dx > 0.0 { right } else { left };
+        let down = if dy < 0.0 { up } else { f32::INFINITY };
+        self.x.target = rubber_band(dx, theme::DRAG_LIMIT_X.min(across));
+        self.y.target = rubber_band(dy, theme::DRAG_LIMIT_Y.min(down));
+    }
+
+    /// Takes in the screen's edges it keeps clear of, on a surface `width` wide, and its corners.
+    /// How far it can go toward each is worked out again only when where it rests changes.
+    fn wall(&mut self, walls: Option<Walls>, width: f32, corners: [CornerShape; 4]) {
+        self.walls = walls.map(|walls| (walls, width, corners));
+        let (Some(walls), Some(island)) = (walls, self.island) else {
+            self.rooms = [f32::INFINITY; 4];
+            self.rooms_for = None;
+            return;
+        };
+        let key = (island, walls, width, corners);
+        if self.rooms_for != Some(key) {
+            self.rooms = wall::rooms(walls, width, island, corners);
+            self.rooms_for = Some(key);
+        }
+        self.jelly.room = self.jelly_room();
+    }
+
+    /// How far the drawn shape can go up, right, down and left before it's too close to a wall.
+    /// Round the screen's corners as it rests; a popover, which is somewhere else, only to the
+    /// straight walls.
+    fn room(&self) -> [f32; 4] {
+        let Some((walls, width, corners)) = self.walls else {
+            return [f32::INFINITY; 4];
+        };
+        let shape = self.shape();
+        if self.popover.present {
+            let walls = Walls {
+                corners: [CornerShape::SQUARE; 2],
+                ..walls
+            };
+            return wall::rooms(walls, width, shape, corners);
+        }
+        let Some(island) = self.island else {
+            return self.rooms;
+        };
+        // Resting rooms, from where the shape is on its way to the island.
+        let [up, right, down, left] = self.rooms;
+        [
+            up + (shape.y - island.y),
+            right + (island.x + island.width - shape.x - shape.width),
+            down,
+            left + (shape.x - island.x),
+        ]
+    }
+
+    /// How far the jelly can bend each side out: the frame's room, less what the walls take, less
+    /// how far the island has gone toward them.
+    fn jelly_room(&self) -> [f32; 4] {
+        let [up, right, down, left] = self.room();
+        let x = self.push_x.value + self.x.value;
+        let y = self.push_y.value + self.y.value;
+        [
+            up - (-y).max(0.0),
+            right - x.max(0.0),
+            down,
+            left - (-x).max(0.0),
+        ]
+        .map(|room| room.clamp(0.0, theme::NUDGE_BUMP_ROOM))
+    }
+
+    /// Keeps a push out of the walls: one that gets there bounces back, slower, and the side that
+    /// hit squashes in, bulging the sides next to it.
+    fn bounce_off_walls(&mut self) {
+        let [up, right, _, left] = self.room();
+        let drag = Vector::new(
+            self.x.value * theme::DRAG_FOLLOW,
+            self.y.value * theme::DRAG_FOLLOW,
+        );
+        // Ends of a side, eased: 0 in its first half, rising to 1 at its end.
+        let end = |along: f32| {
+            let t = (2.0 * along - 1.0).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        for (way, room, side) in [(1.0, right, Side::Right), (-1.0, left, Side::Left)] {
+            let past = way * (self.push_x.value + drag.x) - room;
+            if past <= 0.0 {
+                continue;
+            }
+            self.push_x.value -= way * past;
+            let speed = way * self.push_x.velocity;
+            if speed > 0.0 {
+                self.push_x.velocity = -way * speed * theme::WALL_BOUNCE;
+                let squash = speed * theme::WALL_SQUASH;
+                self.jelly.kick(side, |_| -squash);
+                // Along the top and bottom, the end that hit is the one it went toward.
+                let toward = move |along: f32| {
+                    if way > 0.0 {
+                        end(along)
+                    } else {
+                        end(1.0 - along)
+                    }
+                };
+                for edge in [Side::Top, Side::Bottom] {
+                    self.jelly
+                        .kick(edge, |along| theme::BULGE * squash * toward(along));
+                }
+            }
+        }
+        let past = -(self.push_y.value + drag.y) - up;
+        if past > 0.0 {
+            self.push_y.value += past;
+            let speed = -self.push_y.velocity;
+            if speed > 0.0 {
+                self.push_y.velocity = speed * theme::WALL_BOUNCE;
+                let squash = speed * theme::WALL_SQUASH;
+                self.jelly.kick(Side::Top, |_| -squash);
+                // Down the sides runs top to bottom: their top ends bulge.
+                for edge in [Side::Left, Side::Right] {
+                    self.jelly
+                        .kick(edge, |along| theme::BULGE * squash * end(1.0 - along));
+                }
+            }
+        }
     }
 
     fn release(&mut self) {
@@ -1216,8 +1354,10 @@ impl Motion {
         for spring in self.paced() {
             spring.advance(paced);
         }
+        self.bounce_off_walls();
         self.lean_with_push(paced);
         self.jelly.advance(paced);
+        self.jelly.room = self.jelly_room();
         // The fades wait on how far the shape has come.
         self.aim();
         self.watch_neck();
@@ -1418,6 +1558,9 @@ fn react(peak: f32) -> f32 {
 /// Moves almost one to one at first, then gives less and less, approaching `limit` without ever
 /// reaching it.
 fn rubber_band(distance: f32, limit: f32) -> f32 {
+    if limit <= 0.0 {
+        return 0.0;
+    }
     let pulled = distance.abs() * theme::DRAG_RESISTANCE;
     (limit * (1.0 - 1.0 / (1.0 + pulled / limit))).copysign(distance)
 }
@@ -2107,6 +2250,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             positions,
             self.popover.as_ref().map(|popover| popover.open),
         );
+        motion.wall(self.walls, viewport.width, self.corners);
         motion.nudges(
             self.nudges.iter().copied(),
             |key| {
@@ -3196,7 +3340,10 @@ mod tests {
         assert_eq!(shelf.at(end - 1.0), 0.0);
         assert!(slope(end + 0.02).abs() < 0.01, "it leaves the edge flat");
         assert!(slope(99.98).abs() < 0.01, "and meets its top flat");
-        assert!(slope(100.0 - theme::NUDGE_SHOULDER / 2.0) > 0.05, "rising between");
+        assert!(
+            slope(100.0 - theme::NUDGE_SHOULDER / 2.0) > 0.05,
+            "rising between"
+        );
         assert_eq!(shelf.at(115.0), 2.0);
     }
 
@@ -3343,11 +3490,61 @@ mod tests {
         assert_eq!(motion.items[1].kick.velocity, 0.0);
     }
 
+    fn walls() -> Walls {
+        Walls {
+            top: Some(0.0),
+            left: true,
+            right: true,
+            corners: [CornerShape::SQUARE; 2],
+        }
+    }
+
+    #[test]
+    fn a_push_into_a_wall_bounces_off_it_and_keeps_the_gap() {
+        // 4 px from the right edge of a 1000 px surface: the push would take it 2 px from it.
+        let mut motion = settled(rect(796.0, 200.0), &[1, 2]);
+        motion.wall(Some(walls()), 1000.0, [CornerShape::SQUARE; 4]);
+        let room = 4.0 - theme::WALL_GAP;
+        motion.nudges([(1, (1, Nudge::Up))], span, Instant::now());
+        motion.nudges([(2, (2, Nudge::Right))], span, Instant::now());
+        let (mut furthest, mut squashed): (f32, f32) = (0.0, 0.0);
+        run(&mut motion, Instant::now(), |motion| {
+            furthest = furthest.max(motion.offset().x);
+            squashed = squashed.min(motion.jelly.value(Side::Right, 0.5));
+            // Bulging out of the side never reaches past the wall either.
+            assert!(motion.jelly.room[1] <= room - motion.offset().x.max(0.0) + 1e-3);
+        });
+        assert!(furthest <= room + 1e-3, "kept the gap: {furthest}");
+        assert!(furthest > room - 0.1, "got there: {furthest}");
+        assert!(squashed < -0.1, "and squashed against it: {squashed}");
+        assert_eq!(motion.offset(), Vector::ZERO);
+    }
+
+    #[test]
+    fn a_drag_into_a_wall_stops_short_of_it() {
+        let mut motion = settled(rect(6.0, 200.0), &[1]);
+        motion.wall(Some(walls()), 1000.0, [CornerShape::SQUARE; 4]);
+        motion.press(Point::new(20.0, 20.0));
+        motion.drag(Point::new(-200.0, -200.0));
+        run(&mut motion, Instant::now(), |motion| {
+            let pulled = motion.offset() + motion.pull(motion.shape(), Point::new(20.0, 20.0));
+            assert!(pulled.x >= -(6.0 - theme::WALL_GAP), "{pulled:?}");
+            assert!(pulled.y >= -(6.0 - theme::WALL_GAP), "{pulled:?}");
+        });
+        // Away from the walls, as far as ever.
+        motion.drag(Point::new(220.0, 20.0));
+        assert!(motion.x.target > 0.9 * theme::DRAG_LIMIT_X);
+    }
+
     #[test]
     fn a_held_island_lets_nudges_pass() {
         let mut motion = nudged(&[]);
         motion.press(Point::new(10.0, 10.0));
-        motion.nudges([(1, (2, Nudge::Left)), (2, (3, Nudge::Up))], span, Instant::now());
+        motion.nudges(
+            [(1, (2, Nudge::Left)), (2, (3, Nudge::Up))],
+            span,
+            Instant::now(),
+        );
         assert_eq!(motion.push_x.velocity, 0.0);
         assert!(motion.jelly.at_rest());
         assert_eq!(motion.seen, Some(3));

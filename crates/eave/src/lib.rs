@@ -44,6 +44,7 @@ mod text_area;
 mod theme;
 mod timeline;
 mod toggle;
+mod wall;
 mod watch;
 mod zones;
 

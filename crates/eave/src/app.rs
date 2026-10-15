@@ -36,6 +36,7 @@ use crate::shortcut;
 use crate::slot::Slot;
 use crate::squircle::CornerShape;
 use crate::theme::{Palette, Scheme};
+use crate::wall::Walls;
 use crate::zones::{self, Zones};
 use crate::{icon, kit, theme as style, watch};
 
@@ -2192,7 +2193,14 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                     .band(band)
                     .corners(bar.screen.island_corners(Place::default()))
                     .height(bar.screen.island_height())
-                    .shape(bar.shape(island)),
+                    .shape(bar.shape(island))
+                    // The screen's edges are walls, but where it's attached (D-104).
+                    .walls(Walls {
+                        top: (!attach.top && band.is_none()).then_some(bar.screen.grow),
+                        left: !attach.left,
+                        right: !attach.right,
+                        corners: [bar.screen.corners[0], bar.screen.corners[1]],
+                    }),
                 attach,
             ))
         };
