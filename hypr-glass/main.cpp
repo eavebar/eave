@@ -41,7 +41,7 @@ static struct {
     float strength = 14.F;  // the most a pixel's lookup moves, at the very edge
     float chroma   = 0.12F; // spread between red and blue lookups, as a fraction of the bend
     float rim      = 0.35F; // brightness of the lit edge
-    float frost    = 1.5F;  // radius of a light blur inside the glass (0 = clear)
+    float frost    = 1.5F;  // spread of each blur step (0 = clear glass)
     int   pid      = 0;     // only this eave's layers (0 = every eave)
     int   skip     = 0;     // for measuring: 1 skips the copy, 2 the refraction
 } g_params;
@@ -52,7 +52,8 @@ static struct {
 } g_hooks;
 
 struct SMonitorGlass {
-    SP<IFramebuffer> backdrop;
+    SP<IFramebuffer> backdrop;   // the frame around the glass, full size
+    SP<IFramebuffer> half, quarter; // blurred down from it, for frost
 };
 static std::unordered_map<Monitor::CMonitor*, SMonitorGlass> g_fbs;
 
@@ -129,7 +130,7 @@ static void timePoll() {
 }
 
 static std::string timingStats() {
-    static const char* NAMES[] = {"copy", "mask", "refract", "frame", "sync"};
+    static const char* NAMES[] = {"copy", "frost", "refract", "frame", "sync"};
     std::string        out     = std::format("monitor frames {}, {} redrew glass, {:.0f} glass px per redraw\n", g_timing.rendered, g_timing.glassed,
                                              g_timing.glassed ? g_timing.pixels / g_timing.glassed : 0.0);
     for (int i = 0; i < T_LAST; i++) {
@@ -148,7 +149,7 @@ static std::string timingStats() {
 // needs its own sampler type.
 struct SProgram {
     GLuint id = 0;
-    GLint  backdrop, mask, fbSize, bdOrigin, bdSize, surf, fade, band, strength, chroma, rim, frost, rect;
+    GLint  backdrop, mask, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, rect;
 };
 static SProgram g_progs[2]; // [0] sampler2D, [1] samplerExternalOES
 static GLuint   g_vao = 0, g_vbo = 0;
@@ -174,14 +175,13 @@ uniform sampler2D backdrop;
 uniform SAMPLER mask;
 uniform vec2 fbSize;
 uniform vec2 bdOrigin;  // where the copy starts in the frame, px
-uniform vec2 bdSize;    // the copy's texture size, px
+uniform vec2 bdScale;   // frame px from bdOrigin -> uv in the backdrop texture
 uniform vec4 surf;      // the layer, px
 uniform float fade;     // the layer's fade-in or -out
 uniform float band;     // px
 uniform float strength; // px
 uniform float chroma;
 uniform float rim;
-uniform float frost;    // px
 out vec4 fragColor;
 
 const float THRESHOLD = 0.08; // the islands are translucent: any alpha above this is glass
@@ -193,19 +193,8 @@ float cover(vec2 px) {
     return clamp(texture(mask, uv).a * fade / THRESHOLD, 0.0, 1.0);
 }
 
-vec3 tap(vec2 px) {
-    return texture(backdrop, (px - bdOrigin) / bdSize).rgb;
-}
-
 vec3 look(vec2 px) {
-    if (frost <= 0.0)
-        return tap(px);
-    vec3 c = tap(px) * 0.25;
-    c += tap(px + vec2( frost,  frost)) * 0.1875;
-    c += tap(px + vec2(-frost,  frost)) * 0.1875;
-    c += tap(px + vec2( frost, -frost)) * 0.1875;
-    c += tap(px + vec2(-frost, -frost)) * 0.1875;
-    return c;
+    return texture(backdrop, (px - bdOrigin) * bdScale).rgb;
 }
 
 void main() {
@@ -266,6 +255,105 @@ void main() {
 }
 )#";
 
+// Frost: a dual Kawase blur. Two steps down to a quarter, one back up to a half, each with
+// linear filtering doing half the work, so it's smooth where single taps at a distance were
+// grainy, and it runs on a sixteenth of the pixels.
+static const char* PASS_VERT = R"#(#version 300 es
+precision highp float;
+uniform vec2 srcScale; // the part of the source texture that holds content, as uv
+layout(location = 0) in vec2 pos;
+out vec2 uv;
+void main() {
+    uv = pos * srcScale;
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+}
+)#";
+
+static const char* DOWN_FRAG = R"#(#version 300 es
+precision highp float;
+uniform sampler2D src;
+uniform vec2 srcScale;
+uniform vec2 texel; // one source texel, uv
+uniform float offset;
+in vec2 uv;
+out vec4 fragColor;
+vec4 at(vec2 u) { return texture(src, clamp(u, texel * 0.5, srcScale - texel * 0.5)); }
+void main() {
+    vec2 h = texel * 0.5 * offset;
+    vec4 c = at(uv) * 4.0;
+    c += at(uv - h);
+    c += at(uv + h);
+    c += at(uv + vec2(h.x, -h.y));
+    c += at(uv - vec2(h.x, -h.y));
+    fragColor = c / 8.0;
+}
+)#";
+
+static const char* UP_FRAG = R"#(#version 300 es
+precision highp float;
+uniform sampler2D src;
+uniform vec2 srcScale;
+uniform vec2 texel;
+uniform float offset;
+in vec2 uv;
+out vec4 fragColor;
+vec4 at(vec2 u) { return texture(src, clamp(u, texel * 0.5, srcScale - texel * 0.5)); }
+void main() {
+    vec2 h = texel * 0.5 * offset;
+    vec4 c = at(uv + vec2(-h.x * 2.0, 0.0));
+    c += at(uv + vec2(-h.x, h.y)) * 2.0;
+    c += at(uv + vec2(0.0, h.y * 2.0));
+    c += at(uv + vec2(h.x, h.y)) * 2.0;
+    c += at(uv + vec2(h.x * 2.0, 0.0));
+    c += at(uv + vec2(h.x, -h.y)) * 2.0;
+    c += at(uv + vec2(0.0, -h.y * 2.0));
+    c += at(uv + vec2(-h.x, -h.y)) * 2.0;
+    fragColor = c / 12.0;
+}
+)#";
+
+struct SPassProgram {
+    GLuint id = 0;
+    GLint  src, srcScale, texel, offset;
+};
+static SPassProgram g_down, g_up;
+
+static GLuint compile(GLenum type, const std::string& src);
+
+static GLuint link(GLuint vs, GLuint fs) {
+    if (!vs || !fs)
+        return 0;
+    GLuint id = glCreateProgram();
+    glAttachShader(id, vs);
+    glAttachShader(id, fs);
+    glLinkProgram(id);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    GLint ok = 0;
+    glGetProgramiv(id, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[2048];
+        glGetProgramInfoLog(id, sizeof(log), nullptr, log);
+        Log::logger->log(Log::ERR, "[eave-glass] link: {}", log);
+        glDeleteProgram(id);
+        return 0;
+    }
+    return id;
+}
+
+static bool ensurePass(SPassProgram& p, const char* frag) {
+    if (p.id)
+        return true;
+    p.id = link(compile(GL_VERTEX_SHADER, PASS_VERT), compile(GL_FRAGMENT_SHADER, frag));
+    if (!p.id)
+        return false;
+    p.src      = glGetUniformLocation(p.id, "src");
+    p.srcScale = glGetUniformLocation(p.id, "srcScale");
+    p.texel    = glGetUniformLocation(p.id, "texel");
+    p.offset   = glGetUniformLocation(p.id, "offset");
+    return true;
+}
+
 static GLuint compile(GLenum type, const std::string& src) {
     GLuint      s = glCreateShader(type);
     const char* c = src.c_str();
@@ -321,14 +409,13 @@ static SProgram* ensureProgram(bool external) {
     p.mask     = at("mask");
     p.fbSize   = at("fbSize");
     p.bdOrigin = at("bdOrigin");
-    p.bdSize   = at("bdSize");
+    p.bdScale  = at("bdScale");
     p.surf     = at("surf");
     p.fade     = at("fade");
     p.band     = at("band");
     p.strength = at("strength");
     p.chroma   = at("chroma");
     p.rim      = at("rim");
-    p.frost    = at("frost");
     p.rect     = at("rect");
 
     if (!g_vao) {
@@ -373,7 +460,7 @@ static CBox pixelBox(const PHLLS& ls, const PHLMONITOR& mon) {
 }
 
 static float reach(const PHLMONITOR& mon) {
-    return (g_params.strength * (1.F + g_params.chroma) + g_params.frost + 2.F) * mon->m_scale;
+    return (g_params.strength * (1.F + g_params.chroma) + g_params.frost * 4.F + 2.F) * mon->m_scale;
 }
 
 // The glass reads around every pixel it draws, so a change anywhere it can see redraws all of
@@ -408,7 +495,7 @@ static void onBegin() {
 // asked for and stays, so a popover sliding open doesn't reallocate every frame.
 static void ensureBackdrop(SP<IFramebuffer>& fb, const SP<IFramebuffer>& like, const Vector2D& need) {
     if (!fb)
-        fb = g_pHyprRenderer->createFB("eave-glass backdrop");
+        fb = g_pHyprRenderer->createFB("eave-glass");
     const Vector2D size = {std::max(need.x, fb->m_size.x), std::max(need.y, fb->m_size.y)};
     if (!fb->isAllocated() || fb->m_size.x < need.x || fb->m_size.y < need.y || fb->m_drmFormat != like->m_drmFormat) {
         fb->release();
@@ -469,17 +556,49 @@ static void drawGlass(const PHLMONITOR& mon) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, oldRead);
     timeEnd();
 
-    // 2. Refract it through each layer's own buffer, into the frame.
-    timeBegin(T_REFRACT);
+    // 2. Frost it: blur down to a quarter and back up to a half.
     GLint oldProg = 0, oldVao = 0, oldActive = 0, oldTex0 = 0;
     glGetIntegerv(GL_CURRENT_PROGRAM, &oldProg);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &oldVao);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &oldActive);
     glActiveTexture(GL_TEXTURE0);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTex0);
-    glBindTexture(GL_TEXTURE_2D, fbs.backdrop->getTexture()->m_texID);
 
-    target->bind();
+    SP<IFramebuffer> sampled = fbs.backdrop;
+    Vector2D         level   = {1, 1}; // the sampled texture's size over the frame's
+    const bool       frost   = g_params.frost > 0 && ensurePass(g_down, DOWN_FRAG) && ensurePass(g_up, UP_FRAG) && ensureProgram(false);
+    if (frost) {
+        timeBegin(T_MASK);
+        const Vector2D half = {std::ceil(copy.w / 2.0), std::ceil(copy.h / 2.0)}, quarter = {std::ceil(copy.w / 4.0), std::ceil(copy.h / 4.0)};
+        ensureBackdrop(fbs.half, target, half);
+        ensureBackdrop(fbs.quarter, target, quarter);
+        glBindVertexArray(g_vao);
+        g_pHyprOpenGL->blend(false);
+
+        auto pass = [&](SPassProgram& prog, const SP<IFramebuffer>& src, const Vector2D& srcContent, const SP<IFramebuffer>& dst, const Vector2D& dstContent) {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLFB(dst)->getFBID());
+            g_pHyprOpenGL->setViewport(0, 0, dstContent.x, dstContent.y); // through its cache, which bind() later trusts
+            glUseProgram(prog.id);
+            glBindTexture(GL_TEXTURE_2D, src->getTexture()->m_texID);
+            glUniform1i(prog.src, 0);
+            glUniform2f(prog.srcScale, srcContent.x / src->m_size.x, srcContent.y / src->m_size.y);
+            glUniform2f(prog.texel, 1.0 / src->m_size.x, 1.0 / src->m_size.y);
+            glUniform1f(prog.offset, g_params.frost);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        };
+        pass(g_down, fbs.backdrop, copy.size(), fbs.half, half);
+        pass(g_down, fbs.half, half, fbs.quarter, quarter);
+        pass(g_up, fbs.quarter, quarter, fbs.half, half);
+        sampled = fbs.half;
+        level   = {half.x / copy.w, half.y / copy.h};
+        timeEnd();
+    }
+
+    // 3. Refract it through each layer's own buffer, into the frame.
+    timeBegin(T_REFRACT);
+    glBindTexture(GL_TEXTURE_2D, sampled->getTexture()->m_texID);
+
+    target->bind(); // and its viewport
     g_pHyprOpenGL->blend(true);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glBindVertexArray(g_vao);
@@ -495,14 +614,13 @@ static void drawGlass(const PHLMONITOR& mon) {
         glUniform1i(prog->mask, 1);
         glUniform2f(prog->fbSize, fbSize.x, fbSize.y);
         glUniform2f(prog->bdOrigin, copy.x, copy.y);
-        glUniform2f(prog->bdSize, fbs.backdrop->m_size.x, fbs.backdrop->m_size.y);
+        glUniform2f(prog->bdScale, level.x / sampled->m_size.x, level.y / sampled->m_size.y);
         glUniform4f(prog->surf, job.box.x, job.box.y, job.box.w, job.box.h);
         glUniform1f(prog->fade, job.ls->alpha()[Desktop::View::LS_ALPHA_FADE]->value());
         glUniform1f(prog->band, g_params.band * S);
         glUniform1f(prog->strength, g_params.strength * S);
         glUniform1f(prog->chroma, g_params.chroma);
         glUniform1f(prog->rim, g_params.rim);
-        glUniform1f(prog->frost, g_params.frost * S);
         glUniform4f(prog->rect, job.box.x, job.box.y, job.box.w, job.box.h);
 
         glActiveTexture(GL_TEXTURE1);
@@ -563,7 +681,7 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     if (key == "buffers") {
         std::string out;
         for (auto const& [mon, fbs] : g_fbs) {
-            for (auto const& fb : {fbs.backdrop}) {
+            for (auto const& fb : {fbs.backdrop, fbs.half, fbs.quarter}) {
                 if (!fb)
                     continue;
                 const auto name = NFormatUtils::drmFormatName(fb->m_drmFormat);
@@ -650,6 +768,10 @@ APICALL EXPORT void PLUGIN_EXIT() {
     for (auto& p : g_progs) {
         if (p.id)
             glDeleteProgram(p.id);
+    }
+    for (auto* p : {&g_down, &g_up}) {
+        if (p->id)
+            glDeleteProgram(p->id);
     }
     if (g_vao)
         glDeleteVertexArrays(1, &g_vao);
