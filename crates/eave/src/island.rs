@@ -391,10 +391,11 @@ struct Motion {
     /// How much slower than usual the last nudge plays: the push springs and the jelly run on
     /// time divided by it. 1 unless the nudge said how long it should last.
     pace: f32,
-    /// How many pixels a popover's overshoot adds to the shape's width and height (negative is
-    /// narrower or shorter), on top of its edges.
-    stretch_x: Spring,
-    stretch_y: Spring,
+    /// How far the drawn shape's left, right and bottom give past its edges, in logical pixels
+    /// (D-110): kicked the way the edges were going as they set off or land.
+    give: Give,
+    /// How hard the edges have been going, which a landing spends.
+    landing: Landing,
     /// How far down the surface a popover that comes out as a drop does it ([`Popover::drop`]).
     drop: Option<f32>,
     /// The color of what it comes out of, if it isn't the island's ([`Popover::drop_color`]).
@@ -442,8 +443,8 @@ impl Default for Motion {
             rooms: [f32::INFINITY; 4],
             rooms_for: None,
             pace: 1.0,
-            stretch_x: Spring::new(0.0, REACT),
-            stretch_y: Spring::new(0.0, REACT),
+            give: Give::default(),
+            landing: Landing::default(),
             drop: None,
             drop_color: None,
             home: None,
@@ -537,6 +538,19 @@ impl Edges {
         self.bottom.target = rect.y + rect.height;
     }
 
+    fn springs(&self) -> [Spring; 4] {
+        [self.left, self.top, self.right, self.bottom]
+    }
+
+    /// Whether every edge will be within `SQUISH_LAND` of where it's going by the time a kick
+    /// given now peaks: a reaction kicked now peaks as the shape arrives.
+    fn arriving(&self) -> bool {
+        self.springs().into_iter().all(|mut ahead| {
+            ahead.advance(REACT.peak_time());
+            (ahead.target - ahead.value).abs() < theme::SQUISH_LAND
+        })
+    }
+
     fn rect(&self) -> Rectangle {
         let (left, top) = (self.left.value, self.top.value);
         Rectangle::new(
@@ -567,6 +581,51 @@ impl Edges {
             self.bottom.value,
         ];
         (1.0 - distance(to, now) / total).clamp(0.0, 1.0)
+    }
+}
+
+/// How far the drawn shape's sides give past its edges, each the way the screen goes (right and
+/// down are positive): left, right and bottom. The top stays where its edge is: on the bar, which
+/// is what the shape hangs from and lands against.
+#[derive(Debug, Clone, Copy)]
+struct Give {
+    left: Spring,
+    right: Spring,
+    bottom: Spring,
+}
+
+impl Default for Give {
+    fn default() -> Self {
+        Self {
+            left: Spring::new(0.0, REACT),
+            right: Spring::new(0.0, REACT),
+            bottom: Spring::new(0.0, REACT),
+        }
+    }
+}
+
+/// The fastest each edge has gone (left, top, right, bottom), signed, since it set off that way
+/// (D-110). The morph is nearly still by the time it arrives, so how fast it went at its fastest
+/// stands for how much it carries: about how far it came.
+#[derive(Debug, Default, Clone, Copy)]
+struct Landing {
+    peak: [f32; 4],
+}
+
+impl Landing {
+    /// Notes how fast the edges go now. One that turns back starts over the other way.
+    fn track(&mut self, edges: &Edges) {
+        for (peak, spring) in self.peak.iter_mut().zip(edges.springs()) {
+            let speed = spring.velocity;
+            if speed * *peak < 0.0 || speed.abs() > peak.abs() {
+                *peak = speed;
+            }
+        }
+    }
+
+    /// Whether any edge has gone fast enough to give when it lands.
+    fn carries(&self) -> bool {
+        self.peak.iter().any(|peak| peak.abs() > theme::LAND_MIN)
     }
 }
 
@@ -1131,22 +1190,28 @@ impl Motion {
         let (stops_out, stops_back) = (slice(&out), slice(&back));
         let popover = &mut self.popover;
         let mut bounce = false;
+        // Kicks for the give (left, right, bottom), in logical pixels at the furthest.
+        let mut give = None;
+        // Whether the shape lands now, with what its edges carry (D-110).
+        let mut lands = false;
         match (popover.opening(), popover.rect) {
             (Some(panel), _) => {
                 // A drop swells where it comes out and falls as a ball first, heading on to each
                 // next stop once it's most of the way to one.
                 let heading = pass(&self.edges, &mut popover.via, home, stops_out).unwrap_or(panel);
                 self.edges.aim(heading);
-                // Squeezed in from the sides as it sets off, then eases back: a squish on the
-                // way, nothing to hit when it gets there. A drop sets off from its ball.
+                // Stretched along the way it grows and squeezed across it as it sets off, then
+                // eases back: a squish on the way, nothing to hit when it gets there. A drop sets
+                // off from its ball, squeezed in from the sides.
                 if !popover.squished && heading == panel {
                     popover.squished = true;
-                    let squeeze = match ball {
-                        Some(_) => theme::DROP_SQUISH,
-                        None => theme::SQUISH_OPEN * panel.width,
-                    };
-                    self.stretch_x.velocity = -react(squeeze);
+                    give = Some(match ball {
+                        Some(_) => [theme::DROP_SQUISH / 2.0, -theme::DROP_SQUISH / 2.0, 0.0],
+                        None => stretch(&self.edges, panel),
+                    });
                 }
+                // Opening has nothing to land on: what it carries is spent getting there.
+                self.landing = Landing::default();
                 // A drop falls into place: it bounces as it gets there, like a workspace nudged.
                 let mut ahead = self.edges.bottom;
                 ahead.advance(REACT.peak_time());
@@ -1182,21 +1247,15 @@ impl Motion {
                     pass(&self.edges, &mut popover.via, panel, stops_back).unwrap_or(home)
                 };
                 self.edges.aim(heading);
-                // Splats against the top as it lands. Not while it's open and waiting for room.
-                // Where its bottom will be by the time a splat kicked now peaks.
-                let mut ahead = self.edges.bottom;
-                ahead.advance(REACT.peak_time());
-                let landing = ahead.value - (home.y + home.height);
-                if !popover.open
-                    && !popover.squished
-                    && heading == home
-                    && landing < theme::SQUISH_LAND
-                {
+                // Splats into the top as it lands, each side carrying on the way it was going.
+                // Not while it's open and waiting for room.
+                if !popover.open && !popover.squished && heading == home && self.edges.arriving() {
                     popover.squished = true;
                     // A drop vanishes as it lands: it reacted as its neck caught it instead.
                     if ball.is_none() {
-                        self.stretch_y.velocity = -react(theme::SPLAT_FLATTEN);
-                        self.stretch_x.velocity = react(theme::SPLAT_WIDEN);
+                        lands = true;
+                    } else {
+                        self.landing = Landing::default();
                     }
                 }
                 popover.panel.target = 0.0;
@@ -1212,11 +1271,40 @@ impl Motion {
                 self.edges.aim(home);
                 popover.items.target = 1.0;
                 popover.panel.target = 0.0;
+                // Any other change of shape lands the same way, once it's gone far enough.
+                lands = self.landing.carries() && self.edges.arriving();
             }
         }
         if bounce {
             self.bounce(1.0);
         }
+        if lands {
+            let [left, _, right, bottom] = std::mem::take(&mut self.landing).peak;
+            let carry = |speed: f32| {
+                if speed.abs() > theme::LAND_MIN {
+                    (speed * theme::LAND_CARRY).clamp(-theme::LAND_MAX, theme::LAND_MAX)
+                } else {
+                    0.0
+                }
+            };
+            give = Some([carry(left), carry(right), carry(bottom)]);
+        }
+        if let Some(peaks) = give {
+            self.kick_give(peaks);
+        }
+    }
+
+    /// Kicks the left, right and bottom give out `peaks` far, each way the screen goes. Going out
+    /// from the shape, each keeps inside its room: the surface ends `EDGE_GAP` away.
+    fn kick_give(&mut self, [left, right, bottom]: [f32; 3]) {
+        let [_, room_right, room_down, room_left] = self.room();
+        let within = |room: f32| (room / theme::REACT_SIZE).max(0.0);
+        let left = left.max(-within(room_left));
+        let right = right.min(within(room_right));
+        let bottom = bottom.min(within(room_down));
+        self.give.left.velocity = react(left);
+        self.give.right.velocity = react(right);
+        self.give.bottom.velocity = react(bottom);
     }
 
     /// Where the shape rests: the island, or for a drop, a dot where it comes out, or the other
@@ -1418,8 +1506,9 @@ impl Motion {
             &mut edges.bottom,
             &mut self.popover.items,
             &mut self.popover.panel,
-            &mut self.stretch_x,
-            &mut self.stretch_y,
+            &mut self.give.left,
+            &mut self.give.right,
+            &mut self.give.bottom,
         ]
         .into_iter()
         .chain(
@@ -1489,6 +1578,7 @@ impl Motion {
         for spring in self.springs() {
             spring.advance(elapsed);
         }
+        self.landing.track(&self.edges);
         let paced = elapsed / self.pace;
         for spring in self.paced() {
             spring.advance(paced);
@@ -1546,20 +1636,25 @@ impl Motion {
         false
     }
 
-    /// The shape as it's drawn: its edges, splatting. Stretching along one axis pulls the other
-    /// in. It stretches about its center across, and down from its top, which it hit.
+    /// The shape as it's drawn: its edges, with each side's give. Only the bottom's give bulges:
+    /// flattened up into the top, it spreads out evenly at both sides. The sides have nothing to
+    /// hit, so they carry on and come back without pushing the bottom. The top stays where its
+    /// edge is.
     fn shape(&self) -> Rectangle {
         let edges = self.edges.rect();
-        let (stretch_x, stretch_y) = (self.stretch_x.value, self.stretch_y.value);
-        if stretch_x == 0.0 && stretch_y == 0.0 {
+        let (left, right, bottom) = (
+            self.give.left.value,
+            self.give.right.value,
+            self.give.bottom.value,
+        );
+        if left == 0.0 && right == 0.0 && bottom == 0.0 {
             return edges;
         }
-        let width = (edges.width + stretch_x - theme::BULGE * stretch_y).max(0.0);
-        let height = (edges.height + stretch_y - theme::BULGE * stretch_x).max(0.0);
-        Rectangle::new(
-            Point::new(edges.center_x() - width / 2.0, edges.y),
-            Size::new(width, height),
-        )
+        let wider = -theme::BULGE * bottom / 2.0;
+        let x = edges.x + left - wider;
+        let width = (edges.width + right - left + 2.0 * wider).max(0.0);
+        let height = (edges.height + bottom).max(0.0);
+        Rectangle::new(Point::new(x, edges.y), Size::new(width, height))
     }
 
     /// How much the overshoot stretches the shape, across and up and down.
@@ -1690,6 +1785,28 @@ fn slots(widths: &[f32], groups: &[Option<&str>]) -> Vec<f32> {
 /// reaction's size (`REACT_SIZE`).
 fn react(peak: f32) -> f32 {
     REACT.kick(peak * theme::REACT_SIZE)
+}
+
+/// How an opening shape gives as it sets off from `edges` for `panel` (D-110): stretched along the
+/// way it has further to go and squeezed across it: the bottom by the bulge of how much wider it
+/// is. The left and the
+/// right share the change of width by how far each goes, so a panel that only grows to the right
+/// leans right. Left, right and bottom, in logical pixels at the furthest.
+fn stretch(edges: &Edges, panel: Rectangle) -> [f32; 3] {
+    let [left, top, right, bottom] = edges_of(panel);
+    let (left, right) = (
+        (left - edges.left.value).abs(),
+        (right - edges.right.value).abs(),
+    );
+    let across = left + right;
+    let down = (top - edges.top.value).abs() + (bottom - edges.bottom.value).abs();
+    let wider = (theme::OPEN_STRETCH * (across - down)).clamp(-theme::OPEN_MAX, theme::OPEN_MAX);
+    let left_share = if across < 1.0 { 0.5 } else { left / across };
+    [
+        -wider * left_share,
+        wider * (1.0 - left_share),
+        -theme::BULGE * wider,
+    ]
 }
 
 /// Where a popover goes: as tall as the panel and never narrower than the island, with its top
@@ -3188,35 +3305,33 @@ mod tests {
 
     #[test]
     fn opening_squishes_and_closing_splats_against_the_top() {
+        // Further down than across: squeezed in from the sides on the way, and taller.
         let island = rect(100.0, 120.0);
-        let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 200.0));
+        let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(120.0, 300.0));
         let mut motion = settled(island, &[1]);
         let gap = f32::from(theme::EDGE_GAP);
 
-        // Opening: squeezed in from the sides on the way, from its top, and no bump at the end.
+        // Opening: squeezed on the way, from its top, and no bump at the end.
         popover(&mut motion, true, panel, true);
         let mut squeezed = false;
         run(&mut motion, Instant::now(), |motion| {
             let (shape, edges) = (motion.shape(), motion.edges.rect());
             squeezed |= shape.width < edges.width - 4.0 && shape.height > edges.height;
             assert_eq!(shape.y, edges.y, "the top stays on the bar");
-            let squeeze = theme::SQUISH_OPEN * theme::REACT_SIZE * panel.width;
             assert!(
-                shape.width < edges.width + 1.0 + 1.3 * REACT.overshoot() * squeeze,
+                shape.width < edges.width + 1.0 + REACT.overshoot() * size(theme::OPEN_MAX),
                 "never swings wider than its feel's rebound"
             );
         });
         assert!(squeezed, "squished on the way");
         assert_eq!(motion.shape(), panel);
 
-        // Closing: the top stays on the bar; the bottom gives.
+        // Closing: the top stays on the bar; the bottom carries on into it.
         popover(&mut motion, false, panel, true);
         let (mut splat, mut spread) = (false, false);
         run(&mut motion, Instant::now(), |motion| {
             let (shape, edges) = (motion.shape(), motion.edges.rect());
-            // Most of it, at least: the shape is still arriving as it peaks.
-            splat |= shape.height < island.height - size(theme::SPLAT_FLATTEN) / 2.0
-                && shape.width > island.width + size(theme::SPLAT_WIDEN) / 2.0;
+            splat |= shape.height < island.height - 1.0 && shape.width > island.width + 0.5;
             assert_eq!(shape.y, edges.y, "the top stays put");
             assert!(
                 shape.width - edges.width < 2.0 * gap,
@@ -3225,13 +3340,75 @@ mod tests {
             // An item right of center moves right, and squishes wide and short.
             let at = Point::new(island.x + island.width * 0.75, island.center_y());
             let squish = motion.squish();
-            spread |= motion.follow(at).x > 0.5 && squish.x > 1.01 && squish.y < 0.99;
+            spread |= motion.follow(at).x > 0.1 && squish.x > 1.003 && squish.y < 0.97;
         });
         assert!(splat, "lands flatter and wider");
         assert!(spread, "the items spread and squish with it");
         assert_eq!(motion.squish(), Squish::NONE);
         assert_eq!(motion.shape(), island);
         assert!(motion.closing_done());
+    }
+
+    #[test]
+    fn a_wide_short_popover_opens_wider_and_flatter() {
+        let island = rect(300.0, 100.0);
+        let panel = Rectangle::new(Point::new(150.0, 6.0), Size::new(400.0, 60.0));
+        let mut motion = settled(island, &[1]);
+        popover(&mut motion, true, panel, true);
+        let mut wider = false;
+        run(&mut motion, Instant::now(), |motion| {
+            let (shape, edges) = (motion.shape(), motion.edges.rect());
+            wider |= shape.width > edges.width + 4.0 && shape.height < edges.height;
+        });
+        assert!(wider, "stretched along the way it grows");
+        assert_eq!(motion.shape(), panel);
+    }
+
+    #[test]
+    fn a_popover_growing_right_leans_right_and_lands_from_the_right() {
+        // As wide as the island going down, and 100 px wider to the right: the left side stays.
+        let island = rect(100.0, 200.0);
+        let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(300.0, 40.0));
+        let mut motion = settled(island, &[1]);
+        popover(&mut motion, true, panel, true);
+        let (mut left, mut right) = (0.0f32, 0.0f32);
+        run(&mut motion, Instant::now(), |motion| {
+            left = left.max(motion.give.left.value.abs());
+            right = right.max(motion.give.right.value.abs());
+        });
+        assert!(right > 2.0 && left < 0.1, "leans right: {left} {right}");
+
+        // Back right to left: the right side carries on left of the island's, the left stays.
+        popover(&mut motion, false, panel, true);
+        let (mut left, mut past) = (0.0f32, 0.0f32);
+        run(&mut motion, Instant::now(), |motion| {
+            let shape = motion.shape();
+            left = left.max((shape.x - island.x).abs());
+            past = past.max(island.x + island.width - (shape.x + shape.width));
+        });
+        assert!(past > 0.5, "the right side carries on in: {past}");
+        assert!(left < 0.5, "the left side barely moves: {left}");
+        assert_eq!(motion.shape(), island);
+    }
+
+    #[test]
+    fn an_island_that_changes_size_lands_with_what_it_carries() {
+        let island = rect(100.0, 200.0);
+        let gives = |motion: &mut Motion, to: Rectangle| {
+            motion.arrange(to, [(1, 110.0)].into_iter(), None);
+            let mut out = 0.0f32;
+            run(motion, Instant::now(), |motion| {
+                let (shape, edges) = (motion.shape(), motion.edges.rect());
+                out = out.max(shape.x + shape.width - (edges.x + edges.width));
+            });
+            assert_eq!(motion.shape(), to);
+            out
+        };
+        let mut motion = settled(island, &[1]);
+        let small = gives(&mut motion, rect(100.0, 205.0));
+        assert_eq!(small, 0.0, "a small change doesn't react");
+        let big = gives(&mut motion, rect(100.0, 285.0));
+        assert!(big > 0.5, "the side that grew carries on out: {big}");
     }
 
     #[test]

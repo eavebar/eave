@@ -162,15 +162,21 @@ pub const PUSH_WIGGLE: f32 = 1.2;
 pub const PUSH_BUILD: Duration = Duration::from_millis(250);
 pub const PUSH_FULL_SPEED: f32 = 600.0;
 pub const PUSH_MOVING: f32 = 20.0;
-/// How much an opening popover is squeezed in from the sides as it sets off, as a share of the
-/// panel's width (and taller, by the bulge), easing back as it grows.
-pub const SQUISH_OPEN: f32 = 0.055;
-/// How much a closing popover's island splats against the top, in logical pixels: flatter, and
-/// wider, before the bulge. Wider stays inside the `EDGE_GAP` from the screen's sides.
-pub const SPLAT_FLATTEN: f32 = 1.4;
-pub const SPLAT_WIDEN: f32 = 3.5;
-/// A closing popover splats as it lands, so the splat peaks as the shape arrives: when its bottom
-/// edge will be this close to its island's, in logical pixels, by the time REACT peaks.
+/// How an opening popover gives as it sets off (D-110): wider by this share of how much further
+/// it goes across than down (narrower when it goes further down), at most `OPEN_MAX` logical
+/// pixels, and the other way by the bulge. Easing back as it grows.
+pub const OPEN_STRETCH: f32 = 0.08;
+pub const OPEN_MAX: f32 = 12.0;
+/// How a shape lands (D-110), a closing popover or an island changing size: each side carries on
+/// the way it was going, `LAND_CARRY` logical pixels for each pixel per second it went at its
+/// fastest, at most `LAND_MAX`. The morph goes about 8.5 times as fast as how far it goes, so a
+/// side that came 200 px gives about 3.4 (before `REACT_SIZE`). A side slower than `LAND_MIN` (a
+/// dozen pixels) doesn't. Going out, a side stays inside the `EDGE_GAP` from the screen's sides.
+pub const LAND_CARRY: f32 = 0.002;
+pub const LAND_MAX: f32 = 4.0;
+pub const LAND_MIN: f32 = 100.0;
+/// A shape lands so its give peaks as it arrives: when every edge will be this close to where
+/// it's going, in logical pixels, by the time REACT peaks.
 pub const SQUISH_LAND: f32 = 1.0;
 
 // The dormer comes out of the notch (or the top edge) as a drop (D-86): a dot at its middle
