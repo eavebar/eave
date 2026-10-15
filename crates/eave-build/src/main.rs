@@ -472,8 +472,8 @@ fn update_self(
     Err(format!("running the new eave-build: {error}"))
 }
 
-/// `eave = "…"` and every `widget = "…"`, in bar order, then the dormer's. Malformed entries are
-/// left to the bar, which reports them.
+/// `eave = "…"` and every `widget = "…"`, in bar order, then the dormer's, each entry's parts
+/// after it (D-101). Malformed entries are left to the bar, which reports them.
 fn read_config(text: &str) -> Result<(Option<String>, Vec<String>)> {
     let table: toml::Table = text.parse().map_err(|e| format!("{e}"))?;
     let eave = match table.get("eave") {
@@ -485,7 +485,19 @@ fn read_config(text: &str) -> Result<(Option<String>, Vec<String>)> {
         .iter()
         .filter_map(|zone| table.get(*zone)?.as_array())
         .flatten()
-        .filter_map(|entry| Some(entry.get("widget")?.as_str()?.to_owned()))
+        .flat_map(|entry| {
+            let parts = entry.get("parts").and_then(toml::Value::as_array);
+            let parts = parts.into_iter().flatten().filter_map(|part| match part {
+                toml::Value::Table(part) => part.get("widget")?.as_str(),
+                part => part.as_str(),
+            });
+            entry
+                .get("widget")
+                .and_then(toml::Value::as_str)
+                .into_iter()
+                .chain(parts)
+                .map(str::to_owned)
+        })
         .collect();
     Ok((eave, widgets))
 }
@@ -1565,11 +1577,24 @@ mod tests {
             widget = "apps"
             [[left]]
             format = "no widget: the bar reports it"
+            [[right]]
+            widget = "media"
+            parts = ["someone/spotify", { widget = "someone/lyrics", lines = 2 }, 3]
             "#,
         )
         .unwrap();
         assert_eq!(eave.as_deref(), Some("~/code/eave"));
-        assert_eq!(widgets, ["someone/weather", "battery", "apps"]);
+        assert_eq!(
+            widgets,
+            [
+                "someone/weather",
+                "battery",
+                "media",
+                "someone/spotify",
+                "someone/lyrics",
+                "apps"
+            ]
+        );
     }
 
     /// A scratch directory holding `files` (path, contents), removed by the caller.
