@@ -139,9 +139,10 @@
       <description summary="how bright it is behind the surface">
         A grid of cells, cell logical pixels square, from the surface's top
         left, row by row: one byte each, how bright the frosted backdrop is
-        there (the luma of its encoded color), 0 to 255. Sent when it changes noticeably, at most
-        about ten times a second, and once more after it settles. An empty
-        grid (no cells) means there's nothing to report any more.
+        there (the luma of its encoded color), 0 to 255. Sent when the
+        average under a glass record moves noticeably, at most about ten
+        times a second, and once more after it settles. An empty grid (no
+        cells) means there's nothing to report any more.
       </description>
       <arg name="cell" type="uint"/>
       <arg name="cols" type="uint"/>
