@@ -162,7 +162,7 @@ struct Instance {
     /// While a collapsed item shows because its widget nudged: which reveal, numbered by
     /// [`Bar::reveals`].
     revealed: Option<u64>,
-    /// For a part (D-94): the instance whose bays it shows in. A part has no item and no popover
+    /// For a part (D-101): the instance whose bays it shows in. A part has no item and no popover
     /// of its own, and what it asks of them goes to its owner's.
     owner: Option<u64>,
 }
@@ -179,7 +179,7 @@ impl Instance {
 /// Messages for widgets whose popover just opened or started closing, by instance id.
 type Hooks = Vec<(u64, AnyMessage)>;
 
-/// A message from a part (D-94), in its owner's panel: the part's instance id, and what it sends.
+/// A message from a part (D-101), in its owner's panel: the part's instance id, and what it sends.
 #[derive(Debug, Clone)]
 struct Routed(u64, AnyMessage);
 
@@ -543,7 +543,7 @@ impl Bar {
 
     /// Starts loading the app icons that items and the open popover show and nobody has asked
     /// for yet. Only `changed`'s, if it's the one widget whose view may have changed: a widget's
-    /// view comes from its own state alone, and its parts' (D-94), which count as its own.
+    /// view comes from its own state alone, and its parts' (D-101), which count as its own.
     fn load_icons(&mut self, changed: Option<u64>) -> Vec<Task<Message>> {
         let mut wanted = Wanted::default();
         let read = self.panel_wanted.take();
@@ -667,7 +667,7 @@ impl Bar {
         self.instances.iter().find(|instance| instance.id == id)
     }
 
-    /// Puts `owner`'s parts in the bays of `node`, its popover or dialog, in config order (D-94).
+    /// Puts `owner`'s parts in the bays of `node`, its popover or dialog, in config order (D-101).
     /// Returns the messages the parts that show there want when it opens, and when it closes.
     fn fill_bays(&self, owner: u64, node: &mut ui::Node<AnyMessage>) -> (Hooks, Hooks) {
         let parts: Vec<&Instance> = self
@@ -1645,7 +1645,7 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             let dialog = effect.dialog_request();
             let (task, request, nudge) = effect.into_parts();
             // A part shows in its owner's popover and island, so what it asks of them is asked
-            // of its owner's (D-94).
+            // of its owner's (D-101).
             let shown = instance.owner.unwrap_or(id);
             if instance.owner.is_none() {
                 instance.has_popover = instance.widget.popover().is_some();
@@ -2242,7 +2242,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     // collapsed items to bring back.
     let island =
         |island: IslandId, align: Horizontal| -> Option<(Island<'_, Message>, config::Edges)> {
-            // Parts show in their owner's bays, not in the bar (D-94).
+            // Parts show in their owner's bays, not in the bar (D-101).
             let instances = || {
                 bar.instances
                     .iter()
@@ -4407,7 +4407,7 @@ mod tests {
         assert!(bar.dialog.is_none());
     }
 
-    /// An owner with two bays: one about Spotify, one about something else (D-94).
+    /// An owner with two bays: one about Spotify, one about something else (D-101).
     struct Owning;
 
     impl Widget for Owning {

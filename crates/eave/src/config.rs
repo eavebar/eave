@@ -14,7 +14,7 @@
 //!
 //! [[right]]
 //! widget = "media"
-//! parts = ["someone/spotify"]   # and this: widgets shown in its bays, not in the bar (D-94)
+//! parts = ["someone/spotify"]   # and this: widgets shown in its bays, not in the bar (D-101)
 //!
 //! [[right]]
 //! divider = true   # a line before the next item
@@ -123,7 +123,7 @@ pub struct Entry {
     /// The keys the user gives its shortcuts, by name (D-91).
     pub keys: shortcut::Keys,
     /// For a part (`parts = [...]` in another entry): that entry's index in `entries`. A part is
-    /// shown only in its owner's bays (D-94), never in a zone, so its other placement fields are
+    /// shown only in its owner's bays (D-101), never in a zone, so its other placement fields are
     /// its owner's and mean nothing.
     pub owner: Option<usize>,
     pub options: toml::Table,
@@ -696,7 +696,7 @@ pub fn parse(source: &str) -> Result<Config, toml::de::Error> {
 }
 
 /// `parts = ["someone/airpods", { widget = "someone/spotify", client_id = "…" }]`: widgets shown in
-/// this one's bays (D-94), each a reference or a table like a zone's entry. A part's table takes
+/// this one's bays (D-101), each a reference or a table like a zone's entry. A part's table takes
 /// its options and `keys`, and nothing else of the host's: it has no place in the bar.
 fn parts(
     value: toml::Value,

@@ -335,7 +335,7 @@ fn form_icon(form: Form) -> Icon {
 
 impl Volume {
     /// The output's or input's page: its mute button, slider and level, the `output` or `input`
-    /// bay about the device in use (D-94), then the devices to choose from when there's more than
+    /// bay about the device in use (D-101), then the devices to choose from when there's more than
     /// one, or the only one's name.
     fn group(&self, direction: Direction, device: &Device) -> ui::Node<Message> {
         let (devices, default, target, toggle) = match direction {

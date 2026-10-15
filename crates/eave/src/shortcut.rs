@@ -406,7 +406,7 @@ mod tests {
 
     #[test]
     fn each_row_takes_its_own_widgets_keys() {
-        // Rows that send 10 and up are a part's, with keys of its own (D-94).
+        // Rows that send 10 and up are a part's, with keys of its own (D-101).
         let row = |id, key, message| {
             ui::list_item("row")
                 .shortcut(id, shortcut(key))
