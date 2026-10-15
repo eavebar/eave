@@ -231,27 +231,39 @@ float luma(vec3 c) {
 // light over something bright). Most of what's a band away is the island's own color, not ink.
 float lightness;
 
-// `color`, made just light or just dark enough to stand `contrast` to one against `bg` (WCAG's
-// ratio of relative luminances): lighter if it's lighter than bg, darker if darker, unless only the
-// other way can get there. Lighter mixes toward white and darker scales toward black, in linear
-// light, so the hue stays. Every background allows a ratio of about 4.58 one way or the other.
-vec3 readable(vec3 color, vec3 bg) {
-    const vec3 W = vec3(0.2126, 0.7152, 0.0722);
+const vec3 W = vec3(0.2126, 0.7152, 0.0722); // relative luminance, of linear light
+
+// `color`, made just light (`lighter`) or just dark enough to stand `contrast` to one against
+// `bg` (WCAG's ratio of relative luminances). Lighter mixes toward white and darker scales toward
+// black, in linear light, so the hue stays. A color already past it is left alone.
+vec3 readable(vec3 color, vec3 bg, bool lighter) {
     vec3  c  = pow(color, vec3(2.2));
     float yb = dot(pow(bg, vec3(2.2)), W);
     float yc = dot(c, W);
     float up   = contrast * (yb + 0.05) - 0.05; // the darkest a lighter ink may be
     float down = (yb + 0.05) / contrast - 0.05; // the lightest a darker ink may be
-    bool  lighter = yc > yb;
-    if (lighter && up > 1.0)
-        lighter = false;
-    if (!lighter && down < 0.0)
-        lighter = true;
     if (lighter && yc < up)
         c += (vec3(1.0) - c) * clamp((up - yc) / max(1.0 - yc, 1e-4), 0.0, 1.0);
     else if (!lighter && yc > down)
         c *= max(down, 0.0) / max(yc, 1e-4);
     return pow(c, vec3(1.0 / 2.2));
+}
+
+// The glass, given way just enough that ink can reach `contrast` on it: no lighter than white ink
+// allows on a dark island, no darker than black ink allows on a light one. `y` is the luminance
+// that decides it (the wide blur's, so the glass dims and brightens smoothly), `c` what's moved.
+vec3 makeRoom(vec3 c, float y, bool lighterInk) {
+    vec3 l = pow(c, vec3(2.2));
+    if (lighterInk) {
+        float most = 1.05 / contrast - 0.05;
+        if (y > most)
+            l *= most / y;
+    } else {
+        float least = contrast * 0.05 - 0.05;
+        if (y < least)
+            l += (vec3(1.0) - l) * (least - y) / max(1.0 - y, 1e-4);
+    }
+    return pow(l, vec3(1.0 / 2.2));
 }
 
 // How much of the pixel at px is grey ink, rather than its island's color.
@@ -294,16 +306,26 @@ void put(vec3 glass, float a) {
     vec4 t = layer(gl_FragCoord.xy);
     vec3 ink = t.rgb / max(t.a, 1e-4);
     vec3[2] b = body(glass);
+    vec3[2] wb = body(wideLook(gl_FragCoord.xy));
+    vec3    behind = mix(wb[0], wb[1], lightness);
+    // Which way the ink goes is the island's: lighter on a dark one, darker on a light one (eave
+    // turns an island light, with hysteresis, over something bright). Never per pixel, so it can't
+    // flip partway through a letter; the glass gives way instead, so the ink can always reach it.
+    bool lighterInk = lightness < 0.5;
+    if (inkMode == 2) {
+        float y = dot(pow(behind, vec3(2.2)), W);
+        b[0]    = makeRoom(b[0], y, lighterInk);
+        b[1]    = makeRoom(b[1], y, lighterInk);
+        behind  = makeRoom(behind, y, lighterInk);
+    }
     vec3 col = mix(ink + (1.0 - ink) * b[0], ink * b[1], lightness);
     if (inkMode != 0) {
         // How much of the pixel is ink rather than island, for the grey ink only, so edges stay
         // smooth and colored content keeps its colors.
-        vec3[2] wb     = body(wideLook(gl_FragCoord.xy));
-        vec3    behind = mix(wb[0], wb[1], lightness);
-        float amount = inkAt(gl_FragCoord.xy);
-        float grey   = 1.0 - smoothstep(0.08, 0.25, max(ink.r, max(ink.g, ink.b)) - min(ink.r, min(ink.g, ink.b)));
+        float amount   = inkAt(gl_FragCoord.xy);
+        float grey     = 1.0 - smoothstep(0.08, 0.25, max(ink.r, max(ink.g, ink.b)) - min(ink.r, min(ink.g, ink.b)));
         vec3  opposite = vec3(1.0) - behind;
-        vec3  drawn    = mix(mix(b[0], b[1], lightness), inkMode == 1 ? opposite : readable(opposite, behind), amount);
+        vec3  drawn    = mix(mix(b[0], b[1], lightness), inkMode == 1 ? opposite : readable(opposite, behind, lighterInk), amount);
         col = mix(col, drawn, grey);
     }
     a *= fade;
