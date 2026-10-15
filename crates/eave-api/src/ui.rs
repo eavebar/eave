@@ -372,6 +372,11 @@ pub enum Kind<M> {
         title: String,
         lines: Vec<(Change, String)>,
     },
+    /// Where other widgets' parts go. The host fills it before drawing, so a renderer never sees one.
+    Bay {
+        name: String,
+        subject: String,
+    },
 }
 
 pub fn label<M>(text: impl Into<String>) -> Node<M> {
@@ -807,6 +812,19 @@ pub fn tabs<M>(pages: impl IntoIterator<Item = (impl Into<String>, Node<M>)>) ->
     ))
 }
 
+/// A place in a popover or dialog where other widgets can put something: the parts the user
+/// attached to this widget in config.toml, each asked with [`Widget::part`](crate::Widget::part).
+///
+/// `name` says where it is, and your README lists it, like action ids. `subject` says what it's
+/// about, as the service names it: an MPRIS bus name, a PulseAudio sink name. A part uses it to
+/// decide whether it has anything to show. A bay no part fills takes no room.
+pub fn bay<M>(name: impl Into<String>, subject: impl Into<String>) -> Node<M> {
+    Node(Kind::Bay {
+        name: name.into(),
+        subject: subject.into(),
+    })
+}
+
 impl<M> Node<M> {
     /// Sets the tone of this text, or of every text inside this node that has none yet.
     pub fn tone(mut self, tone: Tone) -> Self {
@@ -1056,6 +1074,7 @@ impl<M> Node<M> {
             Kind::Separator
             | Kind::Divider { .. }
             | Kind::Diff { .. }
+            | Kind::Bay { .. }
             | Kind::Empty
             | Kind::Section { .. }
             | Kind::Fill
@@ -1294,6 +1313,7 @@ impl<M> Node<M> {
                 content: Box::new(content.map(f)),
             },
             Kind::Diff { title, lines } => Kind::Diff { title, lines },
+            Kind::Bay { name, subject } => Kind::Bay { name, subject },
         })
     }
 
@@ -1460,6 +1480,88 @@ impl<M> Panel<M> {
     #[doc(hidden)]
     pub fn on_close_message(self) -> Option<M> {
         self.on_close
+    }
+}
+
+/// A [`bay`] being filled, as a part sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bay<'a> {
+    name: &'a str,
+    subject: &'a str,
+}
+
+impl<'a> Bay<'a> {
+    #[doc(hidden)]
+    pub fn new(name: &'a str, subject: &'a str) -> Self {
+        Self { name, subject }
+    }
+
+    /// Where it is, as the owner's README names it: `"player"`, `"output"`.
+    pub fn name(&self) -> &'a str {
+        self.name
+    }
+
+    /// What it's about, as the service names it: an MPRIS bus name, a PulseAudio sink name.
+    pub fn subject(&self) -> &'a str {
+        self.subject
+    }
+}
+
+/// What a widget puts in another widget's [`bay`]. The host lays it out in the owner's popover or
+/// dialog, and sends what it does back to the widget that made it.
+pub struct Part<M> {
+    content: Node<M>,
+    on_open: Option<M>,
+    on_close: Option<M>,
+}
+
+impl<M> Part<M> {
+    pub fn new(content: Node<M>) -> Self {
+        Self {
+            content,
+            on_open: None,
+            on_close: None,
+        }
+    }
+
+    /// Sent each time the popover or dialog it's in opens, if the part shows then.
+    pub fn on_open(mut self, message: M) -> Self {
+        self.on_open = Some(message);
+        self
+    }
+
+    /// Sent each time the popover or dialog it's in starts closing.
+    pub fn on_close(mut self, message: M) -> Self {
+        self.on_close = Some(message);
+        self
+    }
+
+    pub fn map<N: 'static>(self, f: &(impl Fn(M) -> N + Clone + 'static)) -> Part<N>
+    where
+        M: 'static,
+    {
+        Part {
+            content: self.content.map(f),
+            on_open: self.on_open.map(f),
+            on_close: self.on_close.map(f),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn into_parts(self) -> (Node<M>, Option<M>, Option<M>) {
+        (self.content, self.on_open, self.on_close)
+    }
+}
+
+/// A popover as a part, for a widget that can sit on its own or in another's bay: its content and
+/// its open and close messages. Being wide doesn't carry over: the owner's popover sets the width.
+impl<M> From<Panel<M>> for Part<M> {
+    fn from(panel: Panel<M>) -> Self {
+        Self {
+            content: panel.content,
+            on_open: panel.on_open,
+            on_close: panel.on_close,
+        }
     }
 }
 

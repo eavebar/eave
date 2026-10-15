@@ -846,6 +846,7 @@ pub fn fingerprint<M>(node: &Node<M>, hasher: &mut impl Hasher) {
         | Kind::Markdown { text, .. }
         | Kind::Literal { text, .. }
         | Kind::Divider { text } => text.hash(hasher),
+        Kind::Bay { name, subject } => (name, subject).hash(hasher),
         Kind::AppIcon { app_id, .. } => app_id.hash(hasher),
         Kind::Cover { url, .. } => url.hash(hasher),
         Kind::Counter { value, unit, .. } => (value, unit).hash(hasher),
@@ -998,6 +999,8 @@ pub fn wanted<M: 'static>(node: Node<M>, out: &mut Wanted) {
         | Kind::Meter { .. }
         | Kind::Badge { .. }
         | Kind::Keys { .. } => {}
+        // The host fills bays before it looks for icons, so what parts show is found too.
+        Kind::Bay { .. } => {}
     }
 }
 
@@ -1342,6 +1345,8 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
         Kind::Step { content, .. } => render(*content, ctx, icons),
         Kind::Diff { title, lines } => code::diff(Some(title), lines, "", p),
         Kind::Empty => text("").into(),
+        // The host fills every bay before rendering (`bays::fill`). One left here has no parts.
+        Kind::Bay { .. } => text("").into(),
         Kind::Fill if ctx.panel() => Space::new().width(Length::Fill).into(),
         Kind::Fill => Space::new().into(),
         Kind::ListItem {
