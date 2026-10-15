@@ -787,17 +787,32 @@ impl Motion {
     /// Notes which popover the island has. Another one than before, while it's still a popover,
     /// takes over the morph: the shape springs on from where it is to the new panel, with a
     /// squish, and the new content fades in once the shape is halfway.
-    fn swap(&mut self, key: Option<u64>) {
+    /// Returns whether it took over.
+    fn swap(&mut self, key: Option<u64>) -> bool {
         let popover = &mut self.popover;
-        if let (Some(new), Some(old)) = (key, popover.key)
+        let taken = if let (Some(new), Some(old)) = (key, popover.key)
             && new != old
             && popover.present
         {
             popover.panel = Spring::new(0.0, FADE);
             popover.squished = false;
             popover.closed = false;
-        }
+            true
+        } else {
+            false
+        };
         popover.key = key;
+        taken
+    }
+
+    /// One that takes over coming out of another island starts as that island, not as what this
+    /// one was: a dialog out of a popover while the dormer still folds back comes out of the
+    /// popover.
+    fn rehome(&mut self) {
+        if let (Some(island), Some(_)) = (self.island, &self.home) {
+            self.edges = Edges::at(self.home(island));
+            self.popover.via = 0;
+        }
     }
 
     /// Points the shape and the fades where they should go now. During a popover's morph, each
@@ -2004,7 +2019,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             };
             motion.nudge(request, None);
         }
-        motion.swap(self.popover.as_ref().map(|popover| popover.key));
+        let taken = motion.swap(self.popover.as_ref().map(|popover| popover.key));
         motion.drop = self.popover.as_ref().and_then(|popover| popover.drop);
         motion.drop_color = self.popover.as_ref().and_then(|popover| popover.drop_color);
         motion.home = self
@@ -2016,6 +2031,9 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             .popover
             .as_ref()
             .and_then(|popover| popover.sag.clone());
+        if taken {
+            motion.rehome();
+        }
         // A hidden toggle isn't arranged, so it isn't drawn, and fades in when it shows.
         let positions = self
             .keys

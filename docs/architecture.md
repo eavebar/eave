@@ -97,10 +97,11 @@ The bar can show on hover, and over fullscreen windows it shows, hides or shows 
 
 A widget's dialog is its panel in the middle of the screen ([D-90](decisions.md)):
 
-1. The widget returns `open_dialog()`. The host looks at what was last acted on (`Bar::touched`), set by an item press (`Touched`), a message from a popover or a notification card (`Acted`), or a dormer pick. If that was within a second, the dialog comes out of it. Otherwise it comes out of the top.
+1. The widget returns `open_dialog()`. If the widget's own popover is open, the dialog comes out of it, however it was asked for. Otherwise the host looks at what was last acted on (`Bar::touched`), set by an item press (`Touched`), a message or a row's shortcut from a popover or a notification card (`Acted`), or a dormer pick. If that was within a second, the dialog comes out of it. Otherwise it comes out of the top.
 2. Picked in the dormer, the dormer turns into the dialog on the spot. Otherwise the host looks up how tall the focused screen is, as it does for the dormer (`Dialog(Opened(room))`). Opening it closes any popover. One open in the island acted on is dropped at once, without folding: the dialog's shape covers it as it leaves.
-3. The island in the middle draws every dialog, with the key `DIALOG` and `Placement::Middle`, centered on the screen. Out of an island, its home is that island's shape as last drawn (`Bar::shapes`, `Island::shape`, `Popover::home`): it starts there, popover and all, and springs back onto it when it closes, while the island itself stays on the bar. Out of the top, it comes with a drop, as the dormer does, and the notch squishes as the neck lets go and catches it (`Neck`).
-4. Placing, growing the surface, the input region, the keyboard and closing are the dormer's (`Placed`, `Closed`). It also closes when the widget returns `close_dialog()` or stops offering a dialog.
+3. A dialog on screen, or one going back, takes the new one in where it is. It then goes back to where the new one came from, and the popover it came out of is dropped the same way (`Bar::take_popover`).
+4. The island in the middle draws every dialog, with the key `DIALOG` and `Placement::Middle`, centered on the screen. Out of an island, its home is that island's shape as last drawn (`Bar::shapes`, `Island::shape`, `Popover::home`): it starts there, popover and all, and springs back onto it when it closes, while the island itself stays on the bar. If the dormer is still folding back in that island, the dialog doesn't start from the dormer's shape: it starts at its home (`Motion::rehome`). Out of the top, it comes with a drop, as the dormer does, and the notch squishes as the neck lets go and catches it (`Neck`).
+5. Placing, growing the surface, the input region, the keyboard and closing are the dormer's (`Placed`, `Closed`). It also closes when the widget returns `close_dialog()` or stops offering a dialog.
 
 ## Data sources by widget
 

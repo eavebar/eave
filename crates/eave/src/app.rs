@@ -755,9 +755,10 @@ impl Bar {
             .collect()
     }
 
-    /// Opens `id`'s dialog, out of what was just acted on. One on screen takes it in where it is,
-    /// and the dormer turns into it. Otherwise the screen's height is looked up first, then it
-    /// comes out of the island acted on, popover and all, or drops out of the top.
+    /// Opens `id`'s dialog, out of what was just acted on. Its own popover, open, is always where
+    /// it comes from, however it was asked for. One on screen takes it in where it is, and the
+    /// dormer turns into it. Otherwise the screen's height is looked up first, then it comes out
+    /// of the island acted on, popover and all, or drops out of the top.
     fn ask_dialog(&mut self, id: u64) -> Task<Message> {
         let wanted = self
             .find(id)
@@ -765,13 +766,29 @@ impl Bar {
         if !wanted || self.dialog_of(id) || self.toast_window().is_none() {
             return Task::none();
         }
-        let touch = Touched::fresh(self.touched, Instant::now());
-        // Another's dialog, or one going back: it turns into this one, where it is.
+        // Its popover open: it's what the dialog comes out of, by key, click or later.
+        let own = self
+            .popover_of(id)
+            .and_then(|_| self.find(id))
+            .map(Instance::island);
+        let touch = own
+            .map(Touch::Island)
+            .or_else(|| Touched::fresh(self.touched, Instant::now()));
+        let origin = match touch {
+            Some(Touch::Island(island)) if self.island_shows(island) => Origin::Island(island),
+            _ => Origin::Top,
+        };
+        // Another's dialog, or one going back: it turns into this one, where it is, and goes back
+        // to where this one came from.
         if self.dialog.is_some() {
             let mut hooks = self.close_popover();
+            self.take_popover(origin);
             if let Some(dialog) = &mut self.dialog {
                 dialog.instance = id;
                 dialog.open = true;
+                if own.is_some() {
+                    dialog.origin = origin;
+                }
             }
             hooks.extend(self.dialog_opened(id));
             return send(hooks);
@@ -787,14 +804,24 @@ impl Bar {
             hooks.extend(self.dialog_opened(id));
             return send(hooks);
         }
-        let origin = match touch {
-            Some(Touch::Island(island)) if self.island_shows(island) => Origin::Island(island),
-            _ => Origin::Top,
-        };
         self.asked = Some((id, origin));
         Task::perform(center(self.screen.inset[0]), |(_, room)| {
             Message::Dialog(dialog::Event::Opened(room))
         })
+    }
+
+    /// Drops the popover of the island a dialog comes out of: it's gone at once, under the
+    /// dialog's shape as that sets off, with nothing left of it to fold back.
+    fn take_popover(&mut self, origin: Origin) {
+        let Origin::Island(island) = origin else {
+            return;
+        };
+        let instances = &self.instances;
+        self.popovers.retain(|popover| {
+            !instances
+                .iter()
+                .any(|instance| instance.id == popover.instance && instance.island() == island)
+        });
     }
 
     /// Where `island`'s shape is put as it's drawn.
@@ -2007,16 +2034,8 @@ fn handle_dialog(bar: &mut Bar, event: dialog::Event) -> Task<Message> {
             // The popover it comes out of goes at once, under the dialog's shape as that sets
             // off: there's nothing left of it to fold back, and the island is back. The dormer
             // gives way.
-            let hooks = bar.close_popover();
-            if let Origin::Island(island) = origin {
-                let instances = &bar.instances;
-                bar.popovers.retain(|popover| {
-                    !instances.iter().any(|instance| {
-                        instance.id == popover.instance && instance.island() == island
-                    })
-                });
-            }
-            let mut hooks = hooks;
+            let mut hooks = bar.close_popover();
+            bar.take_popover(origin);
             bar.dormer = None;
             bar.dialog = Some(Dialog::new(id, room, origin));
             // Out of the bar, it was opened by a click there; out of the top, by nothing there.
@@ -2372,7 +2391,7 @@ fn dialog_popover<'a>(bar: &'a Bar, dialog: &Dialog) -> island::Popover<'a, Mess
         }),
         sag: top.then(|| bar.notch_sag.clone()),
         home,
-        on_key: rows_on_key(id, keys),
+        on_key: rows_on_key(id, None, keys),
     }
 }
 
@@ -2656,9 +2675,11 @@ fn panel_keys(
     node
 }
 
-/// The rows' shortcuts press them; one that types gives way to a focused field (D-91).
+/// The rows' shortcuts press them; one that types gives way to a focused field (D-91). A popover's
+/// are acted on in `island`, like a click on its rows: a dialog they ask for comes out of it.
 fn rows_on_key<'a>(
     id: u64,
+    island: Option<IslandId>,
     keys: Vec<(ui::Shortcut, AnyMessage)>,
 ) -> Option<island::OnKey<'a, Message>> {
     (!keys.is_empty()).then(|| {
@@ -2667,7 +2688,10 @@ fn rows_on_key<'a>(
                 .find(|(keys, _)| {
                     !(typing && shortcut::types(keys)) && shortcut::matches(keys, key, modifiers)
                 })
-                .map(|(_, message)| Message::Widget(id, message.clone()))
+                .map(|(_, message)| match island {
+                    Some(island) => Message::Acted(island, id, message.clone()),
+                    None => Message::Widget(id, message.clone()),
+                })
         }) as island::OnKey<'a, Message>
     })
 }
@@ -2693,8 +2717,8 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         }
         None => Space::new().into(),
     };
-    let on_key = rows_on_key(id, keys);
     let island = bar.find(id).map(Instance::island);
+    let on_key = rows_on_key(id, island, keys);
     island::Popover {
         key: id,
         content: content.map(move |message| match island {
@@ -4190,6 +4214,35 @@ mod tests {
     }
 
     #[test]
+    fn a_dialog_asked_for_while_its_popover_is_open_always_comes_out_of_it() {
+        // By a key, long after the click that opened the popover, with another island touched
+        // since: still out of its own popover.
+        let (mut bar, window) = talking_bar();
+        let _ = update(&mut bar, Message::Pressed(window, 0, None));
+        assert!(bar.popover_of(0).is_some());
+        let _ = update(&mut bar, Message::Touched(window, 1));
+        bar.touched = bar.touched.map(|touched| Touched {
+            at: touched.at - 2 * dialog::ORIGIN_WINDOW,
+            ..touched
+        });
+        talk(&mut bar, Talk::Open);
+        assert_eq!(bar.asked, Some((0, Origin::Island(LEFT))));
+        let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(1000.0)));
+        assert!(bar.popovers.is_empty(), "the popover became the dialog");
+    }
+
+    #[test]
+    fn a_popover_shortcut_acts_on_its_island() {
+        let keys = vec![(ui::shortcut('1'), AnyMessage::new(Talk::Open))];
+        let on_key = rows_on_key(0, Some(LEFT), keys).unwrap();
+        let key = keyboard::Key::Character("1".into());
+        assert!(matches!(
+            on_key(&key, keyboard::Modifiers::empty(), false),
+            Some(Message::Acted(LEFT, 0, _))
+        ));
+    }
+
+    #[test]
     fn a_dialog_asked_for_from_a_notification_comes_out_of_its_island() {
         let (mut bar, _) = talking_bar();
         let island = bar.notice_island();
@@ -4248,6 +4301,12 @@ mod tests {
 
         talk(&mut bar, Talk::Open);
         assert!(bar.dialog_open(), "one going back turns around");
+        assert_eq!(
+            bar.dialog.as_ref().unwrap().origin,
+            Origin::Island(LEFT),
+            "out of the popover it took in, so it goes back there"
+        );
+        assert!(bar.popovers.is_empty());
         dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         assert!(bar.dormer_open() && bar.dialog.is_none());
     }
