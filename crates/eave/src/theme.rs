@@ -195,12 +195,12 @@ pub const SKIN_ROOM: f32 = 10.0;
 /// `BODY_TENSION` pulls each point toward its neighbors, as a share of `MORPH`'s stiffness: higher
 /// is smoother and stiffer. `BODY_AREA` keeps the area its frame has, likewise.
 pub const BODY_RESPONSE: f32 = 0.45;
-pub const BODY_DAMPING: f32 = 0.6;
-pub const BODY_LEAD: f32 = 0.55;
-pub const BODY_LAG: f32 = 1.3;
-pub const BODY_LAND: f32 = 0.85;
+pub const BODY_DAMPING: f32 = 0.75;
+pub const BODY_LEAD: f32 = 0.7;
+pub const BODY_LAG: f32 = 1.15;
+pub const BODY_LAND: f32 = 0.9;
 pub const BODY_FOCUS: f32 = 2.5;
-pub const BODY_TENSION: f32 = 1.5;
+pub const BODY_TENSION: f32 = 2.5;
 pub const BODY_AREA: f32 = 0.3;
 /// How much room a popover's surface keeps under it while its body moves, in logical pixels:
 /// enough for the furthest it bounces past.
