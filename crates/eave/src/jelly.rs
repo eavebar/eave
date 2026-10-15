@@ -7,11 +7,15 @@
 //! ring has a fixed number of them, spread over the shape's size, so it keeps working while the
 //! shape morphs.
 //!
+//! The ring is also the island's skin (D-111): the island pushes each side as its edge speeds up
+//! and slows down ([`Jelly::push`]), and the ring keeps its area, so a side pushed in swells the
+//! others out. Every way an island's outline gives goes through it.
+//!
 //! On top of the ring, the top and bottom can each hold a shelf out (D-105): a flat stretch of the
 //! edge pushed out under an item, easing back into the edge at both ends. The island moves the
 //! shelf; the jelly only draws it, with the ring, inside the same room.
 
-use iced::{Point, Rectangle};
+use iced::{Point, Rectangle, Size};
 
 use crate::spring::{REACT, REST_DISTANCE, REST_SPEED, SUBSTEP};
 use crate::theme;
@@ -97,6 +101,8 @@ pub struct Jelly {
     /// How far each side may go out (top, right, bottom, left): the room the island's frame has
     /// around it, less what a wall takes away.
     pub room: [f32; 4],
+    /// The shape's size, which the ring keeps the area of. Empty keeps none.
+    pub size: Size,
 }
 
 impl Default for Jelly {
@@ -106,6 +112,7 @@ impl Default for Jelly {
             velocity: [0.0; RING],
             shelves: [Shelf::default(); 2],
             room: [theme::NUDGE_BUMP_ROOM; 4],
+            size: Size::ZERO,
         }
     }
 }
@@ -133,22 +140,64 @@ impl Jelly {
         }
     }
 
+    /// Adds `speed` to one side's springs at how far along the side each is (0 to 1, as for
+    /// [`Jelly::kick`]), outward in pixels per second: the skin feeling its edge speed up or slow
+    /// down. Unlike a kick, it piles up, as the edge's motion does.
+    pub fn push(&mut self, side: Side, speed: impl Fn(f32) -> f32) {
+        let (start, count) = side.span();
+        for k in 0..count {
+            let along = (k as f32 + 0.5) / count as f32;
+            let along = if side.backwards() { 1.0 - along } else { along };
+            self.velocity[start + k] += speed(along);
+        }
+    }
+
+    /// How far out the ring has moved the shape's area, as an even depth all round the sides that
+    /// keep it (all but the top): its area gained, over how long those sides are.
+    fn swelled(&self) -> f32 {
+        let Size { width, height } = self.size;
+        let keeping = width + 2.0 * height;
+        if keeping < 1.0 {
+            return 0.0;
+        }
+        let gained = [Side::Top, Side::Right, Side::Bottom, Side::Left]
+            .into_iter()
+            .map(|side| {
+                let (start, count) = side.span();
+                let mean = self.value[start..start + count].iter().sum::<f32>() / count as f32;
+                let length = match side {
+                    Side::Top | Side::Bottom => width,
+                    Side::Left | Side::Right => height,
+                };
+                mean * length
+            })
+            .sum::<f32>();
+        gained / keeping
+    }
+
     pub fn advance(&mut self, seconds: f32) {
         // Each piece rides REACT, like everything else an event kicks.
         let stiffness = REACT.stiffness;
         let damping = 2.0 * REACT.damping * stiffness.sqrt();
         let coupling = theme::JELLY_SPREAD * stiffness;
+        let keep = theme::SKIN_AREA * stiffness;
+        let (top, across) = Side::Top.span();
         let mut left = seconds;
         while left > 0.0 {
             let dt = left.min(SUBSTEP);
+            let swelled = self.swelled();
             for i in 0..RING {
                 let (prev, next) = (
                     self.value[(i + RING - 1) % RING],
                     self.value[(i + 1) % RING],
                 );
                 let value = self.value[i];
-                let force = -stiffness * value - damping * self.velocity[i]
+                let mut force = -stiffness * value - damping * self.velocity[i]
                     + coupling * (prev + next - 2.0 * value);
+                // The top hangs from the bar: it doesn't give area back.
+                if !(top..top + across).contains(&i) {
+                    force -= keep * swelled;
+                }
                 self.velocity[i] += force * dt;
             }
             for (value, velocity) in self.value.iter_mut().zip(&self.velocity) {
