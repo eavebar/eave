@@ -7,6 +7,9 @@
 // fill color, refracted at the islands' edges. The shape comes only from the buffer drawn this
 // frame and what eave said with it, so the glass can't lag a morph. In return the plugin tells
 // eave how bright it is behind its surface, so the ink of islands over something bright can turn dark.
+//
+// eave also says where the notch and the grown edge are, in every theme, and the plugin draws the
+// pointer under them, so it slides under the notch as under a MacBook's (Cursor.cpp, D-113).
 #pragma once
 
 #include <chrono>
@@ -62,7 +65,8 @@ namespace Glass {
     // What eave said, double-buffered: requests set the pending one, the surface's commit makes it
     // current.
     struct SState {
-        std::vector<SRegion> regions;
+        std::vector<SRegion> regions; // glass and solid
+        std::vector<SRegion> bezel;   // the notch and the grown edge: the pointer goes under them
         SLook                look;
         uint32_t             reportCell = 0;
 
@@ -152,6 +156,14 @@ namespace Glass {
         Vector2D                 wideLevel;
         bool                     ready = false;
     };
+
+    // Cursor.cpp: the pointer under the notch and the grown edge.
+    bool cursorUnder();              // the config allows it
+    void tuckCursor();               // at RENDER_LAST_MOMENT, after wrapLayers
+    void updateCursorLocks(std::optional<Vector2D> at = std::nullopt); // a software cursor only near them
+    void forgetCursorMonitor(void* monitor);
+    void releaseCursorLocks();       // unloading
+    std::string cursorStatus();      // for `hyprctl hypreave`
 
     // Report.cpp
     void reportBackdrop(CGlassSurface& glass, const SJob& job);

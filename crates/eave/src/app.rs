@@ -2650,14 +2650,16 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     let islands = Lift::new(islands, bar.out(), by);
     // Always a stack, so the islands' state stays put when the dormer comes and goes.
     // Last: what this frame says about glass goes out with it. The notch and the grown edge are
-    // never glass, a little past where they rest, since they move when kicked.
-    let solid = bar
-        .bezel_rects(window)
-        .into_iter()
+    // never glass, a little past where they rest, since they move when kicked. Exactly where
+    // they rest, in every theme, the pointer goes under them (D-113): the margin would take it
+    // under an island fused to the notch too.
+    let rests = bar.bezel_rects(window);
+    let solid = rests
+        .iter()
         .map(|rect| rect.expand(style::GLASS_BEZEL_MARGIN))
         .collect();
     let look = (bar.config.theme == config::Theme::Glass).then_some(bar.config.glass);
-    let present = glass::Present::new(look, solid, bar.toast_window() == Some(window));
+    let present = glass::Present::new(look, solid, rests, bar.toast_window() == Some(window));
     stack![bezel, islands, center_view(bar, window), present].into()
 }
 

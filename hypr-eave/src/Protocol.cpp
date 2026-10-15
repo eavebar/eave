@@ -38,7 +38,7 @@ namespace Glass {
 
     class CProtocol : public IWaylandProtocol {
       public:
-        CProtocol() : IWaylandProtocol(&eave_glass_manager_v1_interface, 1, "EaveGlass") {}
+        CProtocol() : IWaylandProtocol(&eave_glass_manager_v1_interface, 2, "EaveGlass") {}
 
         void bindManager(wl_client* client, void*, uint32_t ver, uint32_t id) override {
             guarded("bind", [&] {
@@ -158,12 +158,14 @@ namespace Glass {
             const size_t     n      = std::min(array->size / (FIELDS * sizeof(int32_t)), MAX_REGIONS);
             const auto*      data   = sc<const int32_t*>(array->data);
             auto&            out    = glass->m_pending.regions;
+            auto&            bezel  = glass->m_pending.bezel;
             out.clear();
+            bezel.clear();
             for (size_t i = 0; i < n; i++) {
                 const int32_t* r = data + i * FIELDS;
-                if (r[2] <= 0 || r[3] <= 0 || sc<uint32_t>(r[4]) > EAVE_GLASS_SURFACE_V1_KIND_SOLID)
+                if (r[2] <= 0 || r[3] <= 0 || sc<uint32_t>(r[4]) > EAVE_GLASS_SURFACE_V1_KIND_BEZEL)
                     continue;
-                out.push_back({.x    = r[0],
+                (r[4] == EAVE_GLASS_SURFACE_V1_KIND_BEZEL ? bezel : out).push_back({.x    = r[0],
                                .y    = r[1],
                                .w    = r[2],
                                .h    = r[3],
@@ -203,7 +205,10 @@ namespace Glass {
         m_listeners.commit = surface->m_events.commit.listen([this, key] {
             guarded("commit", [&] {
                 const bool changed = m_current != m_pending;
+                const bool moved   = m_current.bezel != m_pending.bezel;
                 m_current          = m_pending;
+                if (moved)
+                    updateCursorLocks();
                 // Stopped asking for reports: say there's nothing to report, once.
                 if (!m_current.reportCell && !m_report.sent.empty()) {
                     sendBackdrop(0, 0, 0, {});
@@ -213,6 +218,7 @@ namespace Glass {
                 if (!m_resource) {
                     // Destroyed: this commit is the first frame without glass.
                     g_protocol->forget(key); // destroys this
+                    updateCursorLocks();
                     return;
                 }
                 // The glass reads around every pixel it draws, so a change to what eave says is
@@ -230,6 +236,7 @@ namespace Glass {
                 if (auto* glass = Glass::glassOf(key)) {
                     glass->makeInert();
                     g_protocol->forget(key);
+                    updateCursorLocks();
                 }
             });
         });

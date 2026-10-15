@@ -415,9 +415,8 @@ fn build(config_path: &Path, sources: &mut Sources, summary: bool) -> Result<()>
     } else {
         eprintln!("eave-build: {} is up to date", target.display());
     }
-    if glass_theme(&text) {
-        build_glass(&eave_dir)?;
-    }
+    // In every theme: besides glass, it puts the pointer under the notch (D-113).
+    build_plugin(&eave_dir)?;
 
     // A new eave-build may ship new units. This keeps config.toml and rewrites only the units.
     if eave_moved || handed_over {
@@ -505,17 +504,12 @@ fn read_config(text: &str) -> Result<(Option<String>, Vec<String>)> {
     Ok((eave, widgets))
 }
 
-/// Whether config.toml asks for glass: `theme = "glass"`.
-fn glass_theme(text: &str) -> bool {
-    let table: toml::Table = text.parse().unwrap_or_default();
-    table.get("theme").and_then(toml::Value::as_str) == Some("glass")
-}
-
-/// Builds hypr-eave, the Hyprland plugin that draws glass, against the Hyprland installed now, and
-/// installs it when it changed. A plugin only loads into the Hyprland it was built for, so this
-/// runs every time: make rebuilds only when the sources or Hyprland's headers changed. Without
-/// Hyprland's headers or a C++ compiler there's no glass, and the bar is built anyway.
-fn build_glass(eave_dir: &Path) -> Result<()> {
+/// Builds hypr-eave, the Hyprland plugin that draws glass and puts the pointer under the notch,
+/// against the Hyprland installed now, and installs it when it changed. A plugin only loads into
+/// the Hyprland it was built for, so this runs every time: make rebuilds only when the sources or
+/// Hyprland's headers changed. Without Hyprland's headers or a C++ compiler there's no plugin, and
+/// the bar is built anyway.
+fn build_plugin(eave_dir: &Path) -> Result<()> {
     let source = eave_dir.join("hypr-eave");
     if !source.join("Makefile").exists() {
         return Ok(());
@@ -526,7 +520,7 @@ fn build_glass(eave_dir: &Path) -> Result<()> {
         .is_ok_and(|status| status.success());
     if !headers {
         eprintln!(
-            "eave-build: no glass: Hyprland's headers aren't installed (pkg-config hyprland)"
+            "eave-build: no hypr-eave: Hyprland's headers aren't installed (pkg-config hyprland)"
         );
         return Ok(());
     }
@@ -537,7 +531,7 @@ fn build_glass(eave_dir: &Path) -> Result<()> {
         .status();
     if !status.is_ok_and(|status| status.success()) {
         eprintln!(
-            "eave-build: no glass: building hypr-eave failed (make -C {})",
+            "eave-build: no hypr-eave: building it failed (make -C {})",
             source.display()
         );
         return Ok(());
@@ -1360,17 +1354,6 @@ fn cache_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn glass_is_built_for_the_glass_theme() {
-        assert!(glass_theme("theme = \"glass\"\n[glass]\nband = 8"));
-        assert!(!glass_theme(""));
-        assert!(!glass_theme("theme = \"dark\""));
-        assert!(
-            !glass_theme("not toml ["),
-            "a broken file is the bar's to report"
-        );
-    }
 
     #[test]
     fn units_run_eave_build_by_its_full_path() {

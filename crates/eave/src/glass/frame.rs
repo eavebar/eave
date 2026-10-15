@@ -1,5 +1,6 @@
 //! What a frame says about glass, gathered while it's drawn: the islands that may turn to glass,
-//! with their fill and which way their ink goes, and the pictures over them that never do. Sent
+//! with their fill and which way their ink goes, and the pictures over them that never do; and in
+//! every theme, where the notch and the grown edge are, which the pointer goes under (D-113). Sent
 //! when the frame is ([`super::Present`]), so it lands with that frame's buffer.
 
 use std::cell::{Cell, RefCell};
@@ -15,6 +16,9 @@ pub enum Kind {
     Glass { fill: Color, darker: f32 },
     /// Content that never does, whatever it's over.
     Solid,
+    /// The notch or the grown edge, exactly where it's drawn: the pointer goes under it. Sent in
+    /// every theme, and it doesn't keep glass out: a `Solid` around it does.
+    Bezel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -66,6 +70,17 @@ pub fn opaque(rect: Rectangle) {
     });
 }
 
+/// The notch or the grown edge at `rect` (surface coordinates, as drawn). Recorded in every
+/// theme, glass or not.
+pub fn bezel(rect: Rectangle) {
+    RECORDS.with(|records| {
+        records.borrow_mut().push(Record {
+            rect: rect + OFFSET.with(Cell::get),
+            kind: Kind::Bezel,
+        })
+    });
+}
+
 /// A picture drawn at `bounds` in its layout, with the `viewport` it was given: never glass.
 pub fn solid(bounds: Rectangle, viewport: &Rectangle) {
     if !ON.with(Cell::get) {
@@ -108,8 +123,8 @@ pub fn take() -> Vec<Record> {
 
 /// What of `records` the compositor hears: at most [`theme::GLASS_MAX_REGIONS`], so a frame full
 /// of pictures can't make a request too long for one message (which would cut the bar's
-/// connection). Islands first, then the pictures that touch one, largest first; one left out can
-/// only turn to glass where it's exactly an island's fill.
+/// connection). The notch and the edge first, then islands, then the pictures that touch one,
+/// largest first; one left out can only turn to glass where it's exactly an island's fill.
 pub fn fit(mut records: Vec<Record>) -> Vec<Record> {
     records.retain(|record| record.rect.width >= 1.0 && record.rect.height >= 1.0);
     let islands: Vec<Rectangle> = records
@@ -118,17 +133,21 @@ pub fn fit(mut records: Vec<Record>) -> Vec<Record> {
         .map(|record| record.rect.expand(theme::GLASS_MARGIN))
         .collect();
     records.retain(|record| {
-        matches!(record.kind, Kind::Glass { .. })
+        matches!(record.kind, Kind::Glass { .. } | Kind::Bezel)
             || islands
                 .iter()
                 .any(|island| island.intersection(&record.rect).is_some())
     });
-    let area = |record: &Record| match record.kind {
-        Kind::Glass { .. } => f32::INFINITY,
-        Kind::Solid => record.rect.area(),
+    let rank = |record: &Record| match record.kind {
+        Kind::Bezel => (2, 0.0),
+        Kind::Glass { .. } => (1, 0.0),
+        Kind::Solid => (0, record.rect.area()),
     };
     // Stable: islands keep their order.
-    records.sort_by(|a, b| area(b).total_cmp(&area(a)));
+    records.sort_by(|a, b| {
+        let (a, b) = (rank(a), rank(b));
+        b.0.cmp(&a.0).then(b.1.total_cmp(&a.1))
+    });
     records.truncate(theme::GLASS_MAX_REGIONS);
     records
 }
@@ -143,6 +162,7 @@ pub fn encode(records: &[Record]) -> Vec<u8> {
         let (kind, fill, darker) = match record.kind {
             Kind::Glass { fill, darker } => (0, fill, darker),
             Kind::Solid => (1, Color::TRANSPARENT, 0.0),
+            Kind::Bezel => (2, Color::TRANSPARENT, 0.0),
         };
         let [r, g, b, a] = fill.into_rgba8();
         let argb = u32::from_be_bytes([a, r, g, b]) as i32;
@@ -190,6 +210,35 @@ mod tests {
             words(&encode(&[island, cover])),
             vec![10, 4, 21, 31, 0, -1, 255, 1, 2, 3, 4, 1, 0, 0]
         );
+    }
+
+    #[test]
+    fn the_notch_is_recorded_without_glass_and_kept_first() {
+        gather(false);
+        let notch = Rectangle::new(Point::new(100.0, 0.0), Size::new(200.0, 32.0));
+        island(Rectangle::default(), Color::BLACK, 0.0);
+        bezel(notch);
+        let records = take();
+        assert_eq!(
+            records,
+            vec![Record {
+                rect: notch,
+                kind: Kind::Bezel
+            }]
+        );
+        let island = Record {
+            rect: Rectangle::new(Point::new(0.0, 0.0), Size::new(80.0, 30.0)),
+            kind: Kind::Glass {
+                fill: Color::BLACK,
+                darker: 0.0,
+            },
+        };
+        let mut many = vec![island; theme::GLASS_MAX_REGIONS];
+        many.extend(records);
+        let fitted = fit(many);
+        assert_eq!(fitted[0].kind, Kind::Bezel, "never left out");
+        assert_eq!(fitted.len(), theme::GLASS_MAX_REGIONS);
+        assert_eq!(words(&encode(&fitted[..1])), vec![100, 0, 200, 32, 2, 0, 0]);
     }
 
     #[test]
