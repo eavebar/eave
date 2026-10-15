@@ -1,6 +1,6 @@
 //! Bluetooth, through BlueZ ([D-103](https://github.com/eaveshell/eave/blob/main/docs/decisions.md)):
 //! the rune, with a dot on each side while a device is connected, and dimmed while Bluetooth is
-//! off. Resting the pointer on it shows the connected device and its battery.
+//! off. Just the rune: what's connected, and its battery, are in the popover.
 //!
 //! The popover turns Bluetooth on and off, lists the paired devices to connect and disconnect, and
 //! looks for devices nearby while it's open, to pair them: it shows the code to confirm, or asks
@@ -263,15 +263,9 @@ impl Widget for Bluetooth {
         if !shown {
             return Item::hidden();
         }
-        let icon = || {
-            ui::icon(Icon::Bluetooth {
-                connected: connected.is_some(),
-            })
-        };
-        let content = match connected {
-            Some(device) => ui::expand(icon(), ui::row([icon(), ui::label(summary(device))])),
-            None => icon(),
-        };
+        let content = ui::icon(Icon::Bluetooth {
+            connected: connected.is_some(),
+        });
         Item::new(if powered {
             content
         } else {
@@ -610,14 +604,6 @@ fn absent(access: Access) -> Node<Message> {
     ui::column([ui::header("Bluetooth"), ui::label(why).tone(Tone::Dim)])
 }
 
-/// A connected device for the bar: its name, and its battery when it says.
-fn summary(device: &Device) -> String {
-    match device.battery {
-        Some(battery) => format!("{} · {battery}%", device.name),
-        None => device.name.clone(),
-    }
-}
-
 fn kind_icon(kind: Kind) -> Icon {
     match kind {
         Kind::Headphones => Icon::Headphones,
@@ -735,13 +721,8 @@ mod tests {
             Config::default(),
             state(true, vec![device("Buds", true, true)]),
         );
-        let ui::Kind::Alternate { mut options, .. } =
-            on.item().into_parts().content.unwrap().into_kind()
-        else {
-            panic!("the rune, then the device on hover");
-        };
         assert!(matches!(
-            options.remove(0).into_kind(),
+            on.item().into_parts().content.unwrap().into_kind(),
             ui::Kind::Icon {
                 icon: Icon::Bluetooth { connected: true },
                 ..
