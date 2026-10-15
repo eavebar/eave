@@ -81,6 +81,8 @@ echo "ok: $reloads reloads"
 regions=$(ctl hypreave | sed -n 's/.*surface: \([0-9]*\) glass regions, \([0-9]*\) solid.*/\1 \2/p' | head -1)
 [ -n "$regions" ] && [ $((${regions% *} + ${regions#* })) -le 64 ] || fail "more regions than fit: $regions"
 echo "ok: $regions regions (glass, solid)"
+ctl hypreave | grep -q "[1-9][0-9]* bezel" || fail "eave sent no bezel records (D-113)"
+echo "ok: the notch and the edge are told"
 
 ctl eval 'hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 2, transform = 1 })' > /dev/null
 sleep 1

@@ -2633,7 +2633,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 **Cost:**
 - **eave:** the bezel records, two rectangles a frame, sent only when they change. In the dark theme the glass thread now starts whenever hypr-eave is loaded.
 - **The plugin:** a pass search per frame while the cursor is software, and one more texture draw while it's over the notch. Near the notch the monitor redraws the cursor's box on every pointer move instead of moving a plane.
-- **Binary:** see the commit that measured it.
+- **Binary:** the release binary is the same size, 20,934,680 bytes on aarch64, against main at 423a70c.
 
 **Limits:**
 - Only the first bar's frames reach the plugin (D-112, *One bar*): on a second bar's monitor the pointer isn't cut.
