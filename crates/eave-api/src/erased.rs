@@ -8,7 +8,7 @@ use std::fmt;
 use std::sync::Arc;
 
 pub use crate::effect::{DialogRequest, PopoverRequest};
-use crate::ui::{Action, Item, Notice, Panel};
+use crate::ui::{Action, Bay, Item, Notice, Panel, Part};
 use crate::{Effect, NudgeRequest, Subscription, Task, Widget};
 
 /// A message of some widget's own type. Cloning is cheap: the value sits behind an `Arc`.
@@ -24,6 +24,11 @@ impl AnyMessage {
             value: Arc::new(message),
             type_name: std::any::type_name::<M>(),
         }
+    }
+
+    /// The message, if it's an `M`, without taking it.
+    pub fn downcast_ref<M: Any>(&self) -> Option<&M> {
+        self.value.downcast_ref::<M>()
     }
 
     pub fn downcast<M: Any + Clone + Send + Sync>(self) -> Option<M> {
@@ -46,6 +51,7 @@ pub trait ErasedWidget {
     fn dialog(&self) -> Option<Panel<AnyMessage>>;
     fn notices(&self) -> Vec<Notice<AnyMessage>>;
     fn actions(&self) -> Vec<Action<AnyMessage>>;
+    fn part(&self, bay: &Bay) -> Option<Part<AnyMessage>>;
 }
 
 impl<W: Widget> ErasedWidget for W {
@@ -107,6 +113,10 @@ impl<W: Widget> ErasedWidget for W {
             .into_iter()
             .map(|action| action.map(&AnyMessage::new))
             .collect()
+    }
+
+    fn part(&self, bay: &Bay) -> Option<Part<AnyMessage>> {
+        Widget::part(self, bay).map(|part| part.map(&AnyMessage::new))
     }
 }
 
@@ -196,6 +206,44 @@ mod tests {
         assert_eq!(effect.dialog_request(), Some(DialogRequest::Close));
         assert_eq!(effect.into_parts().1, Some(PopoverRequest::Open));
         assert!(ErasedWidget::dialog(&talking).is_some());
+    }
+
+    #[test]
+    fn parts_answer_their_bays_and_keep_their_hooks() {
+        struct Spotify;
+        impl Widget for Spotify {
+            type Config = crate::NoConfig;
+            type Message = u8;
+            fn new(_: Self::Config) -> (Self, Task<u8>) {
+                (Spotify, Task::none())
+            }
+            fn update(&mut self, _: u8) -> Effect<u8> {
+                Effect::none()
+            }
+            fn item(&self) -> Item<u8> {
+                Item::new(crate::ui::empty())
+            }
+            fn popover(&self) -> Option<Panel<u8>> {
+                Some(
+                    Panel::new(crate::ui::label("Liked songs"))
+                        .on_open(1)
+                        .on_close(2),
+                )
+            }
+            fn part(&self, bay: &Bay) -> Option<Part<u8>> {
+                bay.subject()
+                    .starts_with("org.mpris.MediaPlayer2.spotify")
+                    .then(|| Widget::popover(self))?
+                    .map(Part::from)
+            }
+        }
+
+        let other = Bay::new("player", "org.mpris.MediaPlayer2.firefox");
+        assert!(ErasedWidget::part(&Spotify, &other).is_none());
+        let spotify = Bay::new("player", "org.mpris.MediaPlayer2.spotify");
+        let (_, on_open, on_close) = ErasedWidget::part(&Spotify, &spotify).unwrap().into_parts();
+        assert_eq!(on_open.and_then(AnyMessage::downcast::<u8>), Some(1));
+        assert_eq!(on_close.and_then(AnyMessage::downcast::<u8>), Some(2));
     }
 
     #[test]

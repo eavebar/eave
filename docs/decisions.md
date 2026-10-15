@@ -2434,3 +2434,36 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 
 **Measured** (Asahi aarch64, release, default GPU build, the user's config, two alternating runs against main): binary 20,803,248 → 20,868,784 B (+64 KiB, one page, for D-107 and D-108 together); RSS ~79.7 MB both, within noise; CPU 6 s after start the same within noise (1.6–2.1 %, both still settling). Nothing runs while no item waits.
 
+---
+
+## D-109: Bays and parts: widgets that show in another's popover
+
+**Status:** accepted (2026-10-15). Extends [D-11](#d-11-three-layers-plugins-are-widgets-and-only-widgets-are-plugins) (widgets are still the only plugins) and follows [D-84](#d-84-the-dormer-actions-widgets-declare-found-by-typing) (the host puts together what widgets declare; no plugin reads another).
+
+**What:** a widget can show inside another widget's popover or dialog, where that widget leaves room for it, and the user decides where it goes.
+- **Bays.** `ui::bay(name, subject)` is a place in a panel. `name` says where (`"player"`), and the owner's README lists it, like action ids. `subject` says what it's about, as the service names it: an MPRIS bus name, a PulseAudio sink name. A bay nothing fills takes no room and leaves no gap. Built in: `media` has `player` under its controls, about the player it shows; `volume` has `output` and `input` under each page's slider, about the device in use. eave-pulse's `Device::name` became public for it.
+- **Parts.** `parts = ["someone/airpods", { widget = "someone/spotify", client_id = "…" }]` in an entry attaches widgets to it. Each part is a widget reference, or a table with its options and its own `keys`, like a zone's entry but with nothing about a place in the bar. eave-build compiles them in like any other.
+- **`Widget::part(&self, bay: &Bay) -> Option<Part<Message>>`** is what a widget shows in a bay: `None` for a bay or subject it has nothing for, so a Spotify part shows only for Spotify's player and an AirPods part only for their sink. `Part::new(node)` takes `.on_open` and `.on_close`, sent when the panel it's in opens and starts closing, so a part can listen to something chatty only while it's seen. A `Panel` turns into a `Part` (`.into()`), keeping those two.
+- **One widget, two placements.** The same widget, with the same options, goes in a zone or in `parts`, and that's the only difference. In a zone, the host reads `item()` and `popover()` and never `part()`. As a part, it reads only `part()`: no item, no popover of its own. `update`, `subscription`, `actions` (in the dormer) and `dialog` work the same in both. Effects land where the widget shows: as a part, `open_popover()` opens its owner's popover, and a nudge nudges its owner's island. The widget isn't told where it is, so it has one code path. A widget that implements only `part()` is part-only.
+- **The host** keeps a part as an instance with an `owner`. Before it draws a panel, it walks it and asks each of the owner's parts, in config order, for each bay (`Node::fill_bays`, hidden in eave-api). Each part's nodes are mapped to a host-private `Routed(part, message)`, so the route travels in the message: clicks, sliders, fields and shortcuts reach the part, not the owner, with no change to kit. Shortcuts in a part's rows take their keys from the part's own `keys`, and conflicts settle across the whole panel as D-91 says: the user's key wins, then the first. Hooks are gathered the same way when the panel opens and closes, once per part. A message to a part counts as a change to its owner's view, for icon loading. On reload, a part is kept when its entry and its owner's kind are the same, so editing the owner keeps the part's state, and the reverse; a part whose owner isn't compiled in is skipped with it.
+
+**Why:**
+- People want to extend widgets they didn't write (Spotify's playlists in `media`, AirPods' battery in `volume`) without forking them, and without the bar knowing about Spotify or AirPods.
+- **The host composes; no plugin reaches into another.** The owner says only where and about what. The part never sees the owner's state or types, only a name and a string the service already uses. They depend on eave-api and the services, never on each other.
+- **The user places, as with everything else in config.toml.** One widget written once can sit on its own or inside another, and moving it is one line.
+
+**Alternatives:**
+- **Owners export a Rust trait** (`media::Extension`) for others to implement: every owner becomes an API with its own semver, plugins depend on each other, and each owner invents its own scheme.
+- **A message bus between plugins:** coupling and ordering problems, and one plugin could read another's state.
+- **Typed subjects in eave-api** (`Subject::Player`, `Subject::AudioDevice`): eave-api would grow a type for every service. The service's own id as a string is enough to tell whether a part has anything to show.
+- **A placement flag** passed to the widget (`Placement::Zone | Part`): a second code path in every plugin, for nothing `item()`/`popover()` vs `part()` don't already say.
+- **A `[[parts]]` zone with `into = "media"`:** placement away from the owner it belongs to, and ambiguous with two `media` entries.
+- **Bay titles** given by the owner: each part brings its own `section` if it wants one.
+
+**Not yet:**
+- Bays in items: a part that wants room on the bar can be its own widget in the island already.
+- Parts of parts.
+- Bays declared in `eave-plugin.toml`, so eave-build or `eave doctor` could say a part never fits its owner. Today it just shows nothing.
+- `eave popover <part>` opening its owner's popover.
+
+**Cost:** nothing at rest: `part()` is asked only while a panel with bays is on screen, and a widget with no parts costs one walk of its panel's nodes. eave-api gains `ui::bay`, `Bay`, `Part`, `Widget::part` and `AnyMessage::downcast_ref`, additive, for the next 0.1.x. **Measured** (Asahi, release, two clocks on tiny-skia, alternating runs): the binary is 20,082,304 → 20,147,840 bytes (+64 KB, text +26 KB). RSS 18.1–18.5 → 18.6–19.1 MB, all of it file-backed pages of the binary (RssFile 12.6 → 13.0 MB); anonymous memory unchanged (3.2–3.6 MB on both). Idle CPU 0 ticks in 10 s on both.

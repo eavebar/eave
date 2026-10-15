@@ -53,18 +53,19 @@ pub fn collect<M: Clone>(node: &Node<M>, out: &mut Vec<(Shortcut, M)>) {
     }
 }
 
-/// The same rows as [`collect`], to change their keys.
-fn bindings<'a, M>(node: &'a mut Node<M>, out: &mut Vec<&'a mut Binding>) {
+/// The same rows as [`collect`], to change their keys, with what they send.
+fn bindings<'a, M>(node: &'a mut Node<M>, out: &mut Vec<(&'a mut Binding, &'a M)>) {
     match node.kind_mut() {
         Kind::ListItem {
             shortcut: Some(binding),
-            on_press: Some(_),
+            on_press: Some(message),
             ..
         }
         | Kind::Button {
             shortcut: Some(binding),
+            on_press: message,
             ..
-        } => out.push(binding),
+        } => out.push((binding, message)),
         Kind::Header {
             leading, trailing, ..
         } => leading
@@ -85,17 +86,18 @@ fn bindings<'a, M>(node: &'a mut Node<M>, out: &mut Vec<&'a mut Binding>) {
     }
 }
 
-/// Gives the rows and buttons of a popover's panel their keys: the user's from `keys` where they set one,
+/// Gives the rows and buttons of a popover's panel their keys: the user's where they set one,
 /// else the plugin's. Where two want the same key, the user's wins, then the first. A row that
-/// loses has no key, so it shows none either.
-pub fn resolve_panel<M>(node: &mut Node<M>, keys: &Keys) {
+/// loses has no key, so it shows none either. `keys` says whose `keys` a row's are by what it
+/// sends: a panel can hold parts of other widgets (D-109), each with its own.
+pub fn resolve_panel<'k, M>(node: &mut Node<M>, keys: &dyn Fn(&M) -> &'k Keys) {
     let mut rows = Vec::new();
     bindings(node, &mut rows);
     let wanted: Vec<_> = rows
         .iter()
-        .map(|row| wanted(&row.id, row.key, keys))
+        .map(|(row, message)| wanted(&row.id, row.key, keys(message)))
         .collect();
-    for (row, (key, _)) in rows.into_iter().zip(settle(&wanted)) {
+    for ((row, _), (key, _)) in rows.into_iter().zip(settle(&wanted)) {
         row.key = key;
     }
 }
@@ -347,7 +349,8 @@ mod tests {
             vec![(shortcut('t').ctrl(), 5), (shortcut('t').ctrl(), 5)]
         );
         // The user's key wins, and the second loses the one it shares.
-        resolve_panel(&mut panel, &keys(&[("show", Some(shortcut('s').alt()))]));
+        let user = keys(&[("show", Some(shortcut('s').alt()))]);
+        resolve_panel(&mut panel, &|_| &user);
         let mut out = Vec::new();
         collect(&panel, &mut out);
         assert_eq!(out, vec![(shortcut('s').alt(), 5)]);
@@ -361,7 +364,7 @@ mod tests {
     }
 
     fn resolved(panel: &mut Node<u8>, user: &Keys) -> Vec<(Shortcut, u8)> {
-        resolve_panel(panel, user);
+        resolve_panel(panel, &|_| user);
         let mut out = Vec::new();
         collect(panel, &mut out);
         out
@@ -400,6 +403,35 @@ mod tests {
         assert_eq!(
             resolved(&mut panel, &user),
             [(shortcut('2'), 2), (shortcut('1'), 3)]
+        );
+    }
+
+    #[test]
+    fn each_row_takes_its_own_widgets_keys() {
+        // Rows that send 10 and up are a part's, with keys of its own (D-109).
+        let row = |id, key, message| {
+            ui::list_item("row")
+                .shortcut(id, shortcut(key))
+                .on_press(message)
+        };
+        let owner = keys(&[("liked", Some(shortcut('9')))]);
+        let part = keys(&[("liked", Some(shortcut('l').ctrl()))]);
+        let mut panel = ui::column([
+            row("next", '1', 1),
+            ui::list([row("liked", '1', 10), row("next", '2', 11)]),
+        ]);
+        resolve_panel(&mut panel, &|message| {
+            if *message < 10 { &owner } else { &part }
+        });
+        let mut out = Vec::new();
+        collect(&panel, &mut out);
+        assert_eq!(
+            out,
+            [
+                (shortcut('1'), 1),
+                (shortcut('l').ctrl(), 10),
+                (shortcut('2'), 11)
+            ]
         );
     }
 

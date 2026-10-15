@@ -379,6 +379,11 @@ pub enum Kind<M> {
         title: String,
         lines: Vec<(Change, String)>,
     },
+    /// Where other widgets' parts go. The host fills it before drawing, so a renderer never sees one.
+    Bay {
+        name: String,
+        subject: String,
+    },
 }
 
 pub fn label<M>(text: impl Into<String>) -> Node<M> {
@@ -827,6 +832,19 @@ pub fn tabs<M>(pages: impl IntoIterator<Item = (impl Into<String>, Node<M>)>) ->
     ))
 }
 
+/// A place in a popover or dialog where other widgets can put something: the parts the user
+/// attached to this widget in config.toml, each asked with [`Widget::part`](crate::Widget::part).
+///
+/// `name` says where it is, and your README lists it, like action ids. `subject` says what it's
+/// about, as the service names it: an MPRIS bus name, a PulseAudio sink name. A part uses it to
+/// decide whether it has anything to show. A bay no part fills takes no room.
+pub fn bay<M>(name: impl Into<String>, subject: impl Into<String>) -> Node<M> {
+    Node(Kind::Bay {
+        name: name.into(),
+        subject: subject.into(),
+    })
+}
+
 impl<M> Node<M> {
     /// Sets the tone of this text, or of every text inside this node that has none yet.
     pub fn tone(mut self, tone: Tone) -> Self {
@@ -1077,6 +1095,7 @@ impl<M> Node<M> {
             Kind::Separator
             | Kind::Divider { .. }
             | Kind::Diff { .. }
+            | Kind::Bay { .. }
             | Kind::Empty
             | Kind::Section { .. }
             | Kind::Fill
@@ -1319,7 +1338,106 @@ impl<M> Node<M> {
                 content: Box::new(content.map(f)),
             },
             Kind::Diff { title, lines } => Kind::Diff { title, lines },
+            Kind::Bay { name, subject } => Kind::Bay { name, subject },
         })
+    }
+
+    /// Puts what `fill` gives for each [`bay`] in its place: in a row or column, its nodes take
+    /// the bay's place among the others, and none leave no gap; anywhere else, they go in a
+    /// column. `fill` gets each bay's name and subject.
+    #[doc(hidden)]
+    pub fn fill_bays(&mut self, fill: &mut dyn FnMut(&str, &str) -> Vec<Node<M>>) {
+        if let Kind::Bay { name, subject } = &self.0 {
+            let mut nodes = fill(name, subject);
+            *self = match nodes.len() {
+                0 => empty(),
+                1 => nodes.remove(0),
+                _ => column(nodes),
+            };
+            return;
+        }
+        let one = |node: &mut Node<M>, fill: &mut dyn FnMut(&str, &str) -> Vec<Node<M>>| {
+            node.fill_bays(fill)
+        };
+        let all = |nodes: &mut Vec<Node<M>>, fill: &mut dyn FnMut(&str, &str) -> Vec<Node<M>>| {
+            for mut node in std::mem::take(nodes) {
+                match &node.0 {
+                    Kind::Bay { name, subject } => nodes.extend(fill(name, subject)),
+                    _ => {
+                        node.fill_bays(fill);
+                        nodes.push(node);
+                    }
+                }
+            }
+        };
+        match &mut self.0 {
+            Kind::Alternate {
+                options: children, ..
+            }
+            | Kind::Row(children)
+            | Kind::Column(children)
+            | Kind::Grid {
+                cells: children, ..
+            }
+            | Kind::List(children)
+            | Kind::Timeline(children) => all(children, fill),
+            Kind::Step {
+                leading, content, ..
+            } => {
+                leading.iter_mut().for_each(|child| one(child, fill));
+                one(content, fill);
+            }
+            Kind::Cover {
+                fallback: content, ..
+            }
+            | Kind::Button { content, .. }
+            | Kind::Gulp(content)
+            | Kind::Center(content)
+            | Kind::Page { content, .. }
+            | Kind::Display(content)
+            | Kind::Mark(content)
+            | Kind::Counted { content, .. }
+            | Kind::Scroll { content, .. }
+            | Kind::Detail { value: content, .. } => one(content, fill),
+            Kind::ListItem {
+                leading, trailing, ..
+            }
+            | Kind::Header {
+                leading, trailing, ..
+            } => leading
+                .iter_mut()
+                .chain(trailing.iter_mut())
+                .for_each(|child| one(child, fill)),
+            Kind::Section { trailing, .. }
+            | Kind::TextInput { trailing, .. }
+            | Kind::TextArea { trailing, .. } => {
+                trailing.iter_mut().for_each(|child| one(child, fill))
+            }
+            Kind::Tabs(pages) => pages.iter_mut().for_each(|(_, page)| one(page, fill)),
+            Kind::Switcher { options, .. } => {
+                options.iter_mut().for_each(|(child, _)| one(child, fill))
+            }
+            Kind::Label { .. }
+            | Kind::Heading { .. }
+            | Kind::Icon { .. }
+            | Kind::AppIcon { .. }
+            | Kind::Image { .. }
+            | Kind::Sprite { .. }
+            | Kind::Counter { .. }
+            | Kind::Separator
+            | Kind::Empty
+            | Kind::Fill
+            | Kind::Slider { .. }
+            | Kind::Toggle { .. }
+            | Kind::Meter { .. }
+            | Kind::Badge { .. }
+            | Kind::Keys { .. }
+            | Kind::Markdown { .. }
+            | Kind::Literal { .. }
+            | Kind::Divider { .. }
+            | Kind::Diff { .. }
+            | Kind::Bay { .. } => {}
+        }
     }
 
     #[doc(hidden)]
@@ -1485,6 +1603,88 @@ impl<M> Panel<M> {
     #[doc(hidden)]
     pub fn on_close_message(self) -> Option<M> {
         self.on_close
+    }
+}
+
+/// A [`bay`] being filled, as a part sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bay<'a> {
+    name: &'a str,
+    subject: &'a str,
+}
+
+impl<'a> Bay<'a> {
+    #[doc(hidden)]
+    pub fn new(name: &'a str, subject: &'a str) -> Self {
+        Self { name, subject }
+    }
+
+    /// Where it is, as the owner's README names it: `"player"`, `"output"`.
+    pub fn name(&self) -> &'a str {
+        self.name
+    }
+
+    /// What it's about, as the service names it: an MPRIS bus name, a PulseAudio sink name.
+    pub fn subject(&self) -> &'a str {
+        self.subject
+    }
+}
+
+/// What a widget puts in another widget's [`bay`]. The host lays it out in the owner's popover or
+/// dialog, and sends what it does back to the widget that made it.
+pub struct Part<M> {
+    content: Node<M>,
+    on_open: Option<M>,
+    on_close: Option<M>,
+}
+
+impl<M> Part<M> {
+    pub fn new(content: Node<M>) -> Self {
+        Self {
+            content,
+            on_open: None,
+            on_close: None,
+        }
+    }
+
+    /// Sent each time the popover or dialog it's in opens, if the part shows then.
+    pub fn on_open(mut self, message: M) -> Self {
+        self.on_open = Some(message);
+        self
+    }
+
+    /// Sent each time the popover or dialog it's in starts closing.
+    pub fn on_close(mut self, message: M) -> Self {
+        self.on_close = Some(message);
+        self
+    }
+
+    pub fn map<N: 'static>(self, f: &(impl Fn(M) -> N + Clone + 'static)) -> Part<N>
+    where
+        M: 'static,
+    {
+        Part {
+            content: self.content.map(f),
+            on_open: self.on_open.map(f),
+            on_close: self.on_close.map(f),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn into_parts(self) -> (Node<M>, Option<M>, Option<M>) {
+        (self.content, self.on_open, self.on_close)
+    }
+}
+
+/// A popover as a part, for a widget that can sit on its own or in another's bay: its content and
+/// its open and close messages. Being wide doesn't carry over: the owner's popover sets the width.
+impl<M> From<Panel<M>> for Part<M> {
+    fn from(panel: Panel<M>) -> Self {
+        Self {
+            content: panel.content,
+            on_open: panel.on_open,
+            on_close: panel.on_close,
+        }
     }
 }
 
@@ -2519,5 +2719,34 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn bays_take_what_fills_them_or_leave_no_gap() {
+        let mut node: Node<u8> = column([
+            label("a"),
+            bay("player", "spotify"),
+            bay("other", "x"),
+            center(bay("player", "y")),
+        ]);
+        let mut asked = Vec::new();
+        node.fill_bays(&mut |name, subject| {
+            asked.push(format!("{name}:{subject}"));
+            match subject {
+                "spotify" => vec![label("b"), label("c")],
+                "y" => vec![label("d"), label("e")],
+                _ => Vec::new(),
+            }
+        });
+        assert_eq!(asked, ["player:spotify", "other:x", "player:y"]);
+        let Kind::Column(children) = node.into_kind() else {
+            panic!("still a column");
+        };
+        // In a column, the nodes take the bay's place; elsewhere, they go in one.
+        assert_eq!(children.len(), 4);
+        assert!(matches!(children[2].kind(), Kind::Label { text, .. } if text == "c"));
+        assert!(
+            matches!(children[3].kind(), Kind::Center(inner) if matches!(inner.kind(), Kind::Column(two) if two.len() == 2))
+        );
     }
 }

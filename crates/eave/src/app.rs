@@ -169,6 +169,9 @@ struct Instance {
     /// While a collapsed item shows because its widget nudged: which reveal, numbered by
     /// [`Bar::reveals`].
     revealed: Option<u64>,
+    /// For a part (D-109): the instance whose bays it shows in. A part has no item and no popover
+    /// of its own, and what it asks of them goes to its owner's.
+    owner: Option<u64>,
 }
 
 impl Instance {
@@ -182,6 +185,21 @@ impl Instance {
 
 /// Messages for widgets whose popover just opened or started closing, by instance id.
 type Hooks = Vec<(u64, AnyMessage)>;
+
+/// A message from a part (D-109), in its owner's panel: the part's instance id, and what it sends.
+#[derive(Debug, Clone)]
+struct Routed(u64, AnyMessage);
+
+/// Who a message from `owner`'s panel is for: the part that sent it, or the owner.
+fn route(owner: u64, message: AnyMessage) -> (u64, AnyMessage) {
+    match message.downcast_ref::<Routed>() {
+        Some(Routed(part, message)) => (*part, message.clone()),
+        None => (owner, message),
+    }
+}
+
+/// The keys of a widget that's gone.
+static NO_KEYS: shortcut::Keys = shortcut::Keys::new();
 
 /// Sends each hook to its widget.
 fn send(hooks: Hooks) -> Task<Message> {
@@ -435,17 +453,43 @@ impl Bar {
             ));
         }
 
+        // Each entry's instance, by the entry's index, so parts find their owner.
+        let mut built: Vec<Option<u64>> = Vec::with_capacity(config.entries.len());
         for entry in &config.entries {
+            let owner = match entry.owner.map(|index| built[index]) {
+                Some(Some(owner)) => Some(owner),
+                // Its owner isn't there, and nothing else shows it.
+                Some(None) => {
+                    built.push(None);
+                    continue;
+                }
+                None => None,
+            };
+            // A part stays the same part under the same kind of owner, wherever that moved.
+            let owner_widget = entry
+                .owner
+                .map(|index| config.entries[index].widget.as_str());
+            let instances = &self.instances;
+            let same = |instance: &Instance| {
+                let was = instance.owner.and_then(|id| {
+                    instances
+                        .iter()
+                        .chain(&old)
+                        .find(|other| other.id == id)
+                        .map(|other| other.entry.widget.as_str())
+                });
+                instance.entry.same_but_keys(entry) && was == owner_widget
+            };
             // Keys aren't the widget's: a widget whose keys changed keeps running with the new ones.
-            if let Some(position) = old
-                .iter()
-                .position(|instance| instance.entry.same_but_keys(entry))
-            {
+            if let Some(position) = old.iter().position(same) {
                 let mut instance = old.remove(position);
-                instance.entry.keys = entry.keys.clone();
+                instance.entry = entry.clone();
+                instance.owner = owner;
+                built.push(Some(instance.id));
                 self.instances.push(instance);
                 continue;
             }
+            built.push(None);
             let Some(construct) = self.registry.get(config::widget_name(&entry.widget)) else {
                 eprintln!(
                     "eave: widget `{}` isn't compiled in, skipping it. Run eave-build \
@@ -459,14 +503,16 @@ impl Bar {
                     let id = self.next_id;
                     self.next_id += 1;
                     tasks.push(task.map(move |message| Message::Widget(id, message)));
+                    *built.last_mut().expect("pushed above") = Some(id);
                     self.instances.push(Instance {
                         id,
                         entry: entry.clone(),
-                        has_popover: widget.popover().is_some(),
+                        has_popover: owner.is_none() && widget.popover().is_some(),
                         widget,
                         window: None,
                         nudge: None,
                         revealed: None,
+                        owner,
                     });
                 }
                 Err(error) => eprintln!("eave: widget `{}`: {error}, skipping it", entry.widget),
@@ -516,7 +562,7 @@ impl Bar {
 
     /// Starts loading the app icons that items and the open popover show and nobody has asked
     /// for yet. Only `changed`'s, if it's the one widget whose view may have changed: a widget's
-    /// view comes from its own state alone.
+    /// view comes from its own state alone, and its parts' (D-109), which count as its own.
     fn load_icons(&mut self, changed: Option<u64>) -> Vec<Task<Message>> {
         let mut wanted = Wanted::default();
         let read = self.panel_wanted.take();
@@ -524,13 +570,17 @@ impl Bar {
             if changed.is_some_and(|id| id != instance.id) {
                 continue;
             }
-            if let Some(content) = instance.widget.item().into_parts().content {
+            if instance.owner.is_none()
+                && let Some(content) = instance.widget.item().into_parts().content
+            {
                 kit::wanted(content, &mut wanted);
             }
             if self.dialog_of(instance.id)
                 && let Some(panel) = instance.widget.dialog()
             {
-                kit::wanted(panel.into_node(), &mut wanted);
+                let mut node = panel.into_node();
+                self.fill_bays(instance.id, &mut node);
+                kit::wanted(node, &mut wanted);
             }
             if self.popover_of(instance.id).is_none() {
                 continue;
@@ -538,8 +588,8 @@ impl Bar {
             match &read {
                 Some((id, panel)) if *id == instance.id => wanted.extend(panel),
                 _ => {
-                    if let Some(panel) = instance.widget.popover() {
-                        kit::wanted(panel.into_node(), &mut wanted);
+                    if let Some(node) = self.popover_node(instance.id) {
+                        kit::wanted(node, &mut wanted);
                     }
                 }
             }
@@ -636,6 +686,55 @@ impl Bar {
         self.instances.iter().find(|instance| instance.id == id)
     }
 
+    /// Puts `owner`'s parts in the bays of `node`, its popover or dialog, in config order (D-109).
+    /// Returns the messages the parts that show there want when it opens, and when it closes.
+    fn fill_bays(&self, owner: u64, node: &mut ui::Node<AnyMessage>) -> (Hooks, Hooks) {
+        let parts: Vec<&Instance> = self
+            .instances
+            .iter()
+            .filter(|instance| instance.owner == Some(owner))
+            .collect();
+        let (mut opened, mut closed) = (Hooks::new(), Hooks::new());
+        node.fill_bays(&mut |name, subject| {
+            let bay = ui::Bay::new(name, subject);
+            parts
+                .iter()
+                .filter_map(|part| {
+                    let id = part.id;
+                    let (content, on_open, on_close) = part.widget.part(&bay)?.into_parts();
+                    // Once each, however many bays it shows in.
+                    if !opened
+                        .iter()
+                        .chain(&closed)
+                        .any(|(hooked, _)| *hooked == id)
+                    {
+                        opened.extend(on_open.map(|message| (id, message)));
+                        closed.extend(on_close.map(|message| (id, message)));
+                    }
+                    Some(content.map(&move |message| AnyMessage::new(Routed(id, message))))
+                })
+                .collect()
+        });
+        (opened, closed)
+    }
+
+    /// `id`'s popover as it shows, with its bays filled.
+    fn popover_node(&self, id: u64) -> Option<ui::Node<AnyMessage>> {
+        let mut node = self.popover_node_unfilled(id)?;
+        self.fill_bays(id, &mut node);
+        Some(node)
+    }
+
+    /// The `keys` of whoever sends `message` from `owner`'s panel: a part, or the owner.
+    fn keys_of(&self, owner: u64, message: &AnyMessage) -> &shortcut::Keys {
+        let id = match message.downcast_ref::<Routed>() {
+            Some(Routed(part, _)) => *part,
+            None => owner,
+        };
+        self.find(id)
+            .map_or(&NO_KEYS, |instance| &instance.entry.keys)
+    }
+
     /// The first widget in config.toml that `name` names, as `eave popover` and `eave action`
     /// do. Says so when there's none.
     fn named(&self, name: &str) -> Option<&Instance> {
@@ -700,6 +799,9 @@ impl Bar {
             .and_then(|instance| instance.widget.popover())
             .and_then(|panel| panel.on_open_message());
         hooks.extend(opened.map(|message| (id, message)));
+        if let Some(mut node) = self.popover_node_unfilled(id) {
+            hooks.extend(self.fill_bays(id, &mut node).0);
+        }
         hooks
     }
 
@@ -711,18 +813,35 @@ impl Bar {
             session.open = false;
         }
         let mut hooks = self.close_dialog();
+        let mut closing = Vec::new();
         for popover in self.popovers.iter_mut().filter(|popover| popover.open) {
             popover.open = false;
-            let id = popover.instance;
-            let message = self
-                .instances
-                .iter()
-                .find(|instance| instance.id == id)
-                .and_then(|instance| instance.widget.popover())
+            closing.push(popover.instance);
+        }
+        for id in closing {
+            let Some(instance) = self.find(id) else {
+                continue;
+            };
+            let message = instance
+                .widget
+                .popover()
                 .and_then(|panel| panel.on_close_message());
             hooks.extend(message.map(|message| (id, message)));
+            if let Some(mut node) = self.popover_node_unfilled(id) {
+                hooks.extend(self.fill_bays(id, &mut node).1);
+            }
         }
         hooks
+    }
+
+    /// `id`'s popover, bays and all, to fill for its parts' hooks.
+    fn popover_node_unfilled(&self, id: u64) -> Option<ui::Node<AnyMessage>> {
+        Some(self.find(id)?.widget.popover()?.into_node())
+    }
+
+    /// `id`'s dialog, bays and all, to fill.
+    fn dialog_node_unfilled(&self, id: u64) -> Option<ui::Node<AnyMessage>> {
+        Some(self.find(id)?.widget.dialog()?.into_node())
     }
 
     fn is_open(&self) -> bool {
@@ -756,22 +875,32 @@ impl Bar {
         };
         dialog.open = false;
         let id = dialog.instance;
-        self.find(id)
+        let mut hooks: Hooks = self
+            .find(id)
             .and_then(|instance| instance.widget.dialog())
             .and_then(|panel| panel.on_close_message())
             .map(|message| (id, message))
             .into_iter()
-            .collect()
+            .collect();
+        if let Some(mut node) = self.dialog_node_unfilled(id) {
+            hooks.extend(self.fill_bays(id, &mut node).1);
+        }
+        hooks
     }
 
-    /// The message `id` asked for on its dialog opening.
+    /// The messages `id` and its parts asked for on its dialog opening.
     fn dialog_opened(&self, id: u64) -> Hooks {
-        self.find(id)
+        let mut hooks: Hooks = self
+            .find(id)
             .and_then(|instance| instance.widget.dialog())
             .and_then(|panel| panel.on_open_message())
             .map(|message| (id, message))
             .into_iter()
-            .collect()
+            .collect();
+        if let Some(mut node) = self.dialog_node_unfilled(id) {
+            hooks.extend(self.fill_bays(id, &mut node).0);
+        }
+        hooks
     }
 
     /// Opens `id`'s dialog, out of what was just acted on. Its own popover, open, is always where
@@ -1566,8 +1695,9 @@ impl Bar {
 }
 
 pub fn update(bar: &mut Bar, message: Message) -> Task<Message> {
+    // A part's view is its owner's too.
     let changed = match &message {
-        Message::Widget(id, _) => Some(*id),
+        Message::Widget(id, _) => Some(bar.find(*id).and_then(|i| i.owner).unwrap_or(*id)),
         _ => None,
     };
     let was_open = bar.is_open();
@@ -1632,15 +1762,19 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             let effect = instance.widget.update(message);
             let dialog = effect.dialog_request();
             let (task, request, nudge) = effect.into_parts();
-            let panel = instance.widget.popover();
-            instance.has_popover = panel.is_some();
+            // A part shows in its owner's popover and island, so what it asks of them is asked
+            // of its owner's (D-109).
+            let shown = instance.owner.unwrap_or(id);
+            if instance.owner.is_none() {
+                instance.has_popover = instance.widget.popover().is_some();
+            }
             let has_popover = instance.has_popover;
-            if let Some(panel) = panel
-                && bar.popover_of(id).is_some()
+            if bar.popover_of(shown).is_some()
+                && let Some(node) = bar.popover_node(shown)
             {
                 let mut wanted = Wanted::default();
-                kit::wanted(panel.into_node(), &mut wanted);
-                bar.panel_wanted = Some((id, wanted));
+                kit::wanted(node, &mut wanted);
+                bar.panel_wanted = Some((shown, wanted));
             }
             bar.sync_notices(id);
             bar.refresh_dormer();
@@ -1648,17 +1782,19 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             if let Some(nudge) = nudge {
                 bar.nudges += 1;
                 let generation = bar.nudges;
-                if let Some(instance) = bar.find_mut(id) {
+                if let Some(instance) = bar.find_mut(shown) {
                     instance.nudge = Some((generation, nudge));
                 }
                 // Something happened worth showing: a collapsed item comes out for a while, and
                 // a hidden bar with it.
-                reveal = Task::batch([bar.reveal(id), bar.peek()]);
+                reveal = Task::batch([bar.reveal(shown), bar.peek()]);
             }
 
             let popover = match request {
-                Some(PopoverRequest::Open) => bar.open_popover(id),
-                Some(PopoverRequest::Close) if bar.popover_of(id).is_some() => bar.close_popover(),
+                Some(PopoverRequest::Open) => bar.open_popover(shown),
+                Some(PopoverRequest::Close) if bar.popover_of(shown).is_some() => {
+                    bar.close_popover()
+                }
                 // A widget that stops offering a popover closes it.
                 _ if bar.popover_of(id).is_some() && !has_popover => bar.close_popover(),
                 _ => Hooks::new(),
@@ -2240,10 +2376,11 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     // collapsed items to bring back.
     let island =
         |island: IslandId, align: Horizontal| -> Option<(Island<'_, Message>, config::Edges)> {
+            // Parts show in their owner's bays, not in the bar (D-109).
             let instances = || {
                 bar.instances
                     .iter()
-                    .filter(move |instance| instance.island() == island)
+                    .filter(move |instance| instance.island() == island && instance.owner.is_none())
             };
             let collapsible = instances().any(|instance| instance.entry.collapsible);
             let expanded = bar.expanded.contains(&island);
@@ -2503,16 +2640,16 @@ fn dialog_popover<'a>(bar: &'a Bar, dialog: &Dialog) -> island::Popover<'a, Mess
     let scroll = (dialog.room - style::DIALOG_CHROME).clamp(0.0, style::DIALOG_SCROLL_MAX_HEIGHT);
     // A widget can stop offering its dialog while it goes back: it goes back empty.
     let mut keys = Vec::new();
-    let content: Element<'_, AnyMessage> = match bar
-        .find(id)
-        .and_then(|instance| Some((instance.widget.dialog()?, &instance.entry.keys)))
-    {
-        Some((panel, user_keys)) => kit::dialog(
-            panel_keys(panel.into_node(), user_keys, &mut keys),
-            &bar.icons,
-            bar.palette(),
-            scroll,
-        ),
+    let content: Element<'_, AnyMessage> = match bar.dialog_node_unfilled(id) {
+        Some(mut node) => {
+            bar.fill_bays(id, &mut node);
+            kit::dialog(
+                panel_keys(node, &|message| bar.keys_of(id, message), &mut keys),
+                &bar.icons,
+                bar.palette(),
+                scroll,
+            )
+        }
         None => Space::new().into(),
     };
     let home = match dialog.origin {
@@ -2523,7 +2660,10 @@ fn dialog_popover<'a>(bar: &'a Bar, dialog: &Dialog) -> island::Popover<'a, Mess
     let top = home.is_none();
     island::Popover {
         key: DIALOG,
-        content: content.map(move |message| Message::Widget(id, message)),
+        content: content.map(move |message| {
+            let (id, message) = route(id, message);
+            Message::Widget(id, message)
+        }),
         open: dialog.open,
         on_placed: Box::new(|rect| Message::Dialog(Event::Placed(rect))),
         on_closed: Message::Dialog(Event::Closed),
@@ -2820,9 +2960,9 @@ fn item_view<'a>(
 
 /// A panel's rows with the keys config.toml gives them, so the keycaps show the keys that work,
 /// and those keys collected into `keys` (D-91).
-fn panel_keys(
+fn panel_keys<'k>(
     mut node: ui::Node<AnyMessage>,
-    user_keys: &shortcut::Keys,
+    user_keys: &dyn Fn(&AnyMessage) -> &'k shortcut::Keys,
     keys: &mut Vec<(ui::Shortcut, AnyMessage)>,
 ) -> ui::Node<AnyMessage> {
     shortcut::resolve_panel(&mut node, user_keys);
@@ -2843,9 +2983,12 @@ fn rows_on_key<'a>(
                 .find(|(keys, _)| {
                     !(typing && shortcut::types(keys)) && shortcut::matches(keys, key, modifiers)
                 })
-                .map(|(_, message)| match island {
-                    Some(island) => Message::Acted(island, id, message.clone()),
-                    None => Message::Widget(id, message.clone()),
+                .map(|(_, message)| {
+                    let (id, message) = route(id, message.clone());
+                    match island {
+                        Some(island) => Message::Acted(island, id, message),
+                        None => Message::Widget(id, message),
+                    }
                 })
         }) as island::OnKey<'a, Message>
     })
@@ -2856,29 +2999,32 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
     // A widget can stop offering its popover while it closes: the island morphs back empty.
     let mut width = style::PANEL_WIDTH;
     let mut keys = Vec::new();
-    let content: Element<'_, AnyMessage> = match bar
-        .find(id)
-        .and_then(|instance| Some((instance.widget.popover()?, &instance.entry.keys)))
-    {
-        Some((panel, user_keys)) => {
-            if panel.is_wide() {
-                width = style::PANEL_WIDE_WIDTH;
+    let content: Element<'_, AnyMessage> =
+        match bar.find(id).and_then(|instance| instance.widget.popover()) {
+            Some(panel) => {
+                if panel.is_wide() {
+                    width = style::PANEL_WIDE_WIDTH;
+                }
+                let mut node = panel.into_node();
+                bar.fill_bays(id, &mut node);
+                kit::panel(
+                    panel_keys(node, &|message| bar.keys_of(id, message), &mut keys),
+                    &bar.icons,
+                    bar.palette(),
+                )
             }
-            kit::panel(
-                panel_keys(panel.into_node(), user_keys, &mut keys),
-                &bar.icons,
-                bar.palette(),
-            )
-        }
-        None => Space::new().into(),
-    };
+            None => Space::new().into(),
+        };
     let island = bar.find(id).map(Instance::island);
     let on_key = rows_on_key(id, island, keys);
     island::Popover {
         key: id,
-        content: content.map(move |message| match island {
-            Some(island) => Message::Acted(island, id, message),
-            None => Message::Widget(id, message),
+        content: content.map(move |message| {
+            let (id, message) = route(id, message);
+            match island {
+                Some(island) => Message::Acted(island, id, message),
+                None => Message::Widget(id, message),
+            }
         }),
         open: popover.open,
         on_placed: Box::new(move |rect| Message::PopoverPlaced(id, rect)),
@@ -4562,5 +4708,265 @@ mod tests {
         let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(1000.0)));
         let _ = bar.apply(config("[[right]]\nwidget = \"d\""));
         assert!(bar.dialog.is_none());
+    }
+
+    /// An owner with two bays: one about Spotify, one about something else (D-109).
+    struct Owning;
+
+    impl Widget for Owning {
+        type Config = toml::Table;
+        type Message = &'static str;
+
+        fn new(_: Self::Config) -> (Self, eave_api::Task<&'static str>) {
+            (Self, eave_api::Task::none())
+        }
+
+        fn update(&mut self, _: &'static str) -> Effect<&'static str> {
+            Effect::none()
+        }
+
+        fn item(&self) -> eave_api::ui::Item<&'static str> {
+            eave_api::ui::Item::new(label("media"))
+        }
+
+        fn popover(&self) -> Option<eave_api::ui::Panel<&'static str>> {
+            Some(
+                eave_api::ui::Panel::new(ui::column([
+                    ui::header("Media"),
+                    ui::bay("player", "spotify"),
+                    ui::bay("other", "firefox"),
+                ]))
+                .on_open("opened")
+                .on_close("closed"),
+            )
+        }
+    }
+
+    /// A widget that works on its own or as a part: a row counting how often it was pressed,
+    /// in its popover or in a bay about Spotify.
+    struct Spot(u32);
+
+    impl Widget for Spot {
+        type Config = toml::Table;
+        type Message = &'static str;
+
+        fn new(_: Self::Config) -> (Self, eave_api::Task<&'static str>) {
+            (Self(0), eave_api::Task::none())
+        }
+
+        fn update(&mut self, message: &'static str) -> Effect<&'static str> {
+            match message {
+                "liked" => {
+                    self.0 += 1;
+                    Effect::none()
+                }
+                "show" => Effect::none().open_popover(),
+                "nudge" => Effect::none().nudge(eave_api::Nudge::Up),
+                _ => Effect::none(),
+            }
+        }
+
+        fn item(&self) -> eave_api::ui::Item<&'static str> {
+            eave_api::ui::Item::new(label("spot"))
+        }
+
+        fn popover(&self) -> Option<eave_api::ui::Panel<&'static str>> {
+            Some(
+                eave_api::ui::Panel::new(ui::list([ui::list_item(format!("liked {}", self.0))
+                    .shortcut("liked", ui::shortcut('1'))
+                    .on_press("liked")]))
+                .on_open("part opened")
+                .on_close("part closed"),
+            )
+        }
+
+        fn actions(&self) -> Vec<Action<&'static str>> {
+            vec![ui::action("Play liked songs", "liked")]
+        }
+
+        fn part(&self, bay: &ui::Bay) -> Option<ui::Part<&'static str>> {
+            (bay.subject() == "spotify")
+                .then(|| Widget::popover(self))?
+                .map(Into::into)
+        }
+    }
+
+    fn parts_bar(source: &str) -> Bar {
+        let mut registry = Registry::new();
+        registry.widget::<Owning>("media");
+        registry.widget::<Spot>("spot");
+        let (mut bar, _) = Bar::new(registry, config(source));
+        let window = window::Id::unique();
+        for instance in &mut bar.instances {
+            instance.window = Some(window);
+        }
+        bar
+    }
+
+    /// The rows of `id`'s popover, as shown: their titles, keys and who they're for.
+    fn bay_rows(bar: &Bar, id: u64) -> Vec<(String, Option<ui::Shortcut>, u64)> {
+        fn walk(
+            node: &ui::Node<AnyMessage>,
+            out: &mut Vec<(String, Option<ui::Shortcut>, AnyMessage)>,
+        ) {
+            match node.kind() {
+                ui::Kind::ListItem {
+                    title,
+                    shortcut,
+                    on_press: Some(message),
+                    ..
+                } => out.push((
+                    title.clone(),
+                    shortcut.as_ref().and_then(|binding| binding.key),
+                    message.clone(),
+                )),
+                ui::Kind::Column(children) | ui::Kind::List(children) => {
+                    children.iter().for_each(|child| walk(child, out))
+                }
+                _ => {}
+            }
+        }
+        let node = panel_keys(
+            bar.popover_node(id).unwrap(),
+            &|message| bar.keys_of(id, message),
+            &mut Vec::new(),
+        );
+        let mut out = Vec::new();
+        walk(&node, &mut out);
+        out.into_iter()
+            .map(|(title, key, message)| (title, key, route(id, message).0))
+            .collect()
+    }
+
+    fn children(bar: &Bar, id: u64) -> usize {
+        match bar.popover_node(id).unwrap().into_kind() {
+            ui::Kind::Column(children) => children.len(),
+            _ => 1,
+        }
+    }
+
+    #[test]
+    fn parts_fill_their_owners_bays_and_get_what_they_send() {
+        let mut bar = parts_bar(
+            "[[left]]\nwidget = \"media\"\nparts = [{ widget = \"spot\", keys = { liked = \"ctrl+l\" } }]",
+        );
+        assert_eq!(ids(&bar), [("media", 0), ("spot", 1)]);
+        let liked = ui::shortcut('l').ctrl();
+        assert_eq!(bay_rows(&bar, 0), [("liked 0".into(), Some(liked), 1)]);
+        // The header, then the part. The bay about Firefox has nothing in it, and leaves no gap.
+        assert_eq!(children(&bar, 0), 2);
+
+        // Pressed, it reaches the part, not the owner.
+        let (to, message) = {
+            let node = bar.popover_node(0).unwrap();
+            let mut keys = Vec::new();
+            shortcut::collect(&node, &mut keys);
+            route(0, keys.remove(0).1)
+        };
+        assert_eq!(to, 1);
+        let _ = update(&mut bar, Message::Widget(to, message));
+        assert_eq!(bay_rows(&bar, 0), [("liked 1".into(), Some(liked), 1)]);
+    }
+
+    #[test]
+    fn a_bay_with_no_parts_takes_no_room() {
+        let bar = parts_bar("[[left]]\nwidget = \"media\"");
+        assert_eq!(children(&bar, 0), 1);
+        assert!(bay_rows(&bar, 0).is_empty());
+    }
+
+    #[test]
+    fn parts_hear_their_owners_popover_open_and_close() {
+        let mut bar = parts_bar("[[left]]\nwidget = \"media\"\nparts = [\"spot\"]");
+        assert_eq!(
+            said(bar.open_popover(0)),
+            [(0, "opened"), (1, "part opened")]
+        );
+        assert_eq!(
+            said(bar.close_popover()),
+            [(0, "closed"), (1, "part closed")]
+        );
+    }
+
+    #[test]
+    fn a_part_is_not_on_the_bar_but_its_actions_are_in_the_dormer() {
+        let bar = parts_bar("[[left]]\nwidget = \"media\"\nparts = [\"spot\"]");
+        let part = bar.find(1).unwrap();
+        assert!(!part.has_popover);
+        let (entries, _) = bar.dormer_entries();
+        let listed: Vec<_> = entries
+            .iter()
+            .map(|entry| (entry.instance, entry.title.as_str()))
+            .collect();
+        assert_eq!(listed, [(0, "Media"), (1, "Play liked songs")]);
+    }
+
+    #[test]
+    fn what_a_part_asks_of_its_popover_and_island_goes_to_its_owners() {
+        let mut bar = parts_bar("[[left]]\nwidget = \"media\"\nparts = [\"spot\"]");
+        let _ = update(&mut bar, Message::Widget(1, AnyMessage::new("show")));
+        assert!(bar.popover_of(0).is_some());
+        assert!(bar.popover_of(1).is_none());
+        let _ = bar.close_popover();
+        let _ = update(&mut bar, Message::Widget(1, AnyMessage::new("nudge")));
+        assert!(bar.find(0).unwrap().nudge.is_some());
+        assert!(bar.find(1).unwrap().nudge.is_none());
+    }
+
+    #[test]
+    fn one_widget_sits_on_its_own_or_in_a_bay_as_the_user_says() {
+        let mut bar = parts_bar(
+            "[[left]]\nwidget = \"spot\"\n[[right]]\nwidget = \"media\"\nparts = [\"spot\"]",
+        );
+        assert_eq!(ids(&bar), [("spot", 0), ("media", 1), ("spot", 2)]);
+        // On its own: its item and its popover, which it opens itself.
+        assert!(bar.find(0).unwrap().has_popover);
+        let _ = update(&mut bar, Message::Widget(0, AnyMessage::new("show")));
+        assert!(bar.popover_of(0).is_some());
+        assert_eq!(
+            bay_rows(&bar, 0),
+            [("liked 0".into(), Some(ui::shortcut('1')), 0)]
+        );
+        // In the bay: the same row, for the other instance.
+        assert_eq!(
+            bay_rows(&bar, 1),
+            [("liked 0".into(), Some(ui::shortcut('1')), 2)]
+        );
+        let _ = update(&mut bar, Message::Widget(2, AnyMessage::new("show")));
+        assert!(bar.popover_of(1).is_some());
+    }
+
+    #[test]
+    fn reload_keeps_owners_and_parts_apart() {
+        let mut bar = parts_bar("[[left]]\nwidget = \"media\"\nparts = [\"spot\"]");
+        let _ = update(&mut bar, Message::Widget(1, AnyMessage::new("liked")));
+
+        // The owner changes: the part keeps its state, now in the new owner.
+        let _ = bar.apply(config(
+            "[[left]]\nwidget = \"media\"\nx = 1\nparts = [\"spot\"]",
+        ));
+        assert_eq!(ids(&bar), [("media", 2), ("spot", 1)]);
+        assert_eq!(bar.find(1).unwrap().owner, Some(2));
+        assert_eq!(
+            bay_rows(&bar, 2),
+            [("liked 1".into(), Some(ui::shortcut('1')), 1)]
+        );
+
+        // The part changes: the owner stays.
+        let _ = bar.apply(config(
+            "[[left]]\nwidget = \"media\"\nx = 1\nparts = [{ widget = \"spot\", y = 2 }]",
+        ));
+        assert_eq!(ids(&bar), [("media", 2), ("spot", 3)]);
+
+        // Taken out of the bay and put on the bar, it's a new widget there.
+        let _ = bar.apply(config(
+            "[[left]]\nwidget = \"media\"\nx = 1\n[[left]]\nwidget = \"spot\"\ny = 2",
+        ));
+        assert_eq!(ids(&bar), [("media", 2), ("spot", 4)]);
+        assert_eq!(bar.find(4).unwrap().owner, None);
+
+        // An owner that isn't compiled in takes its parts with it.
+        let _ = bar.apply(config("[[left]]\nwidget = \"gone\"\nparts = [\"spot\"]"));
+        assert!(bar.instances.is_empty());
     }
 }

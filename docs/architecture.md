@@ -60,6 +60,14 @@ A popover isn't a surface of its own: the island holding the item turns into it 
 4. Once the surface is tall enough, the island morphs into the panel: its edges spring to the panel's, its items fade out, and the panel's content fades in once the shape is halfway there. Once it has shown, a change of the panel's size only springs the shape, and the content stays (`PopoverMotion::out`). It squishes as it sets off, squeezed in from the sides, and eases back as it grows ([D-44](decisions.md)).
 5. It closes on a second click on the item, when the widget returns `close_popover()` or stops offering a popover, on a click anywhere else, or on any key press but a modifier or one of its rows' shortcuts: the bar takes the keyboard only while a popover is open ([D-36](decisions.md)). `popover_view` gives the panel's rows the keys config.toml sets for them (`shortcut::resolve_panel`), then collects them and hands them to the island as its `on_key`, so a shortcut presses its row instead ([D-91](decisions.md)). While a popover is open, a non-consuming Hyprland bind reports every left click on socket2, and the host ignores the ones that land on the bar. Clicks on the bar are handled by the bar itself, and the island captures presses on its panel ([D-14](decisions.md)). Closing runs the morph backwards, and the island splats against the top as it lands ([D-44](decisions.md)). When the island is back, it reports `PopoverClosed` and the host shrinks the surface again.
 
+## Bays
+
+A widget's popover or dialog can hold other widgets' parts, in the bays it leaves for them ([D-109](decisions.md)). A part is an instance like any other, with an `owner`: it isn't drawn on the bar and has no popover of its own.
+
+1. Wherever the host builds a panel (`popover_view`, `dialog_popover`, icon loading, the open and close hooks), `Bar::fill_bays` walks it. For each `ui::bay`, it asks the owner's parts, in config order, for `part(&bay)`. Their nodes take the bay's place, or nothing does.
+2. Each part's nodes send `Routed(part, message)`. `route` unwraps it where the panel's messages and its shortcuts become `Message::Widget`, so they reach the part. `keys_of` gives each row the `keys` of whoever sends it, so `shortcut::resolve_panel` settles keys across the owner and its parts in one pass.
+3. A part's `open_popover` and nudges go to its owner, and a message to a part reloads its owner's icons, since the part shows in the owner's view.
+
 ## Notifications
 
 Notifications travel only over the session bus ([D-52](decisions.md)). The plugin that serves `org.freedesktop.Notifications` (eave-notifications) lists what it received as notices, and no other plugin lists any. While there are notices, the right island turns into a panel of them (with several islands on the right, the last one, at the screen's edge; [D-55](decisions.md)), the same way it turns into a popover ([D-47](decisions.md)):
