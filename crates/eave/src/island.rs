@@ -5,10 +5,10 @@
 //!
 //! An island can also become a popover. Given one, it morphs into the panel's shape, growing from
 //! where it sits (the dormer's drops from it into the middle of the screen), while its items fade
-//! out and the panel's content fades in. It squishes as it sets off, squeezed in from the sides,
-//! and eases back as it grows. Closing runs the morph backwards, lands like it hit the top (it splats into it, flatter and wider, then eases back),
-//! and reports when it's done. The panel lives in an overlay, so it's laid out against the whole
-//! surface, drawn over the other islands, and sees events first.
+//! out and the panel's content fades in. Closing runs the morph backwards and reports when it's
+//! done. Its outline is a skin (D-111): as the edges set off it stretches the way they go, and as
+//! they land it carries on, splatting into the top. The panel lives in an overlay, so it's laid
+//! out against the whole surface, drawn over the other islands, and sees events first.
 //!
 //! An island can have a toggle, a control of the host's at one end, there only while the pointer
 //! is over the island: hovering grows the island to make room for it, and it fades in.
@@ -19,6 +19,7 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use eave_api::{Nudge, NudgeRequest};
@@ -412,11 +413,6 @@ struct Motion {
     /// How much slower than usual the last nudge plays: the push springs and the jelly run on
     /// time divided by it. 1 unless the nudge said how long it should last.
     pace: f32,
-    /// How far the drawn shape's left, right and bottom give past its edges, in logical pixels
-    /// (D-110): kicked the way the edges were going as they set off or land.
-    give: Give,
-    /// How hard the edges have been going, which a landing spends.
-    landing: Landing,
     /// How far down the surface a popover that comes out as a drop does it ([`Popover::drop`]).
     drop: Option<f32>,
     /// The color of what it comes out of, if it isn't the island's ([`Popover::drop_color`]).
@@ -465,8 +461,6 @@ impl Default for Motion {
             rooms: [f32::INFINITY; 4],
             rooms_for: None,
             pace: 1.0,
-            give: Give::default(),
-            landing: Landing::default(),
             drop: None,
             drop_color: None,
             home: None,
@@ -541,6 +535,10 @@ struct Edges {
     top: Spring,
     right: Spring,
     bottom: Spring,
+    /// Where the edges go (left, top, right, bottom). Their springs may aim past it.
+    goal: [f32; 4],
+    /// Whether they land on it, stopping dead, rather than ease into it.
+    hits: bool,
 }
 
 impl Edges {
@@ -550,27 +548,78 @@ impl Edges {
             top: Spring::new(rect.y, MORPH),
             right: Spring::new(rect.x + rect.width, MORPH),
             bottom: Spring::new(rect.y + rect.height, MORPH),
+            goal: edges_of(rect),
+            hits: false,
         }
     }
 
-    fn aim(&mut self, rect: Rectangle) {
-        self.left.target = rect.x;
-        self.top.target = rect.y;
-        self.right.target = rect.x + rect.width;
-        self.bottom.target = rect.y + rect.height;
+    /// Heads for `rect`. One that `hits` it heads `LAND_PAST` of the way past each edge that
+    /// changes the shape's size, and stops dead as it gets there ([`Edges::hit`]): it lands on
+    /// it at speed, and what it carries goes into the skin. One that doesn't, as an opening
+    /// popover, eases in. A left and right that only move the shape along ease in too.
+    fn aim(&mut self, rect: Rectangle, hits: bool) {
+        let goal = edges_of(rect);
+        if goal == self.goal && hits == self.hits {
+            return;
+        }
+        self.goal = goal;
+        self.hits = hits;
+        let [left, top, right, bottom] = self.springs_mut();
+        let [goal_left, goal_top, goal_right, goal_bottom] = goal;
+        // Up and down, a shape always lands against the top, which hangs from the bar.
+        for (a, b, goal_a, goal_b, across) in [
+            (left, right, goal_left, goal_right, true),
+            (top, bottom, goal_top, goal_bottom, false),
+        ] {
+            let sliding = across && (goal_a - a.value) * (goal_b - b.value) > 0.0;
+            for (spring, goal) in [(a, goal_a), (b, goal_b)] {
+                spring.target = if hits && !sliding {
+                    goal + theme::LAND_PAST * (goal - spring.value)
+                } else {
+                    goal
+                };
+            }
+        }
     }
 
-    fn springs(&self) -> [Spring; 4] {
-        [self.left, self.top, self.right, self.bottom]
+    fn springs_mut(&mut self) -> [&mut Spring; 4] {
+        [
+            &mut self.left,
+            &mut self.top,
+            &mut self.right,
+            &mut self.bottom,
+        ]
     }
 
-    /// Whether every edge will be within `SQUISH_LAND` of where it's going by the time a kick
-    /// given now peaks: a reaction kicked now peaks as the shape arrives.
-    fn arriving(&self) -> bool {
-        self.springs().into_iter().all(|mut ahead| {
-            ahead.advance(REACT.peak_time());
-            (ahead.target - ahead.value).abs() < theme::SQUISH_LAND
-        })
+    /// Stops each edge dead that got to where it goes on its way past it.
+    fn hit(&mut self) {
+        let goal = self.goal;
+        for (spring, goal) in self.springs_mut().into_iter().zip(goal) {
+            if spring.target != goal && (spring.value - goal) * (spring.target - goal) >= 0.0 {
+                *spring = Spring::new(goal, MORPH);
+            }
+        }
+    }
+
+    /// How fast each side's edge goes outward (left, top, right, bottom), less what it shares with
+    /// the side across: a shape sliding as a whole doesn't deform, only one changing size does.
+    fn outward(&self) -> [f32; 4] {
+        let shared = |a: f32, b: f32| {
+            if a * b > 0.0 {
+                a.signum() * a.abs().min(b.abs())
+            } else {
+                0.0
+            }
+        };
+        let (left, top) = (self.left.velocity, self.top.velocity);
+        let (right, bottom) = (self.right.velocity, self.bottom.velocity);
+        let (across, down) = (shared(left, right), shared(top, bottom));
+        [
+            -(left - across),
+            -(top - down),
+            right - across,
+            bottom - down,
+        ]
     }
 
     fn rect(&self) -> Rectangle {
@@ -603,51 +652,6 @@ impl Edges {
             self.bottom.value,
         ];
         (1.0 - distance(to, now) / total).clamp(0.0, 1.0)
-    }
-}
-
-/// How far the drawn shape's sides give past its edges, each the way the screen goes (right and
-/// down are positive): left, right and bottom. The top stays where its edge is: on the bar, which
-/// is what the shape hangs from and lands against.
-#[derive(Debug, Clone, Copy)]
-struct Give {
-    left: Spring,
-    right: Spring,
-    bottom: Spring,
-}
-
-impl Default for Give {
-    fn default() -> Self {
-        Self {
-            left: Spring::new(0.0, REACT),
-            right: Spring::new(0.0, REACT),
-            bottom: Spring::new(0.0, REACT),
-        }
-    }
-}
-
-/// The fastest each edge has gone (left, top, right, bottom), signed, since it set off that way
-/// (D-110). The morph is nearly still by the time it arrives, so how fast it went at its fastest
-/// stands for how much it carries: about how far it came.
-#[derive(Debug, Default, Clone, Copy)]
-struct Landing {
-    peak: [f32; 4],
-}
-
-impl Landing {
-    /// Notes how fast the edges go now. One that turns back starts over the other way.
-    fn track(&mut self, edges: &Edges) {
-        for (peak, spring) in self.peak.iter_mut().zip(edges.springs()) {
-            let speed = spring.velocity;
-            if speed * *peak < 0.0 || speed.abs() > peak.abs() {
-                *peak = speed;
-            }
-        }
-    }
-
-    /// Whether any edge has gone fast enough to give when it lands.
-    fn carries(&self) -> bool {
-        self.peak.iter().any(|peak| peak.abs() > theme::LAND_MIN)
     }
 }
 
@@ -710,8 +714,6 @@ struct PopoverMotion {
     reported: Option<Rectangle>,
     /// Whether the host has been told the island is back to itself.
     closed: bool,
-    /// Whether this way of the morph has had its squish (opening) or splat (closing).
-    squished: bool,
     /// How many of a drop's stops ([`Motion::stops`]) it has been most of the way to this way of
     /// the morph: it heads for the next.
     via: usize,
@@ -746,7 +748,6 @@ impl Default for PopoverMotion {
             fitted: None,
             reported: None,
             closed: false,
-            squished: false,
             via: 0,
             touched: None,
             joined: false,
@@ -848,7 +849,7 @@ impl Motion {
             down,
             left - (-x).max(0.0),
         ]
-        .map(|room| room.clamp(0.0, theme::NUDGE_BUMP_ROOM))
+        .map(|room| room.clamp(0.0, theme::SKIN_ROOM))
     }
 
     /// Keeps a push out of the walls: one that gets there bounces back, slower, and the side that
@@ -1100,9 +1101,8 @@ impl Motion {
                 if open && !popover_state.open {
                     popover_state.closed = false;
                 }
-                // Turning around squishes again, and a drop goes by its ball again.
+                // Turning around, a drop goes by its ball again.
                 if open != popover_state.open {
-                    popover_state.squished = false;
                     popover_state.out = false;
                     popover_state.via = 0;
                     popover_state.arrived = false;
@@ -1177,7 +1177,6 @@ impl Motion {
             && popover.present
         {
             popover.panel = Spring::new(0.0, FADE);
-            popover.squished = false;
             popover.out = false;
             popover.closed = false;
             true
@@ -1212,35 +1211,20 @@ impl Motion {
         let (stops_out, stops_back) = (slice(&out), slice(&back));
         let popover = &mut self.popover;
         let mut bounce = false;
-        // Kicks for the give (left, right, bottom), in logical pixels at the furthest.
-        let mut give = None;
-        // Whether the shape lands now, with what its edges carry (D-110).
-        let mut lands = false;
         match (popover.opening(), popover.rect) {
             (Some(panel), _) => {
                 // A drop swells where it comes out and falls as a ball first, heading on to each
                 // next stop once it's most of the way to one.
                 let heading = pass(&self.edges, &mut popover.via, home, stops_out).unwrap_or(panel);
-                self.edges.aim(heading);
-                // Stretched along the way it grows and squeezed across it as it sets off, then
-                // eases back: a squish on the way, nothing to hit when it gets there. A drop sets
-                // off from its ball, squeezed in from the sides.
-                if !popover.squished && heading == panel {
-                    popover.squished = true;
-                    give = Some(match ball {
-                        Some(_) => [theme::DROP_SQUISH / 2.0, -theme::DROP_SQUISH / 2.0, 0.0],
-                        None => stretch(&self.edges, panel),
-                    });
-                }
-                // Opening has nothing to land on: what it carries is spent getting there.
-                self.landing = Landing::default();
+                // Opening has nothing to hit (D-44): it eases in.
+                self.edges.aim(heading, false);
                 // A drop falls into place: it bounces as it gets there, like a workspace nudged.
                 let mut ahead = self.edges.bottom;
                 ahead.advance(REACT.peak_time());
                 if ball.is_some()
                     && heading == panel
                     && !popover.arrived
-                    && (panel.y + panel.height) - ahead.value < theme::SQUISH_LAND
+                    && (panel.y + panel.height) - ahead.value < theme::DROP_LAND
                 {
                     popover.arrived = true;
                     bounce = true;
@@ -1268,18 +1252,8 @@ impl Motion {
                 } else {
                     pass(&self.edges, &mut popover.via, panel, stops_back).unwrap_or(home)
                 };
-                self.edges.aim(heading);
-                // Splats into the top as it lands, each side carrying on the way it was going.
-                // Not while it's open and waiting for room.
-                if !popover.open && !popover.squished && heading == home && self.edges.arriving() {
-                    popover.squished = true;
-                    // A drop vanishes as it lands: it reacted as its neck caught it instead.
-                    if ball.is_none() {
-                        lands = true;
-                    } else {
-                        self.landing = Landing::default();
-                    }
-                }
+                // It lands on where it rests, and only goes by the stops.
+                self.edges.aim(heading, !popover.open && heading == home);
                 popover.panel.target = 0.0;
                 popover.items.target = if popover.panel.value < REST_DISTANCE
                     && self.edges.progress(panel, home) > 0.5
@@ -1290,43 +1264,53 @@ impl Motion {
                 };
             }
             _ => {
-                self.edges.aim(home);
+                // Any other change of shape lands the same way.
+                self.edges.aim(home, true);
                 popover.items.target = 1.0;
                 popover.panel.target = 0.0;
-                // Any other change of shape lands the same way, once it's gone far enough.
-                lands = self.landing.carries() && self.edges.arriving();
             }
         }
         if bounce {
             self.bounce(1.0);
         }
-        if lands {
-            let [left, _, right, bottom] = std::mem::take(&mut self.landing).peak;
-            let carry = |speed: f32| {
-                if speed.abs() > theme::LAND_MIN {
-                    (speed * theme::LAND_CARRY).clamp(-theme::LAND_MAX, theme::LAND_MAX)
-                } else {
-                    0.0
-                }
-            };
-            give = Some([carry(left), carry(right), carry(bottom)]);
-        }
-        if let Some(peaks) = give {
-            self.kick_give(peaks);
-        }
     }
 
-    /// Kicks the left, right and bottom give out `peaks` far, each way the screen goes. Going out
-    /// from the shape, each keeps inside its room: the surface ends `EDGE_GAP` away.
-    fn kick_give(&mut self, [left, right, bottom]: [f32; 3]) {
-        let [_, room_right, room_down, room_left] = self.room();
-        let within = |room: f32| (room / theme::REACT_SIZE).max(0.0);
-        let left = left.max(-within(room_left));
-        let right = right.min(within(room_right));
-        let bottom = bottom.min(within(room_down));
-        self.give.left.velocity = react(left);
-        self.give.right.velocity = react(right);
-        self.give.bottom.velocity = react(bottom);
+    /// Lets the skin feel how its edges moved since they went `before` ([`Edges::outward`]): as
+    /// an edge speeds up, its side stretches out, whichever way it goes (`SKIN_STRETCH`): ahead of
+    /// an edge going out, behind one coming in. As it slows down and lands, its side carries on
+    /// the way it went (`SKIN_CARRY`). Fullest in the side's middle (`SKIN_BOW`). The ring does the
+    /// rest: it spreads it round the corners and keeps its area (D-111).
+    fn feel_edges(&mut self, before: [f32; 4]) {
+        let (stretch, mut carry) = skin_gains();
+        if self.popover.opening().is_some() {
+            // Opening has nothing to hit (D-44).
+            carry *= theme::OPEN_CARRY;
+        } else if self.drop.is_some() && self.popover.present {
+            // A drop vanishes as it lands: it reacts as its neck catches it instead (D-86).
+            carry = 0.0;
+        }
+        let bow = |along: f32| {
+            1.0 - theme::SKIN_BOW + theme::SKIN_BOW * (std::f32::consts::PI * along).sin()
+        };
+        let after = self.edges.outward();
+        for ((was, now), side) in
+            before
+                .into_iter()
+                .zip(after)
+                .zip([Side::Left, Side::Top, Side::Right, Side::Bottom])
+        {
+            let change = now - was;
+            if change == 0.0 {
+                continue;
+            }
+            let speeding = was * now >= 0.0 && now.abs() > was.abs();
+            let speed = if speeding {
+                stretch * (now.abs() - was.abs())
+            } else {
+                -carry * change
+            };
+            self.jelly.push(side, |along| speed * bow(along));
+        }
     }
 
     /// Where the shape rests: the island, or for a drop, a dot where it comes out, or the other
@@ -1529,9 +1513,6 @@ impl Motion {
             &mut edges.bottom,
             &mut self.popover.items,
             &mut self.popover.panel,
-            &mut self.give.left,
-            &mut self.give.right,
-            &mut self.give.bottom,
         ]
         .into_iter()
         .chain(
@@ -1598,10 +1579,13 @@ impl Motion {
                 }
             }
         }
+        let before = self.edges.outward();
         for spring in self.springs() {
             spring.advance(elapsed);
         }
-        self.landing.track(&self.edges);
+        self.edges.hit();
+        self.feel_edges(before);
+        self.jelly.size = self.edges.rect().size();
         let paced = elapsed / self.pace;
         for spring in self.paced() {
             spring.advance(paced);
@@ -1659,66 +1643,16 @@ impl Motion {
         false
     }
 
-    /// The shape as it's drawn: its edges, with each side's give. Only the bottom's give bulges:
-    /// flattened up into the top, it spreads out evenly at both sides. The sides have nothing to
-    /// hit, so they carry on and come back without pushing the bottom. The top stays where its
-    /// edge is.
+    /// The shape's frame: its edges. The skin bends what's drawn of it ([`Jelly::displace`]).
     fn shape(&self) -> Rectangle {
-        let edges = self.edges.rect();
-        let (left, right, bottom) = (
-            self.give.left.value,
-            self.give.right.value,
-            self.give.bottom.value,
-        );
-        if left == 0.0 && right == 0.0 && bottom == 0.0 {
-            return edges;
-        }
-        let wider = -theme::BULGE * bottom / 2.0;
-        let x = edges.x + left - wider;
-        let width = (edges.width + right - left + 2.0 * wider).max(0.0);
-        let height = (edges.height + bottom).max(0.0);
-        Rectangle::new(Point::new(x, edges.y), Size::new(width, height))
+        self.edges.rect()
     }
 
-    /// How much the overshoot stretches the shape, across and up and down.
-    fn squish(&self) -> Squish {
-        let (edges, shape) = (self.edges.rect(), self.shape());
-        if edges.width < 1.0 || edges.height < 1.0 || shape == edges {
-            return Squish::NONE;
-        }
-        Squish {
-            x: shape.width / edges.width,
-            y: shape.height / edges.height,
-        }
-    }
-
-    /// How far the overshoot moves something centered at `at`: to where the stretch takes that
-    /// point of the edges. What's there squishes itself, about its own center ([`squish`]).
-    fn follow(&self, at: Point) -> Vector {
-        let squish = self.squish();
-        if squish == Squish::NONE {
-            return Vector::ZERO;
-        }
-        let (edges, shape) = (self.edges.rect(), self.shape());
-        let to = Point::new(
-            shape.x + (at.x - edges.x) * squish.x,
-            shape.y + (at.y - edges.y) * squish.y,
-        );
-        to - at
-    }
-
-    /// How squished something centered at `x` in the drawn `shape` is, and how far down the jelly
-    /// moves it: by the shape's stretch, and by how much taller the jelly makes the shape there.
+    /// How squished something centered at `x` in the drawn `shape` is, and how far down the skin
+    /// moves it: by how much taller the skin makes the shape there.
     fn squish_at(&self, shape: Rectangle, x: f32) -> (Squish, f32) {
-        let squish = self.squish();
         let (taller, down) = self.jelly.at(shape, x);
-        (
-            Squish {
-                x: squish.x,
-                y: squish.y * taller,
-            },
-            down,
-        )
+        (Squish { x: 1.0, y: taller }, down)
     }
 
     /// How squished an item is by its own kick ([`Motion::kick`]): narrower and a little taller the
@@ -1810,26 +1744,42 @@ fn react(peak: f32) -> f32 {
     REACT.kick(peak * theme::REACT_SIZE)
 }
 
-/// How an opening shape gives as it sets off from `edges` for `panel` (D-110): stretched along the
-/// way it has further to go and squeezed across it: the bottom by the bulge of how much wider it
-/// is. The left and the
-/// right share the change of width by how far each goes, so a panel that only grows to the right
-/// leans right. Left, right and bottom, in logical pixels at the furthest.
-fn stretch(edges: &Edges, panel: Rectangle) -> [f32; 3] {
-    let [left, top, right, bottom] = edges_of(panel);
-    let (left, right) = (
-        (left - edges.left.value).abs(),
-        (right - edges.right.value).abs(),
-    );
-    let across = left + right;
-    let down = (top - edges.top.value).abs() + (bottom - edges.bottom.value).abs();
-    let wider = (theme::OPEN_STRETCH * (across - down)).clamp(-theme::OPEN_MAX, theme::OPEN_MAX);
-    let left_share = if across < 1.0 { 0.5 } else { left / across };
-    [
-        -wider * left_share,
-        wider * (1.0 - left_share),
-        -theme::BULGE * wider,
-    ]
+/// How hard to push the skin for each pixel per second its edge speeds up (stretch) and slows
+/// down (carry), so a side that comes `SKIN_TRAVEL` goes `SKIN_STRETCH` out and `SKIN_CARRY` on
+/// at its furthest. Found by playing one such side on a spring, as [`Feel::kick`](crate::spring) does.
+fn skin_gains() -> (f32, f32) {
+    static GAINS: OnceLock<(f32, f32)> = OnceLock::new();
+    *GAINS.get_or_init(|| {
+        // Stretching, it eases in as an opening popover does; carrying on, it lands as anything
+        // else does, hitting where it goes ([`Edges::aim`]).
+        let ahead = |lead: bool| {
+            let mut edges = Edges::at(Rectangle::new(Point::ORIGIN, Size::new(0.0, 1.0)));
+            edges.aim(
+                Rectangle::new(Point::ORIGIN, Size::new(theme::SKIN_TRAVEL, 1.0)),
+                !lead,
+            );
+            let mut skin = Spring::new(0.0, REACT);
+            let mut furthest = 0.0f32;
+            let frame = 1.0 / 120.0;
+            for _ in 0..240 {
+                let was = edges.right.velocity;
+                edges.right.advance(frame);
+                edges.hit();
+                let edge = edges.right;
+                let change = edge.velocity - was;
+                if (edge.velocity.abs() > was.abs()) == lead {
+                    skin.velocity += if lead { change } else { -change };
+                }
+                skin.advance(frame);
+                furthest = furthest.max(skin.value.abs());
+            }
+            furthest
+        };
+        (
+            theme::SKIN_STRETCH * theme::REACT_SIZE / ahead(true),
+            theme::SKIN_CARRY * theme::REACT_SIZE / ahead(false),
+        )
+    })
 }
 
 /// Where a popover goes: as tall as the panel and never narrower than the island, with its top
@@ -1997,8 +1947,8 @@ fn draw_island<M>(
         .and(shoulders)
         .map_or(0.0, |shoulder| shoulder.radius * (1.0 + shoulder.smoothing));
     let room = Vector::new(
-        (theme::NUDGE_BUMP_ROOM + theme::DRAG_LIMIT_X).max(flare.ceil()),
-        theme::NUDGE_BUMP_ROOM + theme::DRAG_LIMIT_Y,
+        (theme::SKIN_ROOM + theme::DRAG_LIMIT_X).max(flare.ceil()),
+        theme::SKIN_ROOM + theme::DRAG_LIMIT_Y,
     );
     let pulled = motion.pulled();
     let bent = !motion.jelly.is_flat() || pulled;
@@ -2139,9 +2089,7 @@ fn draw_island<M>(
                             y: squished.y * kicked.y,
                         };
                         let moved = Vector::new(dx, down);
-                        // It rides along with the jelly where it is, and with the overshoot, to where
-                        // the stretch takes its center. It squishes with both.
-                        let moved = moved + motion.follow(bounds.center() + moved);
+                        // It rides along with the skin where it is, and squishes with it.
                         // And it goes with the stretch where it ends up.
                         let moved = moved + motion.pull(shape, bounds.center() + moved);
                         renderer.with_translation(moved, |renderer| {
@@ -3364,48 +3312,76 @@ mod tests {
         assert!(!motion.closing_done());
     }
 
+    /// How far the skin is out of the middle of each side, past its edge: left, top, right,
+    /// bottom.
+    fn skin(motion: &Motion) -> [f32; 4] {
+        [Side::Left, Side::Top, Side::Right, Side::Bottom].map(|side| motion.jelly.value(side, 0.5))
+    }
+
+    /// Plays the motion to rest, and returns the furthest each side's skin went out (`max`) and in
+    /// (`min`), and the frame's rectangle when the bottom went furthest in.
+    fn skin_range(motion: &mut Motion) -> ([f32; 4], [f32; 4], Rectangle) {
+        let (mut out, mut inward) = ([0.0f32; 4], [0.0f32; 4]);
+        let mut flattest = motion.edges.rect();
+        run(motion, Instant::now(), |motion| {
+            let now = skin(motion);
+            if now[3] < inward[3] {
+                flattest = motion.edges.rect();
+            }
+            for side in 0..4 {
+                out[side] = out[side].max(now[side]);
+                inward[side] = inward[side].min(now[side]);
+            }
+            assert!(
+                motion.shape() == motion.edges.rect(),
+                "the frame is the edges: only the skin gives"
+            );
+        });
+        assert!(motion.jelly.is_flat(), "the skin settles flat");
+        (out, inward, flattest)
+    }
+
+    /// How far a side stretched the way its edge went out, opening: out if the skin stretches,
+    /// in if it squashes instead (a negative `SKIN_STRETCH`).
+    fn stretched(out: [f32; 4], inward: [f32; 4], side: usize) -> f32 {
+        if theme::SKIN_STRETCH >= 0.0 {
+            out[side]
+        } else {
+            -inward[side]
+        }
+    }
+
     #[test]
-    fn opening_squishes_and_closing_splats_against_the_top() {
-        // Further down than across: squeezed in from the sides on the way, and taller.
+    fn opening_stretches_the_way_it_grows_and_closing_splats_against_the_top() {
+        // Only down: the bottom leads, and the sides draw in to keep its area.
         let island = rect(100.0, 120.0);
         let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(120.0, 300.0));
         let mut motion = settled(island, &[1]);
-        let gap = f32::from(theme::EDGE_GAP);
-
-        // Opening: squeezed on the way, from its top, and no bump at the end.
         popover(&mut motion, true, panel, true);
-        let mut squeezed = false;
-        run(&mut motion, Instant::now(), |motion| {
-            let (shape, edges) = (motion.shape(), motion.edges.rect());
-            squeezed |= shape.width < edges.width - 4.0 && shape.height > edges.height;
-            assert_eq!(shape.y, edges.y, "the top stays on the bar");
-            assert!(
-                shape.width < edges.width + 1.0 + REACT.overshoot() * size(theme::OPEN_MAX),
-                "never swings wider than its feel's rebound"
-            );
-        });
-        assert!(squeezed, "squished on the way");
+        let (out, inward, _) = skin_range(&mut motion);
+        assert!(
+            stretched(out, inward, 3) > 1.0,
+            "the bottom stretches: {out:?} {inward:?}"
+        );
+        assert!(
+            stretched(inward, out, 0) < -0.1 && stretched(inward, out, 2) < -0.1,
+            "the sides draw in: {out:?} {inward:?}"
+        );
+        assert!(
+            out[1].abs() < 0.5 && inward[1].abs() < 0.5,
+            "the top stays on the bar"
+        );
         assert_eq!(motion.shape(), panel);
 
-        // Closing: the top stays on the bar; the bottom carries on into it.
+        // Closing: the bottom carries on up into the top as it lands, and the sides bulge.
         popover(&mut motion, false, panel, true);
-        let (mut splat, mut spread) = (false, false);
-        run(&mut motion, Instant::now(), |motion| {
-            let (shape, edges) = (motion.shape(), motion.edges.rect());
-            splat |= shape.height < island.height - 1.0 && shape.width > island.width + 0.5;
-            assert_eq!(shape.y, edges.y, "the top stays put");
-            assert!(
-                shape.width - edges.width < 2.0 * gap,
-                "stays on the surface"
-            );
-            // An item right of center moves right, and squishes wide and short.
-            let at = Point::new(island.x + island.width * 0.75, island.center_y());
-            let squish = motion.squish();
-            spread |= motion.follow(at).x > 0.1 && squish.x > 1.003 && squish.y < 0.97;
-        });
-        assert!(splat, "lands flatter and wider");
-        assert!(spread, "the items spread and squish with it");
-        assert_eq!(motion.squish(), Squish::NONE);
+        let (out, inward, flattest) = skin_range(&mut motion);
+        assert!(inward[3] < -1.0, "lands flatter: {inward:?}");
+        assert!(out[0] > 0.2 && out[2] > 0.2, "and wider: {out:?}");
+        assert!(
+            flattest.height < island.height + 12.0,
+            "flattest as it lands, not on the way: {flattest:?}"
+        );
         assert_eq!(motion.shape(), island);
         assert!(motion.closing_done());
     }
@@ -3416,12 +3392,13 @@ mod tests {
         let panel = Rectangle::new(Point::new(150.0, 6.0), Size::new(400.0, 60.0));
         let mut motion = settled(island, &[1]);
         popover(&mut motion, true, panel, true);
-        let mut wider = false;
-        run(&mut motion, Instant::now(), |motion| {
-            let (shape, edges) = (motion.shape(), motion.edges.rect());
-            wider |= shape.width > edges.width + 4.0 && shape.height < edges.height;
-        });
-        assert!(wider, "stretched along the way it grows");
+        let (out, inward, _) = skin_range(&mut motion);
+        let (left, right) = (stretched(out, inward, 0), stretched(out, inward, 2));
+        assert!(
+            left > 1.0 && right > 1.0,
+            "both sides stretch: {out:?} {inward:?}"
+        );
+        assert!(stretched(out, inward, 3) < right, "more across than down");
         assert_eq!(motion.shape(), panel);
     }
 
@@ -3432,44 +3409,72 @@ mod tests {
         let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(300.0, 40.0));
         let mut motion = settled(island, &[1]);
         popover(&mut motion, true, panel, true);
-        let (mut left, mut right) = (0.0f32, 0.0f32);
-        run(&mut motion, Instant::now(), |motion| {
-            left = left.max(motion.give.left.value.abs());
-            right = right.max(motion.give.right.value.abs());
-        });
-        assert!(right > 2.0 && left < 0.1, "leans right: {left} {right}");
+        let (out, inward, _) = skin_range(&mut motion);
+        let (left, right) = (stretched(out, inward, 0), stretched(out, inward, 2));
+        assert!(right > 0.5, "leans right: {out:?} {inward:?}");
+        assert!(left < right / 3.0, "the left barely: {out:?} {inward:?}");
 
-        // Back right to left: the right side carries on left of the island's, the left stays.
+        // Back right to left: the right side carries on in, past the island's.
         popover(&mut motion, false, panel, true);
-        let (mut left, mut past) = (0.0f32, 0.0f32);
-        run(&mut motion, Instant::now(), |motion| {
-            let shape = motion.shape();
-            left = left.max((shape.x - island.x).abs());
-            past = past.max(island.x + island.width - (shape.x + shape.width));
-        });
-        assert!(past > 0.5, "the right side carries on in: {past}");
-        assert!(left < 0.5, "the left side barely moves: {left}");
+        let (out, inward, _) = skin_range(&mut motion);
+        assert!(inward[2] < -1.0, "the right side carries on in: {inward:?}");
+        assert!(
+            out[0].max(-inward[0]) < -inward[2] / 2.0,
+            "the left moves less: {out:?} {inward:?}"
+        );
         assert_eq!(motion.shape(), island);
     }
 
     #[test]
-    fn an_island_that_changes_size_lands_with_what_it_carries() {
+    fn an_island_that_changes_size_lands_by_how_far_it_went() {
         let island = rect(100.0, 200.0);
-        let gives = |motion: &mut Motion, to: Rectangle| {
+        let carried = |motion: &mut Motion, to: Rectangle| {
             motion.arrange(to, [(1, 110.0)].into_iter(), None);
-            let mut out = 0.0f32;
-            run(motion, Instant::now(), |motion| {
-                let (shape, edges) = (motion.shape(), motion.edges.rect());
-                out = out.max(shape.x + shape.width - (edges.x + edges.width));
-            });
+            let (out, _, _) = skin_range(motion);
             assert_eq!(motion.shape(), to);
-            out
+            out[2]
         };
         let mut motion = settled(island, &[1]);
-        let small = gives(&mut motion, rect(100.0, 205.0));
-        assert_eq!(small, 0.0, "a small change doesn't react");
-        let big = gives(&mut motion, rect(100.0, 285.0));
-        assert!(big > 0.5, "the side that grew carries on out: {big}");
+        let small = carried(&mut motion, rect(100.0, 205.0));
+        assert!(small < 0.2, "a small change hardly reacts: {small}");
+        let big = carried(&mut motion, rect(100.0, 285.0));
+        assert!(big > 0.5, "the side that grew goes on out: {big}");
+        assert!(big > 5.0 * small);
+    }
+
+    #[test]
+    fn a_shape_sliding_as_a_whole_keeps_its_skin() {
+        let mut motion = settled(rect(100.0, 200.0), &[1]);
+        motion.arrange(rect(300.0, 200.0), [(1, 310.0)].into_iter(), None);
+        let (out, inward, _) = skin_range(&mut motion);
+        // The push's own lean pokes the top and bottom ends; the sides aren't pushed.
+        assert!(
+            out[0].abs() < 0.3 && out[2].abs() < 0.3,
+            "{out:?} {inward:?}"
+        );
+    }
+
+    #[test]
+    fn the_skin_goes_as_far_as_the_language_says() {
+        // A side that comes SKIN_TRAVEL with nothing round it: one REACT spring per side, so the
+        // ring, sharing with its neighbors and keeping its area, goes about as far.
+        let island = rect(100.0, 120.0);
+        let mut motion = settled(island, &[1]);
+        motion.arrange(
+            Rectangle {
+                width: 120.0 + theme::SKIN_TRAVEL,
+                ..island
+            },
+            [(1, 110.0)].into_iter(),
+            None,
+        );
+        let (out, _, _) = skin_range(&mut motion);
+        let most = (theme::SKIN_STRETCH.max(theme::SKIN_CARRY) * theme::REACT_SIZE).abs();
+        assert!(
+            out[2] > 0.4 * most && out[2] < 1.6 * most,
+            "about {most}: {}",
+            out[2]
+        );
     }
 
     #[test]
@@ -3479,12 +3484,10 @@ mod tests {
         let panel = centered(Size::new(480.0, 360.0), 1000.0, 200.0);
         let mut motion = settled(island, &[1]);
 
-        // Every edge rides MORPH, so the shape glides down whole and never passes where it goes.
+        // Every edge rides MORPH, so the frame glides down whole and never passes where it goes.
         popover(&mut motion, true, panel, true);
-        let mut squeezed = false;
         let frames = run(&mut motion, Instant::now(), |motion| {
-            let (shape, edges) = (motion.shape(), motion.edges.rect());
-            squeezed |= shape.width < edges.width - 4.0;
+            let edges = motion.edges.rect();
             assert!(
                 edges.y >= island.y - 0.5 && edges.y <= panel.y + 0.5,
                 "the top glides"
@@ -3492,23 +3495,16 @@ mod tests {
             assert!(edges.y + edges.height <= panel.y + panel.height + 0.5);
             assert!(edges.width <= panel.width + 0.5);
         });
-        assert!(squeezed, "squished on the way, like any popover");
         assert!(frames < 90, "settles in {frames} frames");
         assert_eq!(motion.shape(), panel);
 
-        // Back up: it lands flatter and wider, against the top, and nowhere on the way.
+        // Back up: it lands flatter, against the top, and nowhere on the way.
         popover(&mut motion, false, panel, true);
-        let mut splat_at = None;
-        run(&mut motion, Instant::now(), |motion| {
-            let (shape, edges) = (motion.shape(), motion.edges.rect());
-            if splat_at.is_none() && shape.height < edges.height - 0.5 {
-                splat_at = Some(edges);
-            }
-        });
-        let landing = splat_at.expect("splats");
+        let (_, inward, flattest) = skin_range(&mut motion);
+        assert!(inward[3] < -0.5, "splats: {inward:?}");
         assert!(
-            landing.y - island.y < 2.0 && landing.height < island.height * 1.5,
-            "splats as it lands, not on the way: {landing:?}"
+            flattest.y - island.y < 2.0 && flattest.height < island.height * 1.5,
+            "splats as it lands, not on the way: {flattest:?}"
         );
         assert_eq!(motion.shape(), island);
         assert!(motion.closing_done());
@@ -4042,8 +4038,11 @@ mod tests {
     fn a_resize_is_not_a_push() {
         let mut motion = settled(rect(400.0, 120.0), &[1]);
         motion.arrange(rect(200.0, 320.0), [(1, 210.0)].into_iter(), None);
+        // Only the left edge moves: its side stretches and lands, but the far end of the top
+        // doesn't pile up as if pushed.
         run(&mut motion, Instant::now(), |motion| {
-            assert!(motion.jelly.is_flat(), "only one edge moves");
+            let far = motion.jelly.value(Side::Top, 0.9);
+            assert!(far.abs() < 0.1, "no lean: {far}");
         });
     }
 

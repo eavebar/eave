@@ -57,8 +57,8 @@ A popover isn't a surface of its own: the island holding the item turns into it 
 1. The host records which bar was clicked and marks the popover open. `view` hands the panel to that zone's island.
 2. The island lays the panel out at its natural size in an iced overlay and places it: top edge on the island, growing from the island's left edge, right edge or center (by zone), never narrower than the island, `EDGE_GAP` from the screen sides. It reports the place (`PopoverPlaced`).
 3. The bar surface is already a little taller than its exclusive zone, for drags ([D-45](decisions.md)). The host grows it to fit (`SizeChange`, exclusive zone unchanged, so windows don't move) and sets an input region of the bar strip plus the panel, so the pointer still reaches windows beside and below it.
-4. Once the surface is tall enough, the island morphs into the panel: its edges spring to the panel's, its items fade out, and the panel's content fades in once the shape is halfway there. Once it has shown, a change of the panel's size only springs the shape, and the content stays (`PopoverMotion::out`). It squishes as it sets off, stretched along the way it grows and squeezed across it, and eases back as it grows ([D-44](decisions.md), [D-110](decisions.md)).
-5. It closes on a second click on the item, when the widget returns `close_popover()` or stops offering a popover, on a click anywhere else, or on any key press but a modifier or one of its rows' shortcuts: the bar takes the keyboard only while a popover is open ([D-36](decisions.md)). `popover_view` gives the panel's rows the keys config.toml sets for them (`shortcut::resolve_panel`), then collects them and hands them to the island as its `on_key`, so a shortcut presses its row instead ([D-91](decisions.md)). While a popover is open, a non-consuming Hyprland bind reports every left click on socket2, and the host ignores the ones that land on the bar. Clicks on the bar are handled by the bar itself, and the island captures presses on its panel ([D-14](decisions.md)). Closing runs the morph backwards, and the island splats against the top as it lands, each side carrying on the way it was going; any change of an island's size lands the same way ([D-44](decisions.md), [D-110](decisions.md)). When the island is back, it reports `PopoverClosed` and the host shrinks the surface again.
+4. Once the surface is tall enough, the island morphs into the panel: its edges spring to the panel's, its items fade out, and the panel's content fades in once the shape is halfway there. Once it has shown, a change of the panel's size only springs the shape, and the content stays (`PopoverMotion::out`). Its outline is a skin over the morph: it stretches the way the shape grows and draws in across it, then settles ([D-111](decisions.md)).
+5. It closes on a second click on the item, when the widget returns `close_popover()` or stops offering a popover, on a click anywhere else, or on any key press but a modifier or one of its rows' shortcuts: the bar takes the keyboard only while a popover is open ([D-36](decisions.md)). `popover_view` gives the panel's rows the keys config.toml sets for them (`shortcut::resolve_panel`), then collects them and hands them to the island as its `on_key`, so a shortcut presses its row instead ([D-91](decisions.md)). While a popover is open, a non-consuming Hyprland bind reports every left click on socket2, and the host ignores the ones that land on the bar. Clicks on the bar are handled by the bar itself, and the island captures presses on its panel ([D-14](decisions.md)). Closing runs the morph backwards and lands on the island, stopping dead, and the skin carries on: each side the way it was going, splatting into the top and bulging at the sides. Any change of an island's size lands the same way ([D-111](decisions.md)). When the island is back, it reports `PopoverClosed` and the host shrinks the surface again.
 
 ## Bays
 
@@ -113,7 +113,7 @@ A widget's dialog is its panel in the middle of the screen ([D-90](decisions.md)
 
 ## Glass
 
-With `theme = "glass"` and the `hypr-eave` Hyprland plugin loaded, the islands are glass ([D-111](decisions.md)). The plugin draws it; eave says where:
+With `theme = "glass"` and the `hypr-eave` Hyprland plugin loaded, the islands are glass ([D-112](decisions.md)). The plugin draws it; eave says where:
 
 1. eave draws every island opaque, in its fill, as it would without the plugin.
 2. The vendored layershellev publishes its layer surfaces' `wl_surface` (`layer_surfaces`). At the first frame, `glass::client` binds `eave_glass_v1` on the bar's connection, on an event queue of its own that a small thread dispatches.
@@ -173,10 +173,10 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/squish.rs            how squished the items being drawn are, set by their island
   src/label.rs             a label that can squish (outlines while squished)
   src/squircle.rs          the squircle path
-  src/jelly.rs             an island's outline as a ring of coupled springs, which nudges poke, and the shelves nudges hold out
+  src/jelly.rs             an island's outline, its skin: a ring of coupled springs that keeps its area, pushed by the frame's motion and poked by nudges, and the shelves nudges hold out
   src/wall.rs              the screen's edges as walls: how far an island can go toward each before it's too close
   src/hand.rs              what a drag does to a shape: the rubber band, and the stretch around the grab
-  src/glass/               glass with the hypr-eave plugin: the protocol client, what each frame says, which way the ink goes (D-111)
+  src/glass/               glass with the hypr-eave plugin: the protocol client, what each frame says, which way the ink goes (D-112)
   src/lift.rs              the bar sliding up off the screen and back, drawn lifted on a spring
   src/zones.rs             the three zones across the bar: sides at the edges, the center pushed aside when they reach it, or split around the notch
   src/bezel.rs             the notch and the grown edge (the whole bar when it's solid): squished by the dormer's drop, stretched by a drag, a click brings the dormer out
@@ -213,8 +213,8 @@ plugins/bluetooth/         Bluetooth devices, connecting and pairing, via eave-b
 plugins/brightness/        display and keyboard backlights from sysfs, set through logind (eave-brightness)
 plugins/network/           primary connection, via eave-net; Wi-Fi to join via eave-iwd (eave-network)
 plugins/volume/            output volume and switching (eave-volume)
-hypr-eave/                the Hyprland plugin that draws glass (C++), and its smoke test (D-111)
-protocol/                 eave-glass-v1.xml, the protocol between eave and hypr-eave (D-111)
+hypr-eave/                the Hyprland plugin that draws glass (C++), and its smoke test (D-112)
+protocol/                 eave-glass-v1.xml, the protocol between eave and hypr-eave (D-112)
 vendor/softbuffer/         softbuffer 0.4.8 with an alpha-carrying Wayland buffer (D-25)
 vendor/iced_tiny_skia/     iced_tiny_skia 0.14.1: lazy clip mask, damage-aware present, EAVE_FRAMES (D-66)
 dist/systemd/              user units: the bar, the rebuild-on-config.toml pair, and the update and check

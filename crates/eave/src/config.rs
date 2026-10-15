@@ -60,7 +60,7 @@
 //! screen = { corners = 12 }
 //! ```
 //!
-//! `theme` is `"system"` (the default), `"light"`, `"dark"` or `"glass"` (D-92, D-111). `"system"`
+//! `theme` is `"system"` (the default), `"light"`, `"dark"` or `"glass"` (D-92, D-112). `"system"`
 //! follows the desktop's dark mode, as the settings portal tells it, and is dark when it has no
 //! preference. `"glass"` turns the islands to liquid glass with the hypr-eave plugin loaded in
 //! Hyprland, and looks dark without it; `[glass]` says how it looks.
@@ -411,7 +411,7 @@ pub enum Theme {
     System,
     Light,
     Dark,
-    /// Liquid glass, with hypr-eave (D-111): dark without it.
+    /// Liquid glass, with hypr-eave (D-112): dark without it.
     Glass,
 }
 

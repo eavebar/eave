@@ -242,7 +242,7 @@ bind = SUPER, M, event, eave-action volume mute
 
 ## Glass
 
-`theme = "glass"` makes the islands liquid glass: what's behind them shows through, frosted and bent at their edges ([D-111](decisions.md)). That takes `hypr-eave`, a Hyprland plugin in this repository. `eave-build` builds it against the Hyprland you have whenever the theme is glass and Hyprland's headers are installed (`pkg-config hyprland`; on Arch they come with the `hyprland` package). It installs it as `~/.local/share/eave/hypr-eave.so`. Load it from Hyprland's config:
+`theme = "glass"` makes the islands liquid glass: what's behind them shows through, frosted and bent at their edges ([D-112](decisions.md)). That takes `hypr-eave`, a Hyprland plugin in this repository. `eave-build` builds it against the Hyprland you have whenever the theme is glass and Hyprland's headers are installed (`pkg-config hyprland`; on Arch they come with the `hyprland` package). It installs it as `~/.local/share/eave/hypr-eave.so`. Load it from Hyprland's config:
 
 ```lua
 -- hyprland.lua (Hyprland 0.56+)

@@ -179,22 +179,34 @@ pub const PUSH_WIGGLE: f32 = 1.2;
 pub const PUSH_BUILD: Duration = Duration::from_millis(250);
 pub const PUSH_FULL_SPEED: f32 = 600.0;
 pub const PUSH_MOVING: f32 = 20.0;
-/// How an opening popover gives as it sets off (D-110): wider by this share of how much further
-/// it goes across than down (narrower when it goes further down), at most `OPEN_MAX` logical
-/// pixels, and the other way by the bulge. Easing back as it grows.
-pub const OPEN_STRETCH: f32 = 0.08;
-pub const OPEN_MAX: f32 = 12.0;
-/// How a shape lands (D-110), a closing popover or an island changing size: each side carries on
-/// the way it was going, `LAND_CARRY` logical pixels for each pixel per second it went at its
-/// fastest, at most `LAND_MAX`. The morph goes about 8.5 times as fast as how far it goes, so a
-/// side that came 200 px gives about 3.4 (before `REACT_SIZE`). A side slower than `LAND_MIN` (a
-/// dozen pixels) doesn't. Going out, a side stays inside the `EDGE_GAP` from the screen's sides.
-pub const LAND_CARRY: f32 = 0.002;
-pub const LAND_MAX: f32 = 4.0;
-pub const LAND_MIN: f32 = 100.0;
-/// A shape lands so its give peaks as it arrives: when every edge will be this close to where
-/// it's going, in logical pixels, by the time REACT peaks.
-pub const SQUISH_LAND: f32 = 1.0;
+/// The skin (D-111): an island's outline is the jelly, and the jelly feels its frame move. Each
+/// side of it is pushed by how its edge speeds up and slows down, on top of the morph, so a shape
+/// stretches the way it sets off and carries on the way it lands, by how it moved. The amounts
+/// are how far a side that comes `SKIN_TRAVEL` logical pixels on `MORPH` goes ahead of its edge
+/// at the furthest (`REACT_SIZE` included), and scale with how far it comes:
+/// - `SKIN_STRETCH` as it speeds up: stretched along the way it goes, ahead of an edge going out
+///   and behind one coming in. Negative squashes instead, like a weight dragged.
+/// - `SKIN_CARRY` as it slows down and lands: carrying on past where it stops.
+///
+/// Opening has nothing to hit (D-44), so a popover opening carries `OPEN_CARRY` of that.
+/// `SKIN_BOW` is how much more the middle of a side goes than its ends, 0 to 1: the ends are held
+/// by the sides round the corners. `SKIN_AREA` is how hard the outline keeps its area, as a share
+/// of REACT's stiffness: a side pushed in pushes the others out (the bulge), and the top, which
+/// hangs from the bar, takes no part. `SKIN_ROOM` is how far the skin may go out past its frame.
+pub const SKIN_TRAVEL: f32 = 200.0;
+pub const SKIN_STRETCH: f32 = 5.0;
+pub const SKIN_CARRY: f32 = 5.0;
+pub const OPEN_CARRY: f32 = 0.5;
+pub const SKIN_BOW: f32 = 0.8;
+pub const SKIN_AREA: f32 = 0.3;
+pub const SKIN_ROOM: f32 = 10.0;
+/// A shape lands on where it goes (D-111): it heads this share of its way past it, and stops dead
+/// as it gets there, so it arrives at speed and what it carries goes into the skin. Anything but a
+/// popover opening, which eases in.
+pub const LAND_PAST: f32 = 0.2;
+/// A drop bounces as it falls into place so the bounce peaks as it arrives: when its bottom will be
+/// this close to where it's going, in logical pixels, by the time REACT peaks.
+pub const DROP_LAND: f32 = 1.0;
 
 // The dormer comes out of the notch (or the top edge) as a drop (D-86): a dot at its middle
 // swells into a ball, falls out of it on a neck of black that pinches off, and unfolds into the
@@ -208,9 +220,6 @@ pub const DROP_FALL: f32 = 36.0;
 /// How far, from 0 to 1, the shape gets to each stop before it heads on to the next. Early, so it
 /// heads on while it's still quick: it never slows down on the way, and moves as one motion.
 pub const DROP_WAYPOINT: f32 = 0.4;
-/// How much the ball is squeezed in from the sides as it sets off to unfold, and taller by the
-/// bulge, in logical pixels.
-pub const DROP_SQUISH: f32 = 4.0;
 /// How far apart the drop and where it comes out still flow together, in logical pixels: the
 /// neck is a wide, smooth bell when the drop is right under it, which narrows as it falls and
 /// pinches off about half this far away.
