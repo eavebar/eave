@@ -2258,3 +2258,19 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 - a dormer action with a key: works only while the dormer is open, not in the chat.
 
 **Cost:** one optional field on `Kind::Button`. eave-api grows, compatibly: plugins using it need the next eave-api.
+
+---
+
+## D-102: The battery says when the charger goes in
+
+**Status:** accepted (2026-10-15). Amends [D-63](#d-63-the-battery-sends-its-own-notifications).
+
+**What:** plugging in the charger sends a notification, like D-63's: "Charging" with the percent and, when the kernel says, how long until full; "Plugged in" for a battery that's full or held where it is. It expires after 4 s, unlike the low and charged ones, and a new one takes the place of one still up. Unplugging sends nothing, and takes it away if it's still there. `charging = false` turns it off, `notify = false` all of them. Only the change counts: a bar starting with the charger in says nothing.
+
+**How it tells:** from the charger's `online` when the machine has one, since the battery's `status` can still read discharging for a moment after the plug goes in; otherwise from the battery's status.
+
+**Why:** a loose cable or a dead socket charges nothing, and the bar's green battery is easy to miss. A short notification answers the plug the way a phone does.
+
+**Alternatives:**
+- a nudge on the battery item: easy to miss, and nothing else in the bar answers a plug.
+- one on unplugging too: you know you unplugged; asked for only on plugging in.
