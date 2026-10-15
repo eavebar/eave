@@ -2471,7 +2471,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 
 ## D-110: Squish and splat follow the motion
 
-**Status:** accepted (2026-10-15). Supersedes the fixed kicks of [D-44](#d-44-popovers-squish-opening-and-splat-closing) (`SQUISH_OPEN`, `SPLAT_FLATTEN`, `SPLAT_WIDEN`, as [D-83](#d-83-one-motion-language) sized them). Its rules stay: opening squishes on the way and has nothing to hit, and closing splats into the top as it lands.
+**Status:** accepted (2026-10-15). Supersedes the fixed kicks of [D-44](#d-44-popovers-squish-opening-and-splat-closing) (`SQUISH_OPEN`, `SPLAT_FLATTEN`, `SPLAT_WIDEN`, as [D-83](#d-83-one-motion-language) sized them). Its rules stay: opening squishes on the way and has nothing to hit, and closing splats into the top as it lands. *Superseded by [D-111](#d-111-one-skin): `Give`, `Landing`, `OPEN_*` and `LAND_CARRY`/`LAND_MAX`/`LAND_MIN` are gone. The skin does what they did, every frame, and its rules stay.*
 
 **What:** a shape gives the way its edges were going, not by a fixed amount.
 - **Per-side give.** `stretch_x` and `stretch_y` became three springs on `REACT`: how far the drawn left, right and bottom go past their edges (`Give`). The top stays where its edge is, on the bar. Only the bottom's give bulges (`BULGE`): flattened up into the top, the shape spreads out evenly at both sides. The sides have nothing to hit, so they carry on and come back without pushing the bottom. Items ride the drawn shape as before (`Motion::follow`, `Motion::squish`), and that mapping already allowed a lopsided shape.
@@ -2488,3 +2488,40 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 - **The give bulging both ways,** as D-44's stretch did: a shape shrinking on both axes cancelled itself out, so a dialog folding back into a small island barely splatted.
 
 **Cost:** no dependency, three springs instead of two, and four floats per island. At rest nothing moves, so idle CPU is unchanged. The release binary is the same size (20,868,784 bytes on x86_64, against main at 5d532be).
+
+---
+
+## D-111: One skin
+
+**Status:** accepted (2026-10-15). Supersedes [D-110](#d-110-squish-and-splat-follow-the-motion)'s give and kicks, and with them D-44's squish and splat and D-83's splat timing. Their rules stay: opening stretches the way it grows and has nothing to hit, and a landing carries on the way it went, splatting into the top.
+
+**Problem:** a morph read as square to square. The four edges ride `MORPH`, leave together and arrive together, so every frame was a rounded rect partway between two. The squish and splat were two kicks on top, fired at two moments, that resized that rect. The jelly ring, already a skin of coupled springs, never felt the morph. Each way an outline gave (give, jelly, shelves, bulge by hand) had its own rules.
+
+**What:** the edges are the frame: layout, hit testing, where content goes. The jelly ring is the only skin, and every way the outline gives goes through it.
+- **It feels the frame move.** Each frame, each side's springs are pushed by how its edge's outward speed changed (`Edges::outward`, `Motion::feel_edges`). As an edge speeds up, its side stretches out, whichever way it goes: ahead of an edge going out, behind one coming in (`SKIN_STRETCH`). As it slows down and lands, its side carries on the way it went (`SKIN_CARRY`). The push is fullest in the side's middle (`SKIN_BOW` 0.8: its ends get a fifth), and the ring's coupling bows it round the corners, so the outline stops being a rect. What the left and right share, or the top and bottom, is a slide, not a change of shape, and is left out (as `lean_with_push` already left resizes out).
+- **It keeps its area.** Every substep, the ring's gained area, spread as an even depth over the right, bottom and left, pushes them back (`SKIN_AREA`, 0.3 of `REACT`'s stiffness). A bottom splatting up bulges the sides, a bottom stretching down draws them in, and a nudge's poke does the same. The top hangs from the bar and takes no part. This replaces D-110's hand-wired bulge of the bottom's give.
+- **A shape lands on where it goes.** A critically damped morph has nothing to land: it slows over a long tail, so a skin pushed by its slowing down carried on most while the shape was still 50 px tall (measured). Now every morph but an opening popover heads `LAND_PAST` (20 %) of its way past each edge that changes its size, and stops dead as it gets there (`Edges::aim`, `Edges::hit`). It arrives at about 3.4 × its distance per second instead of creeping in, and what it carried goes into the skin on that frame. The frame never passes where it goes; only the skin does, by about `SKIN_CARRY`, on `REACT`'s small rebound. A left and right that move the same way (an island pushed aside) ease in, since there is nothing to hit; up and down always land, against the top.
+- **Opening has little to hit** (amends D-44): it eases in as before, and carries `OPEN_CARRY` (0.5) of its slowing down, so it settles with a soft give instead of none.
+- **A drop** still vanishes as it lands: while it's present, it carries nothing, and reacts as its neck catches it (D-86). `DROP_SQUISH` is gone: the ball stretches as it sets off like anything else.
+- **Amounts by peak** (D-83): a side that comes `SKIN_TRAVEL` (200 px) stretches `SKIN_STRETCH` (5 px) and carries on `SKIN_CARRY` (5 px), times `REACT_SIZE`, and both scale with how far it comes. `skin_gains` finds the push for those peaks once, by playing one such edge onto a `REACT` spring, as `Feel::kick` does. A test checks the ring goes about as far.
+- The skin may go `SKIN_ROOM` (10 px) out past its frame, where the jelly had 4 (`NUDGE_BUMP_ROOM`, still a nudge's limit). The frame cached around the shape grew to match. The ring has 12 springs down each side (`DOWN`, was 6), so a tall popover's sides bow smoothly; 72 in all.
+- **Still separate:** the drag's stretch (`pull`, on `HAND`: the hand, stretching toward the pointer, not the frame's motion), the press's squeeze, and `push_x`/`push_y` (the whole island moving). Nudges, shelves, the drop's bounce and wall squashes stay pokes into the same ring.
+
+**Answer to D-110's worry** ("a skin driven by the edges' acceleration lags as the shape sets off and overshoots as it arrives"): it doesn't lag, because speeding up stretches it the way it goes (a negative `SKIN_STRETCH` would lag). And the frame doesn't overshoot: it lands exactly where it goes, and only the skin carries on.
+
+**Items** ride the skin up and down where they are (`Jelly::at`), as they rode the jelly. D-110's `Motion::follow`, which slid them with the give across, is gone. They slide on their own springs anyway.
+
+**Alternatives:**
+- **Lead and follow:** the leading edge on a quicker spring than the trailing one. Cheap, but still a rect, and another rule.
+- **The skin on plain acceleration, no landing:** the morph's slowing down is spread over its tail, so the splat came early and soft (above).
+- **Kicks at fixed moments (D-110):** they say how the shape moved, but only twice, and read as two pops on a rect.
+
+**The feel: gooey.** Three variants were built on branches, differing only in these numbers, and run on the user's screen, as D-83 did. The user picked gooey (the numbers above):
+
+| Feel | `SKIN_STRETCH` | `SKIN_CARRY` | `OPEN_CARRY` | `SKIN_BOW` | `SKIN_AREA` | `LAND_PAST` | `SKIN_ROOM` | ring down a side |
+|---|---|---|---|---|---|---|---|---|
+| crisp: about D-110's amounts, opening doesn't carry | 3 | 3.4 | 0 | 0.4 | 0.6 | 0.15 | 8 | 6 |
+| **gooey** (taken): bigger and bowier, a softer area, a little give opening too | 5 | 5 | 0.5 | 0.8 | 0.3 | 0.2 | 10 | 12 |
+| heavy: squashes as it sets off (lags its frame), a big splat | −2 | 6 | 0 | 0.6 | 0.8 | 0.25 | 8 | 6 |
+
+**Cost:** no dependency; the three give springs and four landing floats are gone, two floats of goals' bookkeeping per edge came. The ring now runs while a shape morphs, as it ran while nudged: 72 springs at 480 Hz (60 before D-111), plus a sum over them per substep for the area. At rest nothing moves. **Measured** (Asahi aarch64, release, GPU, two clocks, both binaries from the same directory, 12 s after start, two alternating runs): binary 20,868,784 → 20,868,800 bytes. RSS 75.6 and 74.9 MB on main, 76.0 and 75.1 MB here: unchanged within noise. Idle CPU 1 and 6 ticks over 10 s on main, 1 and 1 here. CPU while morphing wasn't measured. x86_64 wasn't built: `cargo check --target x86_64-unknown-linux-gnu` stops in smithay-client-toolkit's build script (no cross pkg-config here). Nothing in this change is arch-specific.
