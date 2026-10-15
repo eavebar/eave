@@ -1,8 +1,10 @@
 //! The default output's volume, as a speaker with up to three sound waves, struck through when
 //! muted. Scroll to change it, right click to mute. The popover has a slider for the output and
-//! the input, the devices to switch between, and a slider for each app playing sound. Whenever the level goes up or down, from here or anywhere
-//! else, the island gets a nudge that way, and the item shows the percent for a moment instead of
-//! the icon. It shows the percent while hovered, too.
+//! the input, the devices to switch between, and a slider for each app playing sound. Whenever the
+//! level goes up or down, from here or anywhere else, the island gets a nudge that way, and the
+//! item shows the percent for a moment instead of the icon. Muting nudges it down and shows the
+//! struck speaker; unmuting nudges it up and shows the percent it came back to. It shows the
+//! percent while hovered, too.
 
 use eave_api::time::{Duration, sleep};
 use eave_api::ui::{self, Action, Icon, Item, Panel, Tone};
@@ -41,9 +43,9 @@ pub struct Volume {
     /// Levels being sent: one request at a time per slider, and the latest level dragged to
     /// while it was out, so a drag never queues up requests.
     sending: Vec<(Target, Option<u32>)>,
-    /// The default sink and its level as the server last reported them, which our own changes
-    /// only show ahead of. A change in the level is what nudges.
-    heard: Option<(u32, u32)>,
+    /// The default sink, its level and whether it's muted, as the server last reported them,
+    /// which our own changes only show ahead of. A change in the level or the mute is what nudges.
+    heard: Option<(u32, u32, bool)>,
     /// Whether the item shows the percent instead of the icon, after a change.
     showing_level: bool,
     /// Counts changes, so only the latest one's timer puts the icon back.
@@ -520,13 +522,30 @@ impl Volume {
                 device.volume = volume;
             }
         }
-        let heard = audio.default_sink().map(|sink| (sink.index, sink.volume));
+        let heard = audio
+            .default_sink()
+            .map(|sink| (sink.index, sink.volume, sink.muted));
         let before = std::mem::replace(&mut self.heard, heard);
         self.audio = audio;
-        let nudge = match (before, heard) {
-            (Some((sink, from)), Some((same, to))) if sink == same && to > from => Nudge::Up,
-            (Some((sink, from)), Some((same, to))) if sink == same && to < from => Nudge::Down,
-            _ => return Effect::none(),
+        let (Some((sink, from, was_muted)), Some((same, to, muted))) = (before, heard) else {
+            return Effect::none();
+        };
+        if sink != same {
+            return Effect::none();
+        }
+        // Muted: the struck speaker is what shows. Unmuted: the level it came back to.
+        if muted != was_muted {
+            if muted {
+                self.showing_level = false;
+                self.changes += 1;
+                return Effect::none().nudge(Nudge::Down);
+            }
+            return Effect::task(self.show_level()).nudge(Nudge::Up);
+        }
+        let nudge = match to.cmp(&from) {
+            std::cmp::Ordering::Greater => Nudge::Up,
+            std::cmp::Ordering::Less => Nudge::Down,
+            std::cmp::Ordering::Equal => return Effect::none(),
         };
         Effect::task(self.show_level()).nudge(nudge)
     }
@@ -685,6 +704,45 @@ mod tests {
         volume.update(Message::HideLevel(1));
         assert!(shows_label(&volume));
         volume.update(Message::HideLevel(volume.changes));
+        assert!(!shows_label(&volume));
+    }
+
+    fn muted(percent: u32) -> Audio {
+        let mut audio = test_outputs(percent);
+        audio.sinks[0].muted = true;
+        audio
+    }
+
+    #[test]
+    fn muting_nudges_down_and_unmuting_up() {
+        let (mut volume, _) = Volume::new(Config::default());
+        volume.update(Message::Read(test_outputs(40)));
+        // Muted here: shown at once, and nudged when the server confirms it, once.
+        assert_eq!(nudge(volume.update(Message::ToggleMute)), None);
+        assert_eq!(
+            nudge(volume.update(Message::Read(muted(40)))),
+            Some(Nudge::Down)
+        );
+        assert!(!shows_label(&volume), "the struck speaker");
+        assert_eq!(nudge(volume.update(Message::Read(muted(40)))), None);
+        // Unmuted elsewhere: the level it came back to.
+        assert_eq!(
+            nudge(volume.update(Message::Read(test_outputs(40)))),
+            Some(Nudge::Up)
+        );
+        assert!(shows_label(&volume));
+    }
+
+    #[test]
+    fn muting_puts_the_icon_back_at_once() {
+        let (mut volume, _) = Volume::new(Config::default());
+        volume.update(Message::Read(test_outputs(40)));
+        volume.update(Message::Read(test_outputs(45)));
+        assert!(shows_label(&volume));
+        volume.update(Message::Read(muted(45)));
+        assert!(!shows_label(&volume));
+        // The level's old timer does nothing.
+        volume.update(Message::HideLevel(1));
         assert!(!shows_label(&volume));
     }
 

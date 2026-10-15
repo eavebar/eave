@@ -2,7 +2,8 @@
 //! none, and the title and artist beside it, dimmed while paused. Right click plays or pauses,
 //! scrolling skips tracks, and the island is nudged the way the track changed. The popover has the
 //! cover, the track, a seek bar, the controls, and the players to choose from when there's more
-//! than one. Hidden when nothing is playing or paused.
+//! than one. Pausing or playing, from here or anywhere else, shows a pause or play sign in place of
+//! the cover for a moment. Hidden when nothing is playing or paused.
 
 use std::time::Instant;
 
@@ -22,6 +23,9 @@ const SKIP_LANDS: Duration = Duration::from_secs(3);
 const COVERS_TRIED: usize = 3;
 /// How many tracks back a player's history goes.
 const TRACKS_KEPT: usize = 32;
+/// How long the pause or play sign shows after the player paused or played. As long as the volume
+/// shows its percent after a change.
+const FLASH_SHOWN: Duration = Duration::from_millis(1500);
 
 pub fn register(registry: &mut Registry) {
     registry.widget::<Media>("media");
@@ -81,6 +85,11 @@ pub struct Media {
     held: Option<Player>,
     /// Counts the holds, so only the last one's timer lets go.
     holds: u64,
+    /// The sign shown in place of the cover for a moment after pausing or playing: whether it
+    /// went playing.
+    flash: Option<bool>,
+    /// Counts the flashes, so only the last one's timer puts the cover back.
+    flashes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +111,8 @@ pub enum Message {
     Release(u64),
     /// The cover that went missing at this time is let go, if it's still missing.
     ArtGone(Instant),
+    /// The flash with this number has shown long enough.
+    Unflash(u64),
 }
 
 impl Widget for Media {
@@ -125,6 +136,8 @@ impl Widget for Media {
             art: Art::default(),
             held: None,
             holds: 0,
+            flash: None,
+            flashes: 0,
         };
         (media, Task::none())
     }
@@ -144,8 +157,9 @@ impl Widget for Media {
                     Status::Playing => Status::Paused,
                     _ => Status::Playing,
                 };
-                let bus_name = player.bus_name.clone();
-                run(async move { eave_mpris::play_pause(&bus_name).await }).into()
+                let (bus_name, playing) = (player.bus_name.clone(), player.playing());
+                let send = run(async move { eave_mpris::play_pause(&bus_name).await });
+                Effect::task(Task::batch([send, self.flash(playing)]))
             }
             Message::Next => self.skip(Nudge::Right),
             Message::Previous => self.skip(Nudge::Left),
@@ -187,6 +201,12 @@ impl Widget for Media {
                 }
                 Effect::none()
             }
+            Message::Unflash(flash) => {
+                if flash == self.flashes {
+                    self.flash = None;
+                }
+                Effect::none()
+            }
             Message::ArtGone(lost) => {
                 if self.art.lost == Some(lost) {
                     self.art = Art::default();
@@ -220,7 +240,7 @@ impl Widget for Media {
         let Some(player) = self.showing() else {
             return Item::hidden();
         };
-        let icon = || self.picture(player, false);
+        let icon = || self.badge(player);
         let text = || ui::label(shorten(&track(player), self.config.max_chars));
         let content = match self.config.show {
             Show::Title => ui::row([icon(), text()]),
@@ -383,6 +403,7 @@ impl Media {
             self.chosen = None;
         }
         let was = self.current().filter(|p| shown(p)).cloned();
+        let was_playing = self.current().map(|p| (p.bus_name.clone(), p.playing()));
         self.current = pick(&players, self.chosen.as_deref(), self.current.as_deref());
         if self.chosen.as_ref() != self.current.as_ref() {
             self.chosen = None;
@@ -404,6 +425,15 @@ impl Media {
             self.holds += 1;
             let hold = self.holds;
             tasks.push(Task::future(sleep(GAP)).map(move |()| Message::Release(hold)));
+        }
+        // The followed player paused or played on its own: from its window, a headphone button, a
+        // media key. Ours already show, so its reading only confirms them.
+        let now_playing = self.current().map(|p| (p.bus_name.clone(), p.playing()));
+        if let (Some((before, was)), Some((after, is))) = (was_playing, now_playing)
+            && before == after
+            && was != is
+        {
+            tasks.push(self.flash(is));
         }
         let effect = Effect::task(Task::batch(tasks));
 
@@ -433,6 +463,15 @@ impl Media {
                 effect
             }
         }
+    }
+
+    /// Shows the play sign, or the pause sign, in place of the cover, until a moment after the
+    /// last change.
+    fn flash(&mut self, playing: bool) -> Task<Message> {
+        self.flash = Some(playing);
+        self.flashes += 1;
+        let flash = self.flashes;
+        Task::future(sleep(FLASH_SHOWN)).map(move |()| Message::Unflash(flash))
     }
 
     /// Asks the current player for the next or previous track, `nudge` saying which.
@@ -556,6 +595,23 @@ impl Art {
 }
 
 impl Media {
+    /// The bar's picture, handing over to the pause or play sign for a moment after a change.
+    fn badge(&self, player: &Player) -> ui::Node<Message> {
+        let current = match self.flash {
+            None => 0,
+            Some(false) => 1,
+            Some(true) => 2,
+        };
+        ui::alternate(
+            [
+                self.picture(player, false),
+                ui::icon(Icon::Pause),
+                ui::icon(Icon::Play),
+            ],
+            current,
+        )
+    }
+
     /// The track's cover, or until it's there and when there's none, the player's icon; the media
     /// bars for a player that doesn't say which app it is. Between tracks, the last cover stays
     /// until the next one is there. `large` for the popover, where nothing shows without one.
@@ -749,6 +805,20 @@ mod tests {
         media.item().into_parts().content.unwrap().into_kind()
     }
 
+    /// What the bar's picture shows: the cover, or the sign it hands over to for a moment.
+    fn badge(kind: ui::Kind<Message>) -> ui::Kind<Message> {
+        let ui::Kind::Alternate {
+            mut options,
+            current,
+            hovered: None,
+            ..
+        } = kind
+        else {
+            panic!("the picture, handing over to the signs");
+        };
+        options.swap_remove(current).into_kind()
+    }
+
     #[test]
     fn hidden_with_no_players_or_nothing_to_show() {
         let mut media = media(Config::default());
@@ -844,7 +914,7 @@ mod tests {
             panic!("a row");
         };
         let mut children = children.into_iter().map(ui::Node::into_kind);
-        let Some(ui::Kind::Cover { url, fallback, .. }) = children.next() else {
+        let Some(ui::Kind::Cover { url, fallback, .. }) = children.next().map(badge) else {
             panic!("the cover first");
         };
         assert_eq!(url, "file:///tmp/cover.jpg");
@@ -881,7 +951,7 @@ mod tests {
                 _ => vec!["?".to_owned()],
             }
         }
-        let shown = |media: &Media| chain(content(media));
+        let shown = |media: &Media| chain(badge(content(media)));
         media.update(with("One", "file:///one"));
         assert_eq!(shown(&media), ["file:///one", "icon"]);
         // The next track, its cover not sent yet: the last one stays.
@@ -918,7 +988,7 @@ mod tests {
         });
         icon.update(Message::Players(players));
         assert!(matches!(
-            content(&icon),
+            badge(content(&icon)),
             ui::Kind::AppIcon {
                 tone: Some(Tone::Dim),
                 ..
@@ -936,7 +1006,7 @@ mod tests {
         anonymous.desktop_entry.clear();
         media.update(Message::Players(vec![anonymous]));
         assert!(matches!(
-            content(&media),
+            badge(content(&media)),
             ui::Kind::Icon {
                 icon: Icon::Media { playing: true },
                 ..
@@ -1032,6 +1102,45 @@ mod tests {
         media.update(Message::Players(vec![player("a", Status::Playing, "One")]));
         media.update(Message::PlayPause);
         assert_eq!(media.current().unwrap().status, Status::Paused);
+    }
+
+    fn flashing(media: &Media) -> Option<Icon> {
+        match badge(content(media)) {
+            ui::Kind::Icon { icon, .. } => Some(icon),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn pausing_or_playing_shows_its_sign_for_a_moment() {
+        let mut media = media(Config {
+            show: Show::Icon,
+            ..Config::default()
+        });
+        media.update(Message::Players(vec![player("a", Status::Playing, "One")]));
+        assert_eq!(flashing(&media), None, "the first reading is no change");
+        // Paused here: the sign shows at once, and the player's reading only confirms it.
+        media.update(Message::PlayPause);
+        assert_eq!(flashing(&media), Some(Icon::Pause));
+        media.update(Message::Players(vec![player("a", Status::Paused, "One")]));
+        assert_eq!(media.flashes, 1, "once per change");
+        media.update(Message::Unflash(1));
+        assert_eq!(flashing(&media), None);
+        // Played elsewhere.
+        media.update(Message::Players(vec![player("a", Status::Playing, "One")]));
+        assert_eq!(flashing(&media), Some(Icon::Play));
+        // Paused again before it's gone: the old timer does nothing.
+        media.update(Message::Players(vec![player("a", Status::Paused, "One")]));
+        media.update(Message::Unflash(2));
+        assert_eq!(flashing(&media), Some(Icon::Pause));
+        media.update(Message::Unflash(3));
+        assert_eq!(flashing(&media), None);
+        // Following another player that plays isn't this one playing.
+        media.update(Message::Players(vec![
+            player("a", Status::Paused, "One"),
+            player("b", Status::Playing, "Two"),
+        ]));
+        assert_eq!(flashing(&media), None);
     }
 
     #[test]
