@@ -98,6 +98,11 @@ pub(crate) const HAND: Feel = Feel::new(theme::HAND_RESPONSE, theme::HAND_DAMPIN
 pub(crate) const REACT: Feel = Feel::new(theme::REACT_RESPONSE, theme::REACT_DAMPING);
 /// Shapes and content going somewhere: settle without wobbling.
 pub(crate) const MORPH: Feel = Feel::new(theme::MORPH_RESPONSE, theme::MORPH_DAMPING);
+/// The top of a shape pouring out of something, hanging back behind the rest of it (D-112).
+pub(crate) const HANG: Feel = Feel::new(
+    theme::MORPH_RESPONSE * theme::POUR_HANG,
+    theme::MORPH_DAMPING,
+);
 /// The handover between an island's items and its popover's content: quicker than the shape, so
 /// one side is gone in time for the other to come in while the shape still moves.
 pub(crate) const FADE: Feel = Feel::new(theme::FADE_RESPONSE, theme::FADE_DAMPING);
