@@ -45,6 +45,9 @@ namespace Glass {
     };
 
     constexpr size_t MAX_REGIONS = 64;
+    // libwayland drops a connection that gets a message over 4096 bytes: and eave's is the bar's
+    // own. A backdrop event is 24 bytes and its cells, padded to 4.
+    constexpr size_t MAX_REPORT_CELLS = 4096 - 24 - 4;
 
     // A record of eave_glass_surface_v1.set_regions, surface-local logical px.
     struct SRegion {

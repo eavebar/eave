@@ -167,10 +167,19 @@ namespace Glass {
             g_pEventLoopManager->addTimer(g_shared.timer);
         }
 
-        const float cell = job.state.reportCell * job.scale;
-        const int   cols = std::ceil(job.box.w / cell), rows = std::ceil(job.box.h / cell);
-        if (cols <= 0 || rows <= 0 || cols * rows > 65536)
-            return;
+        // Cells as small as eave asked, or bigger, so the report fits in one message.
+        uint32_t cellPx = job.state.reportCell;
+        int      cols = 0, rows = 0;
+        for (;; cellPx *= 2) {
+            const float cell = cellPx * job.scale;
+            cols             = std::ceil(job.box.w / cell);
+            rows             = std::ceil(job.box.h / cell);
+            if (cols <= 0 || rows <= 0)
+                return;
+            if (sc<size_t>(cols) * rows <= MAX_REPORT_CELLS)
+                break;
+        }
+        const float cell = cellPx * job.scale;
         // Always 8 bits a channel, whatever the frame's format, so it reads back as bytes.
         if (!r.grid)
             r.grid = g_pHyprRenderer->createFB("hypr-eave report");
@@ -207,7 +216,7 @@ namespace Glass {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
         r.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        r.cell  = job.state.reportCell;
+        r.cell  = cellPx;
         r.cols  = cols;
         r.rows  = rows;
         r.last  = now;

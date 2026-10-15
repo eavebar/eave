@@ -249,7 +249,8 @@ namespace Glass {
     }
 
     void CGlassSurface::sendBackdrop(uint32_t cell, uint32_t cols, uint32_t rows, const std::vector<uint8_t>& cells) {
-        if (!good())
+        // Never past what a message holds: it would cut eave's connection, the whole bar.
+        if (!good() || cells.size() > MAX_REPORT_CELLS)
             return;
         wl_array array;
         wl_array_init(&array);
