@@ -17,9 +17,11 @@ const RECENT: usize = 16;
 pub enum Event {
     /// The keybind: open it, or close it if it's open.
     Toggle,
+    /// A click on the notch, or the middle of the top: as the keybind, with the pointer on the bar.
+    Click,
     /// It's ready to open, this far from the surface's top, with this much of the screen below
-    /// the surface's top: for a dialog it turns into.
-    Opened(f32, f32),
+    /// the surface's top: for a dialog it turns into. And whether a click on the bar opened it.
+    Opened(f32, f32, bool),
     /// What's typed changed.
     Query(String),
     /// The selection moves down (1) or up (-1) a row, round at the ends.

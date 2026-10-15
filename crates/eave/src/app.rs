@@ -57,6 +57,11 @@ pub struct Bar {
     /// The bar surface holding the keyboard: the one with the open popover, so a key press can
     /// close it.
     keyboard: Option<window::Id>,
+    /// Whether Hyprland has a window focused. Without one, a held press takes the keyboard
+    /// (D-111).
+    window_focused: bool,
+    /// The bar surface with a press held on it, tracked only while no window is focused.
+    held: Option<window::Id>,
     /// How many nudges widgets have asked for, so each island can tell a new one from one it has
     /// already played.
     nudges: u64,
@@ -302,6 +307,12 @@ pub enum Message {
     Collapsed(IslandId),
     /// Hyprland saw a primary click somewhere ([`eave_hyprland::report_clicks`]).
     Clicked,
+    /// Hyprland's events came on: what to check once, since nothing says it until it changes.
+    HyprlandStarted,
+    /// Whether Hyprland has a window focused.
+    WindowFocused(bool),
+    /// A press on this bar surface is held down, or let go.
+    Held(window::Id, bool),
     /// The pointer came onto the bar's surface, or left it.
     PointerEntered,
     PointerLeft,
@@ -389,6 +400,8 @@ impl Bar {
             popovers: Vec::new(),
             pointer_inside: false,
             keyboard: None,
+            window_focused: true,
+            held: None,
             nudges: 0,
             icons: Icons::default(),
             loading: Vec::new(),
@@ -1734,7 +1747,10 @@ fn hand_keyboard(bar: &mut Bar) -> Vec<Task<Message>> {
                 .then(|| bar.toast_window())
                 .flatten()
         })
-        .or_else(|| bar.typing().then(|| bar.toast_window()).flatten());
+        .or_else(|| bar.typing().then(|| bar.toast_window()).flatten())
+        // Hyprland keeps a held press's pointer on its surface only while something has the
+        // keyboard: with no window focused, the bar does, until the press is let go (D-111).
+        .or_else(|| bar.held.filter(|_| !bar.window_focused));
     if wanted == bar.keyboard {
         return Vec::new();
     }
@@ -1980,6 +1996,21 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             bar.peek = None;
             Task::none()
         }
+        Message::HyprlandStarted => {
+            let focused = Task::perform(window_focused(), Message::WindowFocused);
+            Task::batch([handle(bar, Message::CheckFullscreen), focused])
+        }
+        Message::WindowFocused(focused) => {
+            bar.window_focused = focused;
+            if focused {
+                bar.held = None;
+            }
+            Task::none()
+        }
+        Message::Held(window, held) => {
+            bar.held = held.then_some(window);
+            Task::none()
+        }
         Message::WorkspaceChanged => {
             let peek = if bar.config.bar.peek {
                 bar.peek()
@@ -2191,15 +2222,16 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
 fn handle_dormer(bar: &mut Bar, event: dormer::Event) -> Task<Message> {
     use dormer::Event;
     match event {
-        Event::Toggle if bar.dormer_open() => send(bar.close_popover()),
-        Event::Toggle if bar.toast_window().is_some() => {
+        Event::Toggle | Event::Click if bar.dormer_open() => send(bar.close_popover()),
+        Event::Toggle | Event::Click if bar.toast_window().is_some() => {
             let inset = bar.screen.inset[0];
-            Task::perform(center(inset), |(top, room)| {
-                Message::Dormer(Event::Opened(top, room))
+            let clicked = matches!(event, Event::Click);
+            Task::perform(center(inset), move |(top, room)| {
+                Message::Dormer(Event::Opened(top, room, clicked))
             })
         }
-        Event::Toggle => Task::none(),
-        Event::Opened(top, room) => {
+        Event::Toggle | Event::Click => Task::none(),
+        Event::Opened(top, room, clicked) => {
             if bar.dormer_open() || bar.toast_window().is_none() {
                 return Task::none();
             }
@@ -2208,8 +2240,9 @@ fn handle_dormer(bar: &mut Bar, event: dormer::Event) -> Task<Message> {
             bar.dialog = None;
             // Never over the bar.
             let top = top.max(bar.screen.surface_height() as f32);
-            // A keybind opened it, not a click: the pointer is wherever it was.
-            bar.pointer_inside = false;
+            // A click on the bar opened it, so the pointer is there. A keybind: wherever it was,
+            // until it moves over the bar (`pointer_moved`).
+            bar.pointer_inside = clicked;
             match &mut bar.dormer {
                 // Still folding back: it turns around, and starts over empty.
                 Some(session) => {
@@ -2574,7 +2607,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         )
         .sag((bar.toast_window() == Some(window)).then(|| bar.notch_sag.clone()))
         // A click on the notch, or the middle of the top, brings the dormer out (D-106).
-        .on_click(Message::Dormer(dormer::Event::Toggle))
+        .on_click(Message::Dormer(dormer::Event::Click))
         .on_width(move |width| Message::Width(window, width));
 
     // No background of its own: the surface is transparent around and between the islands, and
@@ -3142,6 +3175,16 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
     if bar.is_open() || bar.typing() || bar.showing() == Showing::Hover {
         subscriptions.push(iced::event::listen_with(popover_event));
     }
+    // Opened by a keybind or a signal, the pointer may be on the bar already: its first move
+    // there says so. Then this goes.
+    if bar.is_open() && !bar.pointer_inside {
+        subscriptions.push(iced::event::listen_with(pointer_moved));
+    }
+    // With no window focused, a held press takes the keyboard, or Hyprland lets go of the
+    // pointer as soon as it leaves the surface (D-111).
+    if !bar.window_focused {
+        subscriptions.push(iced::event::listen_with(held_event));
+    }
     // Always: the dormer's keybind comes this way, and what may change whether a window covers
     // the screen. Every other event stops in the filter.
     subscriptions.push(Subscription::run(hyprland_events).filter_map(hyprland));
@@ -3154,6 +3197,26 @@ pub fn subscription(bar: &Bar) -> Subscription<Message> {
         subscriptions.push(iced::time::every(Duration::from_secs(60)).map(|_| Message::Minute));
     }
     Subscription::batch(subscriptions)
+}
+
+fn pointer_moved(event: Event, _: iced::event::Status, _: window::Id) -> Option<Message> {
+    match event {
+        Event::Mouse(mouse::Event::CursorMoved { .. }) => Some(Message::PointerEntered),
+        _ => None,
+    }
+}
+
+fn held_event(event: Event, _: iced::event::Status, window: window::Id) -> Option<Message> {
+    match event {
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left | mouse::Button::Right)) => {
+            Some(Message::Held(window, true))
+        }
+        Event::Mouse(
+            mouse::Event::ButtonReleased(mouse::Button::Left | mouse::Button::Right)
+            | mouse::Event::CursorLeft,
+        ) => Some(Message::Held(window, false)),
+        _ => None,
+    }
 }
 
 fn popover_event(event: Event, status: iced::event::Status, _: window::Id) -> Option<Message> {
@@ -3194,7 +3257,7 @@ fn hyprland_events() -> impl eave_hyprland::Stream<Item = eave_hyprland::Update<
 fn hyprland(update: eave_hyprland::Update<()>) -> Option<Message> {
     use eave_hyprland::Event;
     let event = match update {
-        eave_hyprland::Update::Snapshot(()) => return Some(Message::CheckFullscreen),
+        eave_hyprland::Update::Snapshot(()) => return Some(Message::HyprlandStarted),
         eave_hyprland::Update::Event(event) => event,
     };
     match event {
@@ -3215,11 +3278,22 @@ fn hyprland(update: eave_hyprland::Update<()>) -> Option<Message> {
             }
         },
         Event::Workspace { .. } | Event::FocusedMonitor { .. } => Some(Message::WorkspaceChanged),
+        Event::FocusedWindow { address } => Some(Message::WindowFocused(!address.is_empty())),
         Event::Fullscreen(_)
         | Event::OpenWindow { .. }
         | Event::CloseWindow { .. }
         | Event::MoveWindow { .. } => Some(Message::CheckFullscreen),
         _ => None,
+    }
+}
+
+/// Whether Hyprland has a window focused: `activewindow` answers with nothing but a line saying
+/// so when none is. Asked once, on the way in; `activewindowv2` says when it changes.
+async fn window_focused() -> bool {
+    match eave_hyprland::request("activewindow").await {
+        Ok(reply) => reply.starts_with("Window "),
+        // Unknown: as if one were, so a press never takes the focus from a window.
+        Err(_) => true,
     }
 }
 
@@ -4304,7 +4378,7 @@ mod tests {
     #[test]
     fn the_dormer_opens_with_the_keyboard_and_closes_back() {
         let (mut bar, window) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
         assert!(bar.dormer_open() && bar.is_open());
         assert_eq!(bar.keyboard, Some(window));
         dormer(&mut bar, dormer::Event::Placed(placed()));
@@ -4320,9 +4394,41 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_the_notch_puts_back_the_dormer_it_brought_out() {
+        let (mut bar, _) = acting_bar();
+        bar.pointer_inside = false;
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, true));
+        assert!(bar.dormer_open());
+        // Hyprland reports the next click on the notch too: it isn't outside.
+        let _ = update(&mut bar, Message::Clicked);
+        assert!(bar.dormer_open());
+        dormer(&mut bar, dormer::Event::Click);
+        assert!(!bar.dormer_open());
+
+        // Brought out by the keybind, with the pointer on the bar: its first move there says so.
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
+        assert!(!bar.pointer_inside);
+        let _ = update(&mut bar, Message::PointerEntered);
+        let _ = update(&mut bar, Message::Clicked);
+        assert!(bar.dormer_open());
+    }
+
+    #[test]
+    fn with_no_window_focused_a_held_press_takes_the_keyboard() {
+        let (mut bar, window) = acting_bar();
+        let _ = update(&mut bar, Message::Held(window, true));
+        assert_eq!(bar.keyboard, None, "a window has it");
+        let _ = update(&mut bar, Message::WindowFocused(false));
+        let _ = update(&mut bar, Message::Held(window, true));
+        assert_eq!(bar.keyboard, Some(window));
+        let _ = update(&mut bar, Message::Held(window, false));
+        assert_eq!(bar.keyboard, None);
+    }
+
+    #[test]
     fn the_notch_pinches_as_the_dormer_leaves_and_flattens_as_it_lands() {
         let (mut bar, _) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
         assert_eq!(bar.notch_kick, None, "not before the drop leaves");
         dormer(&mut bar, dormer::Event::Neck(false));
         assert_eq!(bar.notch_kick, Some((1, bezel::Kick::Pinch)));
@@ -4368,7 +4474,7 @@ mod tests {
     #[test]
     fn the_dormer_never_covers_the_bar() {
         let (mut bar, _) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(-50.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(-50.0, 1000.0, false));
         let top = bar.dormer.as_ref().unwrap().top;
         assert_eq!(top, bar.screen.surface_height() as f32);
     }
@@ -4381,7 +4487,7 @@ mod tests {
         let _ = update(&mut bar, Message::Pressed(window::Id::unique(), 0, None));
         let _ = update(&mut bar, Message::BarPressed);
         assert_eq!(ASKED.get(), 0);
-        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
         assert!(ASKED.get() > 0);
         assert!(rows(&bar).contains(&"Mute".to_string()));
     }
@@ -4393,7 +4499,7 @@ mod tests {
     #[test]
     fn typing_narrows_the_list_and_arrows_pick_a_row() {
         let (mut bar, _) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
         // Its actions, and its popover by the widget's name.
         assert_eq!(rows(&bar), ["Mute", "Show it", "Acting"]);
         dormer(&mut bar, dormer::Event::Query("sound".into()));
@@ -4408,13 +4514,13 @@ mod tests {
     #[test]
     fn picking_an_action_sends_it_to_its_widget_and_closes_the_dormer() {
         let (mut bar, _) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
         dormer(&mut bar, dormer::Event::Query("mute".into()));
         dormer(&mut bar, dormer::Event::Run(0));
         assert!(!bar.is_open());
 
         // The widget got it: its action follows its state now, and comes first as a recent pick.
-        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
         assert_eq!(rows(&bar)[0], "Unmute");
         // The list follows the widget while it's open, too.
         tell_acting(&mut bar, Act::Mute);
@@ -4424,14 +4530,14 @@ mod tests {
     #[test]
     fn an_action_or_a_row_can_open_a_popover() {
         let (mut bar, _) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
         dormer(&mut bar, dormer::Event::Query("show".into()));
         dormer(&mut bar, dormer::Event::Run(0));
         assert!(bar.popover_of(0).is_some());
         assert!(!bar.dormer_open());
 
         let _ = update(&mut bar, Message::BarPressed);
-        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
         dormer(&mut bar, dormer::Event::Query("acting".into()));
         dormer(&mut bar, dormer::Event::Run(0));
         assert!(bar.popover_of(0).is_some());
@@ -4441,7 +4547,7 @@ mod tests {
     fn the_dormer_and_popovers_take_turns() {
         let (mut bar, window) = acting_bar();
         let _ = update(&mut bar, Message::Pressed(window, 0, None));
-        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
         assert!(bar.popover_of(0).is_none() && bar.dormer_open());
         let _ = update(&mut bar, Message::Pressed(window, 0, None));
         assert!(bar.popover_of(0).is_some() && !bar.dormer_open());
@@ -4450,7 +4556,7 @@ mod tests {
     #[test]
     fn a_reload_takes_a_gone_widgets_rows_with_it() {
         let (mut bar, _) = acting_bar();
-        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
         let _ = bar.apply(config("[[right]]\nwidget = \"d\""));
         assert!(rows(&bar).is_empty());
         // A row picked from before goes nowhere.
@@ -4463,7 +4569,7 @@ mod tests {
         registry.widget::<Acting>("acting");
         let (mut bar, _) = Bar::new(registry, config("[[dormer]]\nwidget = \"acting\""));
         let _ = update(&mut bar, Message::WindowOpened(window::Id::unique()));
-        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
         assert_eq!(rows(&bar), ["Mute", "Show it"]);
         dormer(&mut bar, dormer::Event::Run(1));
         assert!(!bar.is_open(), "no island to grow a popover out of");
@@ -4650,7 +4756,7 @@ mod tests {
     #[test]
     fn the_dormer_turns_into_a_dialog_picked_in_it() {
         let (mut bar, _) = talking_bar();
-        dormer(&mut bar, dormer::Event::Opened(240.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(240.0, 1000.0, false));
         dormer(&mut bar, dormer::Event::Query("talk".into()));
         dormer(&mut bar, dormer::Event::Run(0));
         assert!(bar.dormer.is_none() && bar.asked.is_none());
@@ -4697,7 +4803,7 @@ mod tests {
             "out of the popover it took in, so it goes back there"
         );
         assert!(bar.popovers.is_empty());
-        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
+        dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0, false));
         assert!(bar.dormer_open() && bar.dialog.is_none());
     }
 
