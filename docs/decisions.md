@@ -2500,7 +2500,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
   - **Two pass elements around the surface's own.** It adds them to the render pass at `RENDER_LAST_MOMENT`. The first, just before the surface draws, copies the framebuffer around it and frosts the copy with a dual Kawase blur. The second, just after, draws the glass where the surface's buffer is the island's fill, bent at the edges of the buffer's alpha.
   - **Shape from this frame.** The shape comes only from the buffer drawn this frame, at the box it's drawn at, so the glass can't lag a morph.
   - **Ink.** Grey ink over glass becomes the opposite of the glass behind it, made just light or dark enough to reach a contrast ratio (`ink = "readable"`). The glass gives way where the ink can't get there otherwise.
-  - **Readback.** It reads back how bright it is behind the bar, with a pixel pack buffer and a fence, at most ten times a second and only on change.
+  - **Readback.** It reads back how bright it is behind the bar, with a pixel pack buffer and a fence, at most ten times a second. It sends a reading only when an island's average brightness moved by 16/255: text scrolling behind the bar moves single cells a lot and islands little.
 - **The channel:** `eave_glass_v1` (`protocol/eave-glass-v1.xml`), a private Wayland protocol on the bar's own connection. Its state is double-buffered and applied on `wl_surface.commit`, so what eave says lands with the frame it describes.
   - **eave → plugin, each frame:**
     - `set_regions`: each island that may turn to glass, with its exact fill and its tone (dark or light), plus what never turns to glass: pictures, the notch, the grown edge, and islands attached to an edge or in a solid bar.

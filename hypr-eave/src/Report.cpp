@@ -20,7 +20,10 @@ namespace Glass {
     GLuint quadVao();
 
     constexpr auto    REPORT_EVERY = std::chrono::milliseconds(100);
-    constexpr uint8_t NOTICEABLE   = 34; // a cell must move this much (of 255) for a new report
+    // How much an island's average brightness must move (of 255) for a new report. eave only
+    // needs to know when one crosses its thresholds, and per island, not per cell: text scrolling
+    // behind the bar moves cells a lot and islands little.
+    constexpr float NOTICEABLE = 16.F;
 
     static struct {
         GLuint              program = 0;
@@ -43,11 +46,34 @@ namespace Glass {
         grid.reset();
     }
 
-    static bool noticeable(const SReport& r, const std::vector<uint8_t>& cells) {
+    // The average of `cells` under `region`, cells `cell` logical px square.
+    static float under(const SRegion& region, const std::vector<uint8_t>& cells, uint32_t cell, uint32_t cols, uint32_t rows) {
+        const auto span = [cell](int32_t from, int32_t size, uint32_t count) {
+            const auto first = std::clamp<int64_t>(from / sc<int64_t>(cell), 0, count);
+            const auto last  = std::clamp<int64_t>((sc<int64_t>(from) + size + cell - 1) / cell, 0, count);
+            return std::pair{first, last};
+        };
+        const auto [x0, x1] = span(region.x, region.w, cols);
+        const auto [y0, y1] = span(region.y, region.h, rows);
+        float      sum = 0.F, n = 0.F;
+        for (auto y = y0; y < y1; y++) {
+            for (auto x = x0; x < x1; x++) {
+                sum += cells[y * cols + x];
+                n += 1.F;
+            }
+        }
+        return n > 0.F ? sum / n : 0.F;
+    }
+
+    // Whether a read is worth sending: the grid changed shape, or an island's average moved.
+    static bool noticeable(const CGlassSurface& glass, const std::vector<uint8_t>& cells) {
+        const auto& r = glass.m_report;
         if (r.sentCell != r.cell || r.sentCols != r.cols || r.sentRows != r.rows || r.sent.size() != cells.size())
             return true;
-        for (size_t i = 0; i < cells.size(); i++) {
-            if (std::abs(sc<int>(cells[i]) - sc<int>(r.sent[i])) >= NOTICEABLE)
+        for (auto const& region : glass.m_current.regions) {
+            if (region.kind == EAVE_GLASS_SURFACE_V1_KIND_SOLID)
+                continue;
+            if (std::abs(under(region, cells, r.cell, r.cols, r.rows) - under(region, r.sent, r.cell, r.cols, r.rows)) >= NOTICEABLE)
                 return true;
         }
         return false;
@@ -74,7 +100,7 @@ namespace Glass {
             glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
         }
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        if (!cells.empty() && noticeable(r, cells)) {
+        if (!cells.empty() && noticeable(glass, cells)) {
             glass.sendBackdrop(r.cell, r.cols, r.rows, cells);
             r.sent     = std::move(cells);
             r.sentCell = r.cell;
