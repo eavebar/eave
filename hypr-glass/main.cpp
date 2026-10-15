@@ -1,8 +1,11 @@
 // Spike: liquid-glass refraction behind eave's layer surfaces.
 //
-// Before the top and overlay layers draw, this copies what's on screen around every `eave*`
-// layer and draws it refracted through the edges of the layer's own buffer. eave's translucent islands then draw on top as usual. The shape comes only from
-// the surface's alpha in the frame being drawn, so the glass can't lag a morph.
+// Right before an `eave*` layer draws, this copies what's on screen around it. Right after, it
+// lets that through the layer's islands, refracted at their edges. eave draws its islands opaque,
+// as without the plugin, and the plugin keys the glass in by the island's color: black (or white,
+// in the light scheme) becomes glass, content stays. Fades cover content with the island's color,
+// so they fade to glass with no change in eave. The shape comes only from the buffer drawn this
+// frame, at the box it's drawn at, so the glass can't lag a morph or a resize.
 //
 // Throwaway: no config, no transforms (rotated monitors), knobs through `hyprctl eaveglass`.
 
@@ -19,6 +22,7 @@
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/render/gl/GLFramebuffer.hpp>
+#include <hyprland/src/render/pass/SurfacePassElement.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/desktop/view/LayerSurface.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
@@ -42,6 +46,8 @@ static struct {
     float chroma   = 0.12F; // spread between red and blue lookups, as a fraction of the bend
     float rim      = 0.35F; // brightness of the lit edge
     float frost    = 1.5F;  // spread of each blur step (0 = clear glass)
+    float clear    = 0.7F;  // how much of the backdrop shows through the island's color
+    bool  light    = false; // white islands: multiply the glass in, instead of screening it
     int   pid      = 0;     // only this eave's layers (0 = every eave)
     int   skip     = 0;     // for measuring: 1 skips the copy, 2 the refraction
 } g_params;
@@ -52,8 +58,9 @@ static struct {
 } g_hooks;
 
 struct SMonitorGlass {
-    SP<IFramebuffer> backdrop;   // the frame around the glass, full size
+    SP<IFramebuffer> backdrop;      // the frame around the glass, full size
     SP<IFramebuffer> half, quarter; // blurred down from it, for frost
+    CRegion          drawn;         // where the glass was drawn last, framebuffer pixels
 };
 static std::unordered_map<Monitor::CMonitor*, SMonitorGlass> g_fbs;
 
@@ -149,7 +156,7 @@ static std::string timingStats() {
 // needs its own sampler type.
 struct SProgram {
     GLuint id = 0;
-    GLint  backdrop, mask, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, rect;
+    GLint  backdrop, mask, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, clear, light, rect;
 };
 static SProgram g_progs[2]; // [0] sampler2D, [1] samplerExternalOES
 static GLuint   g_vao = 0, g_vbo = 0;
@@ -182,15 +189,26 @@ uniform float band;     // px
 uniform float strength; // px
 uniform float chroma;
 uniform float rim;
+uniform float clear;    // how much of the backdrop the island's color lets through
+uniform bool  light;
 out vec4 fragColor;
-
-const float THRESHOLD = 0.08; // the islands are translucent: any alpha above this is glass
 
 float cover(vec2 px) {
     vec2 uv = (px - surf.xy) / surf.zw;
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
         return 0.0;
-    return clamp(texture(mask, uv).a * fade / THRESHOLD, 0.0, 1.0);
+    return texture(mask, uv).a;
+}
+
+// Over the layer, which is already drawn. Dark: screen, so black island becomes glass and white
+// ink stays white. Light: multiply, so white island becomes glass and black ink stays black. The
+// blend function does the other half.
+void put(vec3 glass, float a) {
+    a *= fade;
+    if (light)
+        fragColor = vec4(mix(vec3(1.0), vec3(1.0 - clear) + clear * glass, a), 1.0);
+    else
+        fragColor = vec4(glass * clear * a, 1.0);
 }
 
 vec3 look(vec2 px) {
@@ -211,7 +229,7 @@ void main() {
         inside = min(inside, cover(p + vec2(cos(ang), sin(ang)) * band * 1.05));
     }
     if (inside >= 1.0) {
-        fragColor = vec4(look(p) * a, a);
+        put(look(p), a);
         return;
     }
 
@@ -251,7 +269,7 @@ void main() {
     float lit   = max(dot(n, light), 0.0) + 0.35 * max(dot(n, -light), 0.0);
     col += rim * lit * pow(edge, 3.0);
 
-    fragColor = vec4(col * a, a);
+    put(col, a);
 }
 )#";
 
@@ -416,6 +434,8 @@ static SProgram* ensureProgram(bool external) {
     p.strength = at("strength");
     p.chroma   = at("chroma");
     p.rim      = at("rim");
+    p.clear    = at("clear");
+    p.light    = at("light");
     p.rect     = at("rect");
 
     if (!g_vao) {
@@ -452,7 +472,8 @@ static std::vector<PHLLS> glassLayers(const PHLMONITOR& mon) {
     return out;
 }
 
-// The layer's box on the monitor, in framebuffer pixels.
+// The layer's box on the monitor, in framebuffer pixels, as arranged. What's drawn can differ for
+// a frame while it resizes, so the drawing goes by the pass instead (see SJob).
 static CBox pixelBox(const PHLLS& ls, const PHLMONITOR& mon) {
     const auto pos  = ls->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     const auto size = ls->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
@@ -464,7 +485,8 @@ static float reach(const PHLMONITOR& mon) {
 }
 
 // The glass reads around every pixel it draws, so a change anywhere it can see redraws all of
-// it. Added to this frame's record in the damage ring too, so older buffers catch up.
+// it. Added to this frame's record in the damage ring too, so older buffers catch up. Where the
+// glass was last drawn counts too: a layer that just shrank leaves it there otherwise.
 static void onBegin() {
     g_timing.rendered++;
     if (!g_params.enabled)
@@ -481,6 +503,9 @@ static void onBegin() {
         if (!rd.damage.copy().intersect(box.copy().expand(reach(mon))).empty())
             extra.add(box);
     }
+    auto& drawn = g_fbs[mon.get()].drawn;
+    if (!extra.empty() || !rd.damage.copy().intersect(drawn.copy().expand(reach(mon))).empty())
+        extra.add(drawn);
     if (extra.empty())
         return;
 
@@ -504,46 +529,75 @@ static void ensureBackdrop(SP<IFramebuffer>& fb, const SP<IFramebuffer>& like, c
     fb->setImageDescription(like->imageDescription());
 }
 
-static void drawGlass(const PHLMONITOR& mon) {
-    auto& rd = g_pHyprRenderer->m_renderData;
-    if (!g_params.enabled || !mon || !rd.currentFB)
-        return;
+// One glass layer's surface in this frame's pass: the backdrop is taken just before it draws,
+// and the glass keyed in just after, both at the box and with the buffer it draws.
+struct SJob {
+    PHLMONITORREF    mon;
+    CBox             box; // framebuffer pixels
+    SP<ITexture>     tex;
+    float            fade = 1.F;
+    CBox             copy; // the part of the frame the backdrop holds
+    SP<IFramebuffer> sampled;
+    Vector2D         level; // the sampled texture's size over the frame's
+    bool             ready = false;
+};
 
-    const auto  target = rd.currentFB;
-    const auto  fbSize = target->m_size;
-    const float REACH  = reach(mon);
-
-    // Only what the damage asks for (onBegin made sure that's all of a layer or none of it).
-    struct SJob {
-        PHLLS        ls;
-        CBox         box;
-        SP<ITexture> tex;
-    };
-    std::vector<SJob> todo;
-    CBox              copy; // everything the lookups can reach
-    for (auto const& ls : glassLayers(mon)) {
-        const auto box  = pixelBox(ls, mon);
-        auto       surf = ls->wlSurface()->resource();
-        if (rd.damage.copy().intersect(box).empty() || !surf || !surf->m_current.texture || !surf->m_current.texture->ok())
-            continue;
-        todo.push_back({ls, box, surf->m_current.texture});
-        const auto r = box.copy().expand(REACH).intersection(CBox{{}, fbSize});
-        copy         = copy.empty() ? r : CRegion{copy}.add(r).getExtents();
+struct SGLState {
+    GLint prog = 0, vao = 0, active = 0, tex0 = 0;
+    bool  scissor = false;
+    void  save() {
+        glGetIntegerv(GL_CURRENT_PROGRAM, &prog);
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex0);
+        scissor = g_pHyprOpenGL->m_capStatus[CHyprOpenGLImpl::CAP_STATUS_SCISSOR_TEST];
+        g_pHyprOpenGL->setCapStatus(GL_SCISSOR_TEST, false);
     }
-    if (todo.empty())
+    void restore() {
+        glBindVertexArray(vao);
+        glUseProgram(prog);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, tex0);
+        glActiveTexture(active);
+        g_pHyprOpenGL->setCapStatus(GL_SCISSOR_TEST, scissor);
+    }
+};
+
+static std::chrono::steady_clock::time_point syncBegin() {
+    if (g_timing.mode == g_timing.SYNC)
+        glFinish();
+    return std::chrono::steady_clock::now();
+}
+
+static void syncEnd(std::chrono::steady_clock::time_point start) {
+    if (g_timing.mode != g_timing.SYNC)
         return;
-    copy.round();
+    glFinish();
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    g_timing.sum[T_SYNC] += ms;
+    g_timing.worst[T_SYNC] = std::max(g_timing.worst[T_SYNC], ms);
+    g_timing.n[T_SYNC]++;
+}
+
+// Before the layer: copy what's under and around it, and frost it.
+static void takeBackdrop(SJob& job) {
+    auto& rd  = g_pHyprRenderer->m_renderData;
+    auto  mon = job.mon.lock();
+    if (!g_params.enabled || !mon || !rd.currentFB || rd.damage.copy().intersect(job.box).empty())
+        return;
+
+    const auto target = rd.currentFB;
+    job.copy          = job.box.copy().expand(reach(mon)).intersection(CBox{{}, target->m_size}).round();
+    if (job.copy.empty())
+        return;
 
     auto& fbs = g_fbs[mon.get()];
-    ensureBackdrop(fbs.backdrop, target, copy.size());
+    ensureBackdrop(fbs.backdrop, target, job.copy.size());
 
-    const bool scissorWas = g_pHyprOpenGL->m_capStatus[CHyprOpenGLImpl::CAP_STATUS_SCISSOR_TEST];
-    g_pHyprOpenGL->setCapStatus(GL_SCISSOR_TEST, false);
-
-    const bool sync = g_timing.mode == g_timing.SYNC;
-    if (sync)
-        glFinish();
-    const auto syncStart = std::chrono::steady_clock::now();
+    SGLState gl;
+    gl.save();
+    const auto start = syncBegin();
 
     // 1. Copy the backdrop around the glass into the corner of our buffer.
     timeBegin(T_COPY);
@@ -551,25 +605,19 @@ static void drawGlass(const PHLMONITOR& mon) {
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldRead);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, GLFB(target)->getFBID());
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLFB(fbs.backdrop)->getFBID());
+    const auto& c = job.copy;
     if (g_params.skip != 1)
-        glBlitFramebuffer(copy.x, copy.y, copy.x + copy.w, copy.y + copy.h, 0, 0, copy.w, copy.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBlitFramebuffer(c.x, c.y, c.x + c.w, c.y + c.h, 0, 0, c.w, c.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, oldRead);
     timeEnd();
 
     // 2. Frost it: blur down to a quarter and back up to a half.
-    GLint oldProg = 0, oldVao = 0, oldActive = 0, oldTex0 = 0;
-    glGetIntegerv(GL_CURRENT_PROGRAM, &oldProg);
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &oldVao);
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &oldActive);
-    glActiveTexture(GL_TEXTURE0);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTex0);
-
-    SP<IFramebuffer> sampled = fbs.backdrop;
-    Vector2D         level   = {1, 1}; // the sampled texture's size over the frame's
-    const bool       frost   = g_params.frost > 0 && ensurePass(g_down, DOWN_FRAG) && ensurePass(g_up, UP_FRAG) && ensureProgram(false);
+    job.sampled    = fbs.backdrop;
+    job.level      = {1, 1};
+    const bool frost = g_params.frost > 0 && ensurePass(g_down, DOWN_FRAG) && ensurePass(g_up, UP_FRAG) && ensureProgram(false);
     if (frost) {
         timeBegin(T_MASK);
-        const Vector2D half = {std::ceil(copy.w / 2.0), std::ceil(copy.h / 2.0)}, quarter = {std::ceil(copy.w / 4.0), std::ceil(copy.h / 4.0)};
+        const Vector2D half = {std::ceil(c.w / 2.0), std::ceil(c.h / 2.0)}, quarter = {std::ceil(c.w / 4.0), std::ceil(c.h / 4.0)};
         ensureBackdrop(fbs.half, target, half);
         ensureBackdrop(fbs.quarter, target, quarter);
         glBindVertexArray(g_vao);
@@ -586,74 +634,89 @@ static void drawGlass(const PHLMONITOR& mon) {
             glUniform1f(prog.offset, g_params.frost);
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         };
-        pass(g_down, fbs.backdrop, copy.size(), fbs.half, half);
+        pass(g_down, fbs.backdrop, c.size(), fbs.half, half);
         pass(g_down, fbs.half, half, fbs.quarter, quarter);
         pass(g_up, fbs.quarter, quarter, fbs.half, half);
-        sampled = fbs.half;
-        level   = {half.x / copy.w, half.y / copy.h};
+        job.sampled = fbs.half;
+        job.level   = {half.x / c.w, half.y / c.h};
+        g_pHyprOpenGL->blend(true);
         timeEnd();
     }
 
-    // 3. Refract it through each layer's own buffer, into the frame.
-    timeBegin(T_REFRACT);
-    glBindTexture(GL_TEXTURE_2D, sampled->getTexture()->m_texID);
+    target->bind(); // and its viewport, for the layer that draws next
+    gl.restore();
+    syncEnd(start);
+    job.ready = true;
+}
 
-    target->bind(); // and its viewport
+// After the layer: key the glass in where its islands are, refracted at their edges.
+static void keyGlass(SJob& job) {
+    auto mon = job.mon.lock();
+    if (!job.ready || !mon)
+        return;
+    const auto prog = ensureProgram(job.tex->m_type == Render::TEXTURE_EXTERNAL);
+    if (!prog)
+        return;
+
+    auto&      rd     = g_pHyprRenderer->m_renderData;
+    const auto fbSize = rd.currentFB->m_size;
+
+    SGLState gl;
+    gl.save();
+    const auto start = syncBegin();
+
+    timeBegin(T_REFRACT);
+    glBindTexture(GL_TEXTURE_2D, job.sampled->getTexture()->m_texID);
     g_pHyprOpenGL->blend(true);
-    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    if (g_params.light)
+        glBlendFuncSeparate(GL_ZERO, GL_SRC_COLOR, GL_ZERO, GL_ONE);
+    else
+        glBlendFuncSeparate(GL_ONE_MINUS_DST_COLOR, GL_ONE, GL_ZERO, GL_ONE);
     glBindVertexArray(g_vao);
 
     const float S = mon->m_scale;
-    for (auto const& job : todo) {
-        const auto prog = ensureProgram(job.tex->m_type == Render::TEXTURE_EXTERNAL);
-        if (!prog)
-            continue;
-        glBindVertexArray(g_vao); // ensureProgram may have just made it
-        glUseProgram(prog->id);
-        glUniform1i(prog->backdrop, 0);
-        glUniform1i(prog->mask, 1);
-        glUniform2f(prog->fbSize, fbSize.x, fbSize.y);
-        glUniform2f(prog->bdOrigin, copy.x, copy.y);
-        glUniform2f(prog->bdScale, level.x / sampled->m_size.x, level.y / sampled->m_size.y);
-        glUniform4f(prog->surf, job.box.x, job.box.y, job.box.w, job.box.h);
-        glUniform1f(prog->fade, job.ls->alpha()[Desktop::View::LS_ALPHA_FADE]->value());
-        glUniform1f(prog->band, g_params.band * S);
-        glUniform1f(prog->strength, g_params.strength * S);
-        glUniform1f(prog->chroma, g_params.chroma);
-        glUniform1f(prog->rim, g_params.rim);
-        glUniform4f(prog->rect, job.box.x, job.box.y, job.box.w, job.box.h);
+    glUseProgram(prog->id);
+    glUniform1i(prog->backdrop, 0);
+    glUniform1i(prog->mask, 1);
+    glUniform2f(prog->fbSize, fbSize.x, fbSize.y);
+    glUniform2f(prog->bdOrigin, job.copy.x, job.copy.y);
+    glUniform2f(prog->bdScale, job.level.x / job.sampled->m_size.x, job.level.y / job.sampled->m_size.y);
+    glUniform4f(prog->surf, job.box.x, job.box.y, job.box.w, job.box.h);
+    glUniform1f(prog->fade, job.fade);
+    glUniform1f(prog->band, g_params.band * S);
+    glUniform1f(prog->strength, g_params.strength * S);
+    glUniform1f(prog->chroma, g_params.chroma);
+    glUniform1f(prog->rim, g_params.rim);
+    glUniform1f(prog->clear, g_params.clear);
+    glUniform1i(prog->light, g_params.light);
+    glUniform4f(prog->rect, job.box.x, job.box.y, job.box.w, job.box.h);
 
-        glActiveTexture(GL_TEXTURE1);
-        job.tex->bind();
-        if (g_params.skip != 2)
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        job.tex->unbind();
-        glActiveTexture(GL_TEXTURE0);
-        g_timing.pixels += job.box.w * job.box.h;
-    }
+    glActiveTexture(GL_TEXTURE1);
+    job.tex->bind();
+    if (g_params.skip != 2)
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    job.tex->unbind();
+    g_timing.pixels += job.box.w * job.box.h;
     timeEnd();
 
-    glBindVertexArray(oldVao);
-    glUseProgram(oldProg);
-    glBindTexture(GL_TEXTURE_2D, oldTex0);
-    glActiveTexture(oldActive);
-    g_pHyprOpenGL->setCapStatus(GL_SCISSOR_TEST, scissorWas);
-
-    if (sync) {
-        glFinish();
-        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - syncStart).count();
-        g_timing.sum[T_SYNC] += ms;
-        g_timing.worst[T_SYNC] = std::max(g_timing.worst[T_SYNC], ms);
-        g_timing.n[T_SYNC]++;
-    }
+    g_pHyprOpenGL->blend(true); // back to Hyprland's premultiplied blending
+    gl.restore();
+    syncEnd(start);
 }
 
 class CGlassElement : public IPassElement {
   public:
-    CGlassElement(PHLMONITORREF mon) : m_mon(mon) {}
+    enum eStep : uint8_t {
+        BACKDROP,
+        KEY
+    };
+    CGlassElement(SP<SJob> job, eStep step) : m_job(std::move(job)), m_step(step) {}
 
     std::vector<UP<IPassElement>> draw() override {
-        drawGlass(m_mon.lock());
+        if (m_step == BACKDROP)
+            takeBackdrop(*m_job);
+        else
+            keyGlass(*m_job);
         return {};
     }
     bool needsLiveBlur() override {
@@ -670,8 +733,40 @@ class CGlassElement : public IPassElement {
     }
 
   private:
-    PHLMONITORREF m_mon;
+    SP<SJob> m_job;
+    eStep    m_step;
 };
+
+// Wrap each glass layer's own surface in the pass with the two steps, now that the pass is built.
+static void wrapLayers() {
+    auto& rd  = g_pHyprRenderer->m_renderData;
+    auto  mon = rd.pMonitor.lock();
+    if (!g_params.enabled || !mon)
+        return;
+
+    auto&   elements = g_pHyprRenderer->m_renderPass.m_passElements;
+    CRegion drawn;
+    for (size_t i = 0; i < elements.size(); i++) {
+        if (elements[i].element->type() != EK_SURFACE)
+            continue;
+        auto* surf = sc<CSurfacePassElement*>(elements[i].element.get());
+        auto& d    = surf->m_data;
+        if (!d.mainSurface || d.popup || !isGlass(d.pLS) || !d.texture || !d.texture->ok())
+            continue;
+
+        auto job  = makeShared<SJob>();
+        job->mon  = mon;
+        job->box  = surf->getTexBox().scale(mon->m_scale).round();
+        job->tex  = d.texture;
+        job->fade = d.alpha * d.fadeAlpha;
+        drawn.add(job->box);
+
+        elements.insert(elements.begin() + i, {.element = makeUnique<CGlassElement>(job, CGlassElement::BACKDROP)});
+        elements.insert(elements.begin() + i + 2, {.element = makeUnique<CGlassElement>(job, CGlassElement::KEY)});
+        i += 2;
+    }
+    g_fbs[mon.get()].drawn = drawn;
+}
 
 static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     std::istringstream in(args);
@@ -693,8 +788,8 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     }
 
     if (key.empty() || key == "show")
-        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength, g_params.chroma,
-                           g_params.rim, g_params.frost, g_params.pid, sc<int>(g_timing.mode));
+        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\nclear {}\nlight {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength,
+                           g_params.chroma, g_params.rim, g_params.frost, g_params.clear, g_params.light, g_params.pid, sc<int>(g_timing.mode));
 
     if (key == "stats")
         return timingStats();
@@ -718,6 +813,10 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
             g_params.rim = std::stof(value);
         else if (key == "frost")
             g_params.frost = std::stof(value);
+        else if (key == "clear")
+            g_params.clear = std::stof(value);
+        else if (key == "light")
+            setBool(g_params.light);
         else if (key == "skip")
             g_params.skip = std::stoi(value);
         else if (key == "pid")
@@ -744,14 +843,14 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_hooks.stage = Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
         if (stage == RENDER_BEGIN)
             onBegin();
-        else if (stage == RENDER_LAST_MOMENT)
+        else if (stage == RENDER_LAST_MOMENT) {
+            wrapLayers();
             timeBegin(T_FRAME);
+        }
         else if (stage == RENDER_POST) {
             timeEnd();
             timePoll();
         }
-        else if (stage == RENDER_POST_WINDOWS && g_params.enabled)
-            g_pHyprRenderer->addPassElement(makeUnique<CGlassElement>(g_pHyprRenderer->m_renderData.pMonitor));
     });
     g_hooks.monitorRemoved = Event::bus()->m_events.monitor.destroyMon.listen([](PHLMONITOR mon) { g_fbs.erase(mon.get()); });
     g_hooks.command        = HyprlandAPI::registerHyprCtlCommand(PHANDLE, SHyprCtlCommand{.name = "eaveglass", .exact = false, .fn = onCommand});
