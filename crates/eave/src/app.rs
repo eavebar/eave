@@ -16,14 +16,15 @@ use eave_dbus::portal::{self, ColorScheme};
 use iced::alignment::Horizontal;
 use iced::widget::{Space, container, row, stack};
 use iced::{
-    Color, Element, Event, Length, Padding, Rectangle, Subscription, Task, Theme, keyboard, mouse,
-    theme, window,
+    Color, Element, Event, Length, Padding, Point, Rectangle, Size, Subscription, Task, Theme,
+    keyboard, mouse, theme, window,
 };
 use iced_layershell::actions::ActionCallback;
 use iced_layershell::reexport::{KeyboardInteractivity, Layer};
 use iced_layershell::to_layer_message;
 
 use crate::apps::{self, AppIcon, FileIcon, FileKey, Frame, Icons, Wanted};
+use crate::bezel::{self, Bezel};
 use crate::config::{self, BarCorners, Config, Entry, Held, Showing, Style, Zone};
 use crate::countdown::Countdown;
 use crate::cover::{self, Cover};
@@ -36,7 +37,8 @@ use crate::shortcut;
 use crate::slot::Slot;
 use crate::squircle::CornerShape;
 use crate::theme::{Palette, Scheme};
-use crate::zones::{self, Zones};
+use crate::wall::Walls;
+use crate::zones::Zones;
 use crate::{icon, kit, theme as style, watch};
 
 pub struct Bar {
@@ -86,12 +88,14 @@ pub struct Bar {
     /// What's been said about the dormer's keys, so it's said once.
     warned: Vec<String>,
     /// What the dormer's drop last did to the notch or the edge it comes out of, numbered (D-86).
-    notch_kick: Option<(u64, zones::Kick)>,
+    notch_kick: Option<(u64, bezel::Kick)>,
     /// How far the notch's bottom (or the edge's) is drawn from where it rests, on the dormer's
     /// bar: the drop's neck flows from there.
-    notch_sag: zones::Sag,
+    notch_sag: bezel::Sag,
     /// Bar surfaces, in the order they opened.
     windows: Vec<window::Id>,
+    /// How wide each bar surface is, once laid out: where the notch is on it.
+    widths: HashMap<window::Id, f32>,
     /// Numbers the expiry timer, so only the one set last counts.
     timer: u64,
     /// When that timer goes off, if one is set.
@@ -275,8 +279,14 @@ pub enum Message {
     ToggleCollapse(IslandId),
     /// Hyprland saw a primary click somewhere ([`eave_hyprland::report_clicks`]).
     Clicked,
+    /// The pointer came onto the bar's surface, or left it.
     PointerEntered,
     PointerLeft,
+    /// The pointer is on the top strip of the bar's surface, which brings a hidden bar out
+    /// (D-88). Coming onto the notch or the edge doesn't (D-106).
+    PointerAtTop,
+    /// How wide a bar surface is, as its bezel was laid out.
+    Width(window::Id, f32),
     /// A key was pressed while a popover had the keyboard.
     KeyPressed,
     /// A notification's reply field got the focus from a click, or lost it: the instance, the
@@ -365,7 +375,7 @@ impl Bar {
             notices: None,
             dormer: None,
             notch_kick: None,
-            notch_sag: zones::Sag::default(),
+            notch_sag: bezel::Sag::default(),
             recent: Recent::default(),
             dialog: None,
             shapes: RefCell::default(),
@@ -373,6 +383,7 @@ impl Bar {
             touched: None,
             warned: Vec::new(),
             windows: Vec::new(),
+            widths: HashMap::new(),
             timer: 0,
             alarm: None,
             expanded: Vec::new(),
@@ -802,6 +813,50 @@ impl Bar {
         self.shapes.borrow_mut().entry(island).or_default().clone()
     }
 
+    /// The island in the middle of the top that the dormer, and a dialog nothing on the bar
+    /// opened, come out of when there's no notch (D-106): of the center zone's, the one drawn
+    /// nearest the middle. None with a notch, a solid bar or an empty center: they drop out of
+    /// the top.
+    fn middle_island(&self) -> Option<IslandId> {
+        if self.screen.notch.is_some() || self.config.bar.style == Style::Solid {
+            return None;
+        }
+        let mut islands: Vec<IslandId> = self
+            .instances
+            .iter()
+            .map(Instance::island)
+            .filter(|island| island.zone == Zone::Center)
+            .collect();
+        islands.sort_unstable_by_key(|island| island.index);
+        islands.dedup();
+        // Only those drawn: one with nothing to show isn't there to come out of.
+        let shapes = self.shapes.borrow();
+        let drawn: Vec<(IslandId, Rectangle)> = islands
+            .into_iter()
+            .filter_map(|island| {
+                let shape = shapes.get(&island)?.get();
+                (shape.width > 0.0).then_some((island, shape))
+            })
+            .collect();
+        let middle = self
+            .toast_window()
+            .and_then(|window| self.widths.get(&window))
+            .map(|width| width / 2.0);
+        match middle {
+            Some(middle) => drawn
+                .iter()
+                .min_by(|(_, a), (_, b)| {
+                    (a.center_x() - middle)
+                        .abs()
+                        .total_cmp(&(b.center_x() - middle).abs())
+                })
+                .map(|(island, _)| *island),
+            None => drawn
+                .get(drawn.len().saturating_sub(1) / 2)
+                .map(|(island, _)| *island),
+        }
+    }
+
     /// Whether `island` is on the bar the dialog shows on, to come out of it.
     fn island_shows(&self, island: IslandId) -> bool {
         island.zone != Zone::Dormer
@@ -813,7 +868,7 @@ impl Bar {
     }
 
     /// Squishes the notch, or the edge, on the dormer's bar: the drop leaves it or lands in it.
-    fn kick_notch(&mut self, kick: zones::Kick) {
+    fn kick_notch(&mut self, kick: bezel::Kick) {
         let number = self.notch_kick.map_or(1, |(number, _)| number + 1);
         self.notch_kick = Some((number, kick));
     }
@@ -970,6 +1025,28 @@ impl Bar {
 
     /// Sizes a bar surface to fit its popovers, and lets the pointer through everywhere else: the
     /// bar itself takes input across its whole strip, a popover only over its shape.
+    /// Where the notch and the grown edge are on `window`, while they stay out with the bar
+    /// hidden: not over a fullscreen window, and not as a solid bar's band (D-106).
+    fn bezel_rects(&self, window: window::Id) -> Vec<Rectangle> {
+        let Some(&width) = self.widths.get(&window) else {
+            return Vec::new();
+        };
+        if self.fullscreen || self.config.bar.style == Style::Solid {
+            return Vec::new();
+        }
+        let edge = (self.screen.grow > 0.0)
+            .then(|| Rectangle::new(Point::ORIGIN, Size::new(width, self.screen.grow)));
+        let notch = self.screen.notch.map(|notch| {
+            let reach = notch.width + 2.0 * notch.shoulder;
+            let bottom = self.screen.notch_top(notch) - self.screen.inset[0] + notch.height;
+            Rectangle::new(
+                Point::new((width - reach) / 2.0, 0.0),
+                Size::new(reach, bottom),
+            )
+        });
+        edge.into_iter().chain(notch).collect()
+    }
+
     fn fit(&self, window: window::Id) -> Task<Message> {
         let notices = self
             .notices
@@ -999,13 +1076,19 @@ impl Bar {
             .iter()
             .map(|rect| (rect.y + rect.height).ceil() as u32 + u32::from(style::EDGE_GAP))
             .fold(self.surface_height(), u32::max);
-        // A hidden bar takes the pointer only at the top edge, if hovering brings it out (D-88).
+        // A hidden bar takes the pointer only at the top edge, if hovering brings it out (D-88),
+        // and on the notch and the grown edge, which stay (D-106).
         let strip = if self.out() {
             self.screen.bar_height()
         } else if self.showing() == Showing::Hover {
             style::REVEAL_EDGE
         } else {
             0
+        };
+        let rects: Vec<Rectangle> = if self.out() {
+            rects
+        } else {
+            rects.into_iter().chain(self.bezel_rects(window)).collect()
         };
         let callback = ActionCallback::new(move |region| {
             // iced_layershell reuses one region and only clears the surface's current size, which
@@ -1650,12 +1733,26 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
         Message::Clicked if !bar.pointer_inside => send(bar.close_popover()),
         Message::PointerEntered => {
             bar.pointer_inside = true;
-            if bar.showing() == Showing::Hover {
+            // Back on a bar that's still out: it stays. A hidden one takes the pointer on the
+            // notch and the edge too, which don't bring it out: only the top strip does.
+            if bar.showing() == Showing::Hover && bar.out() {
                 bar.hovered = true;
-                // Back before it hid: it stays.
                 bar.leaves += 1;
             }
             Task::none()
+        }
+        Message::PointerAtTop => {
+            if bar.showing() == Showing::Hover && !bar.hovered {
+                bar.hovered = true;
+                bar.leaves += 1;
+            }
+            Task::none()
+        }
+        Message::Width(window, width) => {
+            if bar.widths.insert(window, width) == Some(width) {
+                return Task::none();
+            }
+            bar.fit(window)
         }
         Message::PointerLeft => {
             bar.pointer_inside = false;
@@ -1851,6 +1948,7 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
                 bar.toasts.retain(|toast| !toast.leaving);
             }
             bar.windows.retain(|open| *open != window);
+            bar.widths.remove(&window);
             bar.popovers.retain(|popover| popover.window != window);
             if bar.keyboard == Some(window) {
                 bar.keyboard = None;
@@ -1948,9 +2046,9 @@ fn handle_dormer(bar: &mut Bar, event: dormer::Event) -> Task<Message> {
         // What it comes out of reacts the moment the drop leaves it or touches it again.
         Event::Neck(caught) => {
             bar.kick_notch(if caught {
-                zones::Kick::Flatten
+                bezel::Kick::Flatten
             } else {
-                zones::Kick::Pinch
+                bezel::Kick::Pinch
             });
             Task::none()
         }
@@ -2027,9 +2125,9 @@ fn handle_dialog(bar: &mut Bar, event: dialog::Event) -> Task<Message> {
         // The notch reacts the moment the drop leaves it or touches it again.
         Event::Neck(caught) => {
             bar.kick_notch(if caught {
-                zones::Kick::Flatten
+                bezel::Kick::Flatten
             } else {
-                zones::Kick::Pinch
+                bezel::Kick::Pinch
             });
             Task::none()
         }
@@ -2149,6 +2247,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             };
 
             if items.is_empty() && popover.is_none() && !collapsible {
+                // Not drawn: nothing can come out of it.
+                bar.shape(island).set(Rectangle::default());
                 return None;
             }
             // On the side facing the middle of the screen; a center island's on its right.
@@ -2192,7 +2292,14 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                     .band(band)
                     .corners(bar.screen.island_corners(Place::default()))
                     .height(bar.screen.island_height())
-                    .shape(bar.shape(island)),
+                    .shape(bar.shape(island))
+                    // The screen's edges are walls, but where it's attached (D-104).
+                    .walls(Walls {
+                        top: (!attach.top && band.is_none()).then_some(bar.screen.grow),
+                        left: !attach.left,
+                        right: !attach.right,
+                        corners: [bar.screen.corners[0], bar.screen.corners[1]],
+                    }),
                 attach,
             ))
         };
@@ -2258,25 +2365,33 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             }
             let fused = [before.last(), after.first()]
                 .map(|next| next.is_some_and(|(_, attach)| attach.top));
-            // From where the zones start, below the grown edge and the gap.
-            let below = bar.screen.edge() + f32::from(style::EDGE_GAP);
-            let at = bar.screen.notch_top(notch) - below;
-            Zones::around_notch(left, [zone(before), zone(after)], right, notch, at, fused)
+            Zones::around_notch(left, [zone(before), zone(after)], right, notch, fused)
         }
-    }
-    .edge(
-        bar.screen.grow,
-        match (band, bar.config.bar.corners) {
-            (Some(_), BarCorners::Square) => [CornerShape::SQUARE; 2],
-            _ => [bar.screen.corners[0], bar.screen.corners[1]],
-        },
-    )
-    .solid(band.map(|bottom| bottom - bar.screen.grow))
-    .kick(
-        bar.notch_kick
-            .filter(|_| bar.toast_window() == Some(window)),
-    )
-    .sag((bar.toast_window() == Some(window)).then(|| bar.notch_sag.clone()));
+    };
+    // The notch and the grown edge, from the surface's top, which is below what the bezel hides.
+    let bezel = Bezel::default()
+        .notch(
+            bar.screen.notch,
+            bar.screen.notch.map_or(0.0, |notch| {
+                bar.screen.notch_top(notch) - bar.screen.inset[0]
+            }),
+        )
+        .edge(
+            bar.screen.grow,
+            match (band, bar.config.bar.corners) {
+                (Some(_), BarCorners::Square) => [CornerShape::SQUARE; 2],
+                _ => [bar.screen.corners[0], bar.screen.corners[1]],
+            },
+        )
+        .solid(band.map(|bottom| bottom - bar.screen.grow))
+        .kick(
+            bar.notch_kick
+                .filter(|_| bar.toast_window() == Some(window)),
+        )
+        .sag((bar.toast_window() == Some(window)).then(|| bar.notch_sag.clone()))
+        // A click on the notch, or the middle of the top, brings the dormer out (D-106).
+        .on_click(Message::Dormer(dormer::Event::Toggle))
+        .on_width(move |width| Message::Width(window, width));
 
     // No background of its own: the surface is transparent around and between the islands, and
     // below them, where a dragged island has room to move and popovers grow.
@@ -2286,10 +2401,15 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         bottom: style::DRAG_ROOM.into(),
         left: f32::from(style::EDGE_GAP) + shift[0],
     });
-    // Lifted off the screen while the bar hides, far enough to clear it (D-88).
-    let islands = Lift::new(islands, bar.out(), bar.surface_height() as f32);
+    // Lifted off the screen while the bar hides, far enough to clear it (D-88). The notch and the
+    // grown edge aren't the bar and stay, unless the bar is solid, when the band is the bar, or
+    // over a fullscreen window, which they'd draw over (D-106).
+    let by = bar.surface_height() as f32;
+    let stays = band.is_none() && !bar.fullscreen;
+    let bezel = Lift::new(bezel, stays || bar.out(), by);
+    let islands = Lift::new(islands, bar.out(), by);
     // Always a stack, so the islands' state stays put when the dormer comes and goes.
-    stack![islands, center_view(bar, window)].into()
+    stack![bezel, islands, center_view(bar, window)].into()
 }
 
 /// The island in the middle at the top, for the dormer or a widget's dialog: a dot where it comes
@@ -2350,7 +2470,8 @@ fn dialog_popover<'a>(bar: &'a Bar, dialog: &Dialog) -> island::Popover<'a, Mess
     };
     let home = match dialog.origin {
         Origin::Island(island) => Some(bar.shape(island)),
-        Origin::Top => None,
+        // Without a notch, out of the island in the middle, as the dormer does.
+        Origin::Top => bar.middle_island().map(|island| bar.shape(island)),
     };
     let top = home.is_none();
     island::Popover {
@@ -2478,6 +2599,10 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
     // Its rows hold pictures only, so every message in it is the dormer's own.
     let content = kit::panel(node, &bar.icons, bar.palette())
         .map(|message: AnyMessage| Message::Dormer(message.downcast().unwrap_or(Event::Move(0))));
+    // Out of the notch, or the top edge, as a drop; or without a notch, out of the island in the
+    // middle, the way a dialog comes out of what opened it (D-106).
+    let home = bar.middle_island().map(|island| bar.shape(island));
+    let top = home.is_none();
     island::Popover {
         key: DORMER,
         content,
@@ -2487,11 +2612,13 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         on_hover: None,
         width: style::PANEL_WIDE_WIDTH,
         placement: Placement::Centered { top: session.top },
-        drop: Some(drop_top(bar)),
-        drop_color: drop_color(bar),
-        on_neck: Some(Box::new(|caught| Message::Dormer(Event::Neck(caught)))),
-        sag: Some(bar.notch_sag.clone()),
-        home: None,
+        drop: top.then(|| drop_top(bar)),
+        drop_color: drop_color(bar).filter(|_| top),
+        on_neck: top.then(|| -> Box<dyn Fn(bool) -> Message> {
+            Box::new(|caught| Message::Dormer(Event::Neck(caught)))
+        }),
+        sag: top.then(|| bar.notch_sag.clone()),
+        home,
         on_key: Some(Box::new(move |key, modifiers, _| {
             use keyboard::key::Named;
             match key {
@@ -2842,6 +2969,11 @@ fn popover_event(event: Event, status: iced::event::Status, _: window::Id) -> Op
             Some(Message::BarPressed)
         }
         Event::Mouse(mouse::Event::CursorEntered) => Some(Message::PointerEntered),
+        Event::Mouse(mouse::Event::CursorMoved { position })
+            if position.y < style::REVEAL_EDGE as f32 =>
+        {
+            Some(Message::PointerAtTop)
+        }
         Event::Mouse(mouse::Event::CursorLeft) => Some(Message::PointerLeft),
         // Any key closes it, Esc or not, unless the popover kept it for a text field (D-41).
         Event::Keyboard(keyboard::Event::KeyPressed { .. })
@@ -3402,7 +3534,9 @@ mod tests {
     fn a_bar_on_hover_comes_out_while_pointed_at_and_hides_a_moment_after() {
         let mut bar = notifying_bar_with("bar = { show = \"hover\" }");
         assert!(!bar.out());
+        // Onto the surface, at its top strip.
         let _ = update(&mut bar, Message::PointerEntered);
+        let _ = update(&mut bar, Message::PointerAtTop);
         assert!(bar.out());
         let _ = update(&mut bar, Message::PointerLeft);
         assert!(bar.out(), "not right away");
@@ -3445,6 +3579,40 @@ mod tests {
         fullscreen(&mut bar, true);
         let _ = update(&mut bar, Message::WorkspaceChanged);
         assert!(!bar.out());
+    }
+
+    #[test]
+    fn a_hidden_bar_leaves_the_notch_and_edge_out_and_only_the_top_strip_brings_it_out() {
+        let mut bar = notifying_bar_with("bar = { show = \"hover\" }");
+        let window = bar.windows[0];
+        bar.screen.grow = 3.0;
+        bar.screen.notch = Some(Notch {
+            width: 200.0,
+            height: 30.0,
+            shoulder: 5.0,
+            ..Notch::default()
+        });
+        assert!(!bar.out());
+        // Not laid out yet: nowhere to say.
+        assert!(bar.bezel_rects(window).is_empty());
+        let _ = update(&mut bar, Message::Width(window, 1000.0));
+        let rects = bar.bezel_rects(window);
+        assert!(rects.contains(&Rectangle::new(Point::ORIGIN, Size::new(1000.0, 3.0))));
+        assert!(rects.contains(&Rectangle::new(
+            Point::new(395.0, 0.0),
+            Size::new(210.0, 33.0)
+        )));
+        // Onto the notch: the bar stays hidden.
+        let _ = update(&mut bar, Message::PointerEntered);
+        assert!(!bar.out());
+        // Up to the top strip: it comes out, and coming back onto it keeps it out.
+        let _ = update(&mut bar, Message::PointerAtTop);
+        assert!(bar.out());
+        let _ = update(&mut bar, Message::PointerEntered);
+        assert!(bar.out());
+        // Over a fullscreen window, they go with the bar.
+        fullscreen(&mut bar, true);
+        assert!(bar.bezel_rects(window).is_empty());
     }
 
     #[test]
@@ -3945,10 +4113,44 @@ mod tests {
         dormer(&mut bar, dormer::Event::Opened(200.0, 1000.0));
         assert_eq!(bar.notch_kick, None, "not before the drop leaves");
         dormer(&mut bar, dormer::Event::Neck(false));
-        assert_eq!(bar.notch_kick, Some((1, zones::Kick::Pinch)));
+        assert_eq!(bar.notch_kick, Some((1, bezel::Kick::Pinch)));
         let _ = update(&mut bar, Message::KeyPressed);
         dormer(&mut bar, dormer::Event::Neck(true));
-        assert_eq!(bar.notch_kick, Some((2, zones::Kick::Flatten)));
+        assert_eq!(bar.notch_kick, Some((2, bezel::Kick::Flatten)));
+    }
+
+    #[test]
+    fn without_a_notch_the_dormer_comes_out_of_the_island_in_the_middle() {
+        let mut registry = Registry::new();
+        registry.widget::<Notifying>("n");
+        registry.widget::<WithPopover>("p");
+        let (mut bar, _) = Bar::new(
+            registry,
+            config(
+                "[[center]]\nwidget = \"n\"\n[[center]]\nisland = true\n[[center]]\nwidget = \"p\"",
+            ),
+        );
+        let _ = update(&mut bar, Message::WindowOpened(window::Id::unique()));
+        let window = bar.windows[0];
+        let islands: Vec<IslandId> = bar.instances.iter().map(Instance::island).collect();
+        let (first, second) = (islands[0], islands[1]);
+        assert_ne!(first, second);
+        // Nothing drawn yet: nothing to come out of.
+        assert_eq!(bar.middle_island(), None);
+        let drawn = |x: f32| Rectangle::new(Point::new(x, 6.0), Size::new(100.0, 30.0));
+        bar.shape(first).set(drawn(390.0));
+        bar.shape(second).set(drawn(500.0));
+        let _ = update(&mut bar, Message::Width(window, 1000.0));
+        assert_eq!(
+            bar.middle_island(),
+            Some(second),
+            "the one nearer the middle"
+        );
+        bar.shape(first).set(drawn(440.0));
+        assert_eq!(bar.middle_island(), Some(first));
+        // With a notch, out of it.
+        bar.screen.notch = Some(Notch::default());
+        assert_eq!(bar.middle_island(), None);
     }
 
     #[test]
@@ -4186,7 +4388,7 @@ mod tests {
         assert_eq!(bar.asked, Some((0, Origin::Top)));
         let _ = update(&mut bar, Message::Dialog(dialog::Event::Opened(1000.0)));
         let _ = update(&mut bar, Message::Dialog(dialog::Event::Neck(false)));
-        assert_eq!(bar.notch_kick, Some((1, zones::Kick::Pinch)));
+        assert_eq!(bar.notch_kick, Some((1, bezel::Kick::Pinch)));
     }
 
     #[test]

@@ -542,7 +542,7 @@ Both new watchers publish through a `tokio::sync::watch` channel, so every widge
   The nudged item rides along with its bump, by `NUDGE_ITEM_FOLLOW` (half) of it. *Superseded by the jelly below, which gives the same half by itself.*
 - **`Left` / `Right`:** the whole island travels about 5 px that way and comes back. *Later* (2026-10-13): the item that nudged also gets a push of its own, `NUDGE_KICK_SPEED`, about 2.5 px further than its island, on its own spring (`ItemMotion::kick`, at the nudge's pace). So what changed, like the next track's cover or the active workspace, moves a little more than the rest. It squishes as it goes, `NUDGE_KICK_SQUISH` (3 %) narrower and half that taller per pixel out, about 7 % narrower at the furthest, as if it bumped into where it's going (`Motion::kicked`, through the same per-item squish as the jelly).
 - **The outline is a jelly** (2026-10-13, `jelly.rs`). It is a ring of springs all the way round the island's edge: 24 across the top and bottom, 6 down each side, each one how far out (or in) its piece of the edge is. Each is pulled back to 0 (`JELLY_STIFFNESS` 600, `JELLY_DAMPING` 0.85, the NUDGE feel) and toward its neighbors (`JELLY_COUPLING` 1400). The pull toward the neighbors does the smoothing. A nudge just pokes the ring with velocity kicks, and the ring spreads the poke along the edge and round the corners into a soft curve, then settles flat. Nothing that pokes it decides what curve it makes. The ring is drawn by warping the squircle through it: each side moves the points near it, eased out over half the shape's short way, and the ring is sampled smoothly between springs (Catmull-Rom).
-  - **Up / down:** the edge over the item is kicked in a raised cosine `NUDGE_BUMP_WIDTH` wide (`JELLY_BUMP`, peaks about 2 px). `NUDGE_BUMP_WIDTH` went 64 → 112 → 176 px (2026-10-13): the user wanted the bump smoother and larger, then wider still. Wider kicks still peak about 2.1 px (2.05 before), since kicks bring springs up to their speed rather than add, so it's a gentler slope, not a taller one. Both sides are kicked to lean the same way (`JELLY_LEAN`), so the edge it's going toward widens, about 1.3 px each side.
+  - **Up / down:** *(superseded by [D-105](#d-105-up-and-down-nudges-hold-a-flat-shelf-out): a held, flat shelf, not a poke)* the edge over the item is kicked in a raised cosine `NUDGE_BUMP_WIDTH` wide (`JELLY_BUMP`, peaks about 2 px). `NUDGE_BUMP_WIDTH` went 64 → 112 → 176 px (2026-10-13): the user wanted the bump smoother and larger, then wider still. Wider kicks still peak about 2.1 px (2.05 before), since kicks bring springs up to their speed rather than add, so it's a gentler slope, not a taller one. Both sides are kicked to lean the same way (`JELLY_LEAN`), so the edge it's going toward widens, about 1.3 px each side.
   - **Left / right:** the top and bottom are kicked to lean (`JELLY_LEAN`, a sine from the end it's leaving to the end it's going toward). The leading end swells about 1.6 px each way, so it's about 3 px taller, and the trailing end flattens as much.
   - Items read the ring at their center (`Jelly::at`). They move by how far its middle moved there, so an item under a 2 px bump rises 1 px, as `NUDGE_ITEM_FOLLOW` used to do by hand. They squish by how much taller the shape is there (D-40's per-leaf squish).
   - Kicks in a row don't pile up. Each brings a spring up to its speed rather than adding to it (as the old bump did with `max`), and less of it the further out the spring already is. *Superseded:* adding kicks up. Holding the volume key ran the bump into the end of its room, where the hard limit flattened it frame to frame, and it flickered. Now a nudge every three frames levels off around 2.8 px.
@@ -1826,7 +1826,7 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
   - Up, as the neck catches it on the way back.
 
   The neck is drawn where the drop is, moved, but flows from where it comes out, which stays put.
-- **The neck follows the notch.** `Zones` writes where it draws the middle of the notch's bottom (or the edge's) to a shared cell (`zones::Sag`), each time it draws, and the island reads it: the neck flows from there, and the drop's dot rests there. Zones draw before the dormer's island, so the two agree on every frame. *(At first the neck flowed from where the bottom rests: as the notch flattened on the drop's return, a 2 px strip of background showed between them.)*
+- **The neck follows the notch.** `Zones` (now `Bezel`, [D-106](#d-106-the-notch-and-the-edge-are-the-screens-not-the-bars)) writes where it draws the middle of the notch's bottom (or the edge's) to a shared cell (`zones::Sag`), each time it draws, and the island reads it: the neck flows from there, and the drop's dot rests there. Zones draw before the dormer's island, so the two agree on every frame. *(At first the neck flowed from where the bottom rests: as the notch flattened on the drop's return, a 2 px strip of background showed between them.)*
 - **What it comes out of squishes,** within what it's grown by, so it never gets smaller than the hardware's:
   - As the dormer opens, the notch pinches in from each side (up to `NOTCH_PINCH`, a little taller by `BULGE`).
   - As the drop lands back, the notch flattens (up to `NOTCH_FLATTEN`, a little wider).
@@ -1892,7 +1892,7 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 - **Fullscreen** means a client on the focused monitor's active workspace whose Hyprland fullscreen mode has bit 2. Bit 1 is maximized, which respects the exclusive zone. Hyprland's `fullscreen>>` event fires for both and only for the focused workspace, so the host doesn't trust it on its own. On that event, a workspace or monitor change, and a window opening, closing or moving, it queries `monitors` and `clients` once (`Message::CheckFullscreen`). eave-hyprland gains `Event::Fullscreen`, `Client::fullscreen` with `Client::covers()`, and `Monitor::active_workspace`.
 - **Out or hidden.** The bar is out when its mode is `show`, or `hover` and the pointer is on it, or while it peeks, or while a popover, the notification panel or the dormer is on it, until they have folded back.
   - Hidden, the islands are drawn lifted off the screen by a `Lift` widget on `MORPH`. The layout doesn't move.
-  - The input region becomes a `REVEAL_EDGE` (2 px) strip on hover, else nothing.
+  - The input region becomes a `REVEAL_EDGE` (2 px) strip on hover, else nothing. *(Amended by [D-106](#d-106-the-notch-and-the-edge-are-the-screens-not-the-bars): plus the notch and the grown edge, which stay out, and only the strip brings the bar out.)*
   - On hover, the pointer gate (`popover_event`) stays open, so `CursorEntered` and `CursorLeft` arrive. Leaving hides it after `HIDE_AFTER` (400 ms).
 - **Exclusive zone.** It is 0 when `bar.show = "hover"`, even while the bar is out, so windows never move as it comes and goes. In fullscreen it doesn't matter.
 - **Layer.** The surfaces go on `overlay` over a fullscreen window while the bar is out, or while `bar.fullscreen = "hover"` waits for the pointer. Otherwise they stay on `top`.
@@ -1957,7 +1957,7 @@ The settings are grouped by the thing they're about, not by situation, because e
   - **An island:** the dialog comes out of the island's shape as it's drawn at that moment, and the island stays on the bar. Every island puts its drawn shape, popover included, in a cell of its own (`Island::shape`). The dialog, drawn by the island in the middle, starts as that shape and springs on to its panel (`Popover::home`). If the popover was open, it's gone at once, under the dialog's shape, and the island is back to its items. Closing springs the dialog back onto the island, wherever it's drawn by then, with the popover's splat, and it's gone.
   - **A notification:** the same, from the island the notifications show in. That island is back meanwhile, and so are its notifications. The click goes over the bus to eave-notifications, then to the widget that sent it, which asks for its dialog. The time window covers that round trip.
   - **The dormer:** a pick that asks for a dialog turns the dormer into it. The island in the middle takes the dialog's key, the shape springs on to the new panel, the new content fades in, and it goes back into the notch.
-  - **Anything later or unprompted:** the island in the middle drops it out of the notch, or the top edge, as it drops the dormer (D-86). The same island holds both (`center_view`).
+  - **Anything later or unprompted:** the island in the middle drops it out of the notch, or the top edge, as it drops the dormer (D-86). The same island holds both (`center_view`). *(Amended by [D-106](#d-106-the-notch-and-the-edge-are-the-screens-not-the-bars): without a notch, with an island in the center zone, out of that island.)*
 **Why:** a chat in a 480 px popover hung from a small island reads as squeezed, and covers the bar's side. The middle of the screen is where the dormer already is. What you clicked turning into it keeps the cause and the effect one motion, the way a popover grows out of its island. A dialog out of the notch would look like the dormer for no reason.
 
 **Alternatives:**
@@ -2313,3 +2313,78 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 **Measured** (Asahi, release, both renderers built in, run on tiny-skia, BlueZ running with one paired device): +0.69 MiB of binary (20,082,304 → 20,803,248 bytes), most of it the agent's `interface` code and the second plugin's popover. A clock alone ~18.8 MB RSS; with `bluetooth` ~19.1–19.5 MB. Idle CPU unchanged: one tick in 20 s either way.
 
 **Cost:** `Icon::Bluetooth` grows eave-api, compatibly: plugins using it need the next eave-api. `eave-bluez` is a new service crate, to publish beside the others (D-50) once third-party plugins want it.
+
+---
+
+## D-104: The screen's edges are walls
+
+**Status:** accepted (2026-10-15).
+
+**What:** whatever moves an island keeps it at least `WALL_GAP` (2 px) from the screen's sides and top, and a push that gets there bounces off.
+- **Where the walls are.** `Island::walls` takes the screen's edges it keeps clear of (`wall::Walls`): the left and right sides, the top (the grown edge, D-81), and the screen's top corners, which round the walls where they meet. A side the island is attached to isn't a wall, since it reaches past the edge on purpose (D-70), and neither is the top of a solid bar's islands (D-89). The dormer's island has none.
+- **How far it can go.** `wall::rooms` works out how far the island can move up, right and left before its outline comes within `WALL_GAP` of the screen's. The screen's outline is a rectangle with its top corners, and `squircle::clearance` measures the distance. It feels its way there in half-pixel steps, from where a corner could first matter, then bisects. It's worked out again only when where the island rests changes, so a pushed neighbor's slide costs nothing. A popover's shape keeps to the straight walls.
+- **Push:** in `Motion::step`, a push past its room is put back at the wall. Its speed reverses, kept by `WALL_BOUNCE` (0.5). The side that hit is poked in by `WALL_SQUASH` (0.3) of the speed, and the ends of the edges beside it bulge out by `BULGE` of that, on the jelly.
+- **Drag:** the rubber band's limit toward a wall is the room there, so a drag tightens against it and never reaches it.
+- **Jelly:** each side may bend out no further than the room left after the push and the drag (`Jelly::room`), so a swell or a shelf (D-105) stays clear too.
+
+**Why:** the user saw the workspace nudge as something that could run into the screen's edge. On a screen with round corners, an island moved in from a corner too round for it (D-95) has a corner that heads straight for the screen's, so a straight-wall gap isn't enough. The screen's size and shape are known already, so the island can treat them as a wall.
+
+**Alternatives:**
+- **Straight walls only:** cheaper, but they miss the round corners, which is where an island gets closest.
+- **Smaller pushes near the edge:** the motion would change depending on where the island is, and a drag would still run into the edge.
+- **Clamping only the drawn offset:** the island would stop dead at the wall instead of bouncing.
+
+**Cost:** no dependency. `wall::rooms` runs once per island per change of where it rests: a few dozen clearances between two flattened outlines, well under a millisecond. Each frame of a push adds a few comparisons.
+
+---
+
+## D-105: Up and down nudges hold a flat shelf out
+
+**Status:** accepted (2026-10-15). Supersedes [D-32](#d-32-plugins-can-nudge-their-island)'s up and down bump.
+
+**What:** an up or down nudge holds a shelf out of the island's top or bottom, over the item that nudged, instead of poking the jelly in a raised cosine.
+- **The shape** (`jelly::Shelf`): flat across the item, `NUDGE_SHELF` (3 × `REACT_SIZE`, 2.4 px) out. At each end it eases back into the edge over `NUDGE_SHOULDER` (28 px), on a smootherstep, so its slope is zero where it leaves the edge and where it meets its flat top: no crease at either. The jelly draws it with its ring, inside the same room, and the items ride it as they ride the ring: half of it, squished by how much taller the shape is there.
+- **Held, not kicked** (`ShelfMotion`): its depth is a `REACT` spring *aimed* at the shelf's depth, held until `NUDGE_HOLD` (250 ms) after the last nudge, then aimed back at 0.
+  - A nudge while it's held only holds it longer, and slides it over to its item if another one nudged. The island doesn't lurch again and its sides don't lean again. A stream of nudges, like scrolling the volume, keeps it out, still, and it goes back once.
+  - A nudge the other way lets the other edge's shelf go.
+  - Opening a popover lets both go.
+- **No frames while it's held:** once it's out and still, the island asks for one redraw when the hold is up (`Shell::request_redraw_at`), not one a frame.
+- **What stays from D-32:** the island's half-pixel lurch and the sides' lean, on the first nudge of a stream.
+
+**Why:** the user wanted the bump flat at its top and merging smoothly back at its ends, and to stop flickering when several nudges come in a row. Each nudge kicked the ring again. The kicks didn't pile up, but they kept the bump pumping out and back while the volume scrolled. Holding the shelf out while nudges keep coming, in one shape, is what they sketched (claude.ai artifact, the nudge sketch).
+
+**Alternatives:**
+- **A flat-topped poke on the jelly:** the ring smooths any poke into a bell, so it would never stay flat, and a stream would still pump.
+- **Kicks that pile up less:** that was D-32's fix, and it still pumped.
+- **Each nudge giving the held shelf a small tick:** the user chose none.
+
+**Cost:** no dependency. Six more springs per island, at rest unless a shelf moves. While a shelf moves, the shape is rebuilt each frame through the warped path, as the jelly already was.
+
+---
+
+## D-106: The notch and the edge are the screen's, not the bar's
+
+**Status:** accepted (2026-10-15). Amends [D-86](#d-86-the-dormer-comes-out-as-a-drop), [D-88](#d-88-the-bar-shows-on-hover-or-hides-over-fullscreen-windows-and-notifications-wait) and [D-90](#d-90-widgets-dialogs-they-come-out-of-what-opened-them).
+
+**What:**
+- **The bezel.** The notch (D-75) and the grown top edge (D-81) are drawn by their own widget, `Bezel` (`bezel.rs`), under the islands. `Zones` keeps only the layout. The bezel also does the dormer's squish and writes the `Sag` (D-86).
+- **They stay when the bar hides.** The bezel has a `Lift` of its own that stays out. A solid bar's band is the bar, so it still slides away whole (D-89). Over a fullscreen window the bezel follows the bar, so it never draws over the window.
+  - While the bar is hidden on hover, the input region adds the notch and the grown edge to the `REVEAL_EDGE` strip (`Bar::bezel_rects`). The bezel says how wide the surface is (`Width`), so the host knows where the notch is.
+  - Only the top strip brings the bar out (`PointerAtTop`, a `CursorMoved` in its first `REVEAL_EDGE` rows). Coming onto the surface (`PointerEntered`) keeps a bar that's still out, but doesn't bring a hidden one out, so pointing at the notch doesn't.
+- **They take the hand,** as an island does (D-26), on `HAND`, with the rubber band and the stretch around the grab shared in `hand.rs`. A press captures the event, so it doesn't also close what's open.
+  - The notch squeezes in by `PRESS_INSET` when pressed, and a drag stretches it toward the pointer, most near the grab. Its top hangs from the screen and doesn't move, and it never goes in further than it's grown.
+  - The grown edge's bottom is pulled down under a drag (up, no higher than its top) in a curve `2 × DRAG_REACH` wide, which follows the pointer across.
+- **A click brings the dormer out** (`Dormer(Toggle)`, so a second one puts it back): on the notch, or without one, in the middle of the top, `EDGE_CLICK_WIDTH` (240 px) wide, above the islands, grown or not. A press that moves `CLICK_SLOP` (4 px) or lasts `LONG_PRESS` is a drag, not a click.
+- **Out of the island in the middle.** Without a notch, with an island in the center zone, the dormer comes out of that island's shape as a dialog comes out of what opened it (D-90), and goes back into it (`Bar::middle_island`, `Popover::home`). Of the center's islands that are drawn, it's the one nearest the middle. A dialog nothing on the bar opened does the same. With a notch, a solid bar or an empty center, both drop out of the notch or the edge as before. An edge that isn't grown has nothing to squish, so the drop comes out of the top with no squish (the user's choice).
+
+**Why:** the notch and the grown edge stand for the screen's black border (D-92), so hiding them with the bar made the screen's border come and go. Since they look like part of the screen, they should respond to the hand like everything else on the bar, and the notch is the natural place to click for the dormer, which comes out of it. With no notch, a drop out of a bare top edge, next to an island in the middle, reads as coming from nowhere: out of the island is what a dialog already does.
+
+**Alternatives:**
+- **Drawing the notch twice,** a copy outside the `Lift`: two shapes to keep in step, and the squish and the sag would have to be shared.
+- **Hovering the notch brings the bar out too:** simpler (no pointer moves to look at), but the user wanted the notch apart from the bar.
+- **Every `CursorMoved` to the host:** a message per pointer move over the bar; only those on the top strip are sent.
+- **The dormer out of the center island even with a notch:** the notch is where it comes from, and the islands beside it are halves of the center.
+
+**Cost:** no dependency. One more widget, at rest unless pressed or squished; its paths are cached as before, and rebuilt each frame while the hand pulls them. A hidden bar's input region gains two rectangles.
+
+**Measured** (Asahi aarch64, release, both renderers built in, run on tiny-skia, each alone on a session bus of its own, D-104 to D-106 together against main rebuilt in the same session): binary 20,803,248 → 20,868,784 bytes (one more page). RSS with two clocks 18.6–19.0 MB on both; with the user's config 23.0–23.4 MB on main, 23.4–23.5 MB on the branch: unchanged within noise. Idle CPU 0 ticks over 10 s on both. On the GPU renderer, RSS 75.9–79.3 MB on both, and idle CPU 0–1 ticks, apart from runs where the volume was being changed, on main as on the branch. *(A first main binary, built at the start of the session, measured ~2 MB less; main rebuilt later measured the same as the branch, so it was the build, not the change.)* Only aarch64 was built: checking x86_64 here needs a cross sysroot for pkg-config, and nothing in this change is arch-specific.
