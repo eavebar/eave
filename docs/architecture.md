@@ -167,13 +167,14 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/cover.rs             covers: a file or https URL → cropped, rounded 32 and 256 px bitmaps, off the UI thread
   src/dialog.rs            a widget's dialog: what turns into it, and what was last acted on
   src/dormer.rs            the dormer's list: what widgets offer, ranked for what's typed, the selection and recent picks
-  src/pour.rs              how a shape flows out of what it comes from: the smooth union of the two (the notch's bottom and the dormer's drop, a morph's tongue and its shape), row by row
+  src/pour.rs              how the dormer's drop flows out of the notch's bottom: the smooth union of the two, row by row
   src/theme.rs             every color, size and font
   src/island.rs            island: item row, morph springs, press squeeze and drag, popover overlay, switching popovers mid-morph, the collapse chevron on hover
   src/squish.rs            how squished the items being drawn are, set by their island
   src/label.rs             a label that can squish (outlines while squished)
   src/squircle.rs          the squircle path
-  src/jelly.rs             an island's outline, its skin: a ring of coupled springs that keeps its area, pushed by the frame's motion and poked by nudges, and the shelves nudges hold out
+  src/jelly.rs             an island's outline, its skin: a ring of coupled springs that keeps its area, poked by nudges, and the shelves nudges hold out
+  src/body.rs              an island's outline while it morphs: a ring of points that pours ahead, hangs on, bounces and lands (D-118)
   src/wall.rs              the screen's edges as walls: how far an island can go toward each before it's too close
   src/hand.rs              what a drag does to a shape: the rubber band, and the stretch around the grab
   src/glass/               glass with the hypr-eave plugin: the protocol client, what each frame says, which way the ink goes (D-112)

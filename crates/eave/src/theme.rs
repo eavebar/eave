@@ -179,44 +179,32 @@ pub const PUSH_WIGGLE: f32 = 1.2;
 pub const PUSH_BUILD: Duration = Duration::from_millis(250);
 pub const PUSH_FULL_SPEED: f32 = 600.0;
 pub const PUSH_MOVING: f32 = 20.0;
-/// The skin (D-111): an island's outline is the jelly, and the jelly feels its frame move. Each
-/// side of it is pushed by how its edge speeds up and slows down, on top of the morph, so a shape
-/// stretches the way it sets off and carries on the way it lands, by how it moved. The amounts
-/// are how far a side that comes `SKIN_TRAVEL` logical pixels on `MORPH` goes ahead of its edge
-/// at the furthest (`REACT_SIZE` included), and scale with how far it comes:
-/// - `SKIN_STRETCH` as it speeds up: stretched along the way it goes, ahead of an edge going out
-///   and behind one coming in. Negative squashes instead, like a weight dragged.
-/// - `SKIN_CARRY` as it slows down and lands: carrying on past where it stops.
-///
-/// Opening has nothing to hit (D-44), so a popover opening carries `OPEN_CARRY` of that.
-/// `SKIN_BOW` is how much more the middle of a side goes than its ends, 0 to 1: the ends are held
-/// by the sides round the corners. `SKIN_AREA` is how hard the outline keeps its area, as a share
-/// of REACT's stiffness: a side pushed in pushes the others out (the bulge), and the top, which
-/// hangs from the bar, takes no part. `SKIN_ROOM` is how far the skin may go out past its frame.
-pub const SKIN_TRAVEL: f32 = 200.0;
-pub const SKIN_STRETCH: f32 = 5.0;
-pub const SKIN_CARRY: f32 = 5.0;
-pub const OPEN_CARRY: f32 = 0.5;
-pub const SKIN_BOW: f32 = 0.8;
+/// The skin (D-111): an island's outline is a ring of springs over its frame, which pokes push
+/// and which keeps its area. `SKIN_AREA` is how hard, as a share of REACT's stiffness: a side
+/// pushed in pushes the others out (the bulge), and the top, which hangs from the bar, takes no
+/// part. `SKIN_ROOM` is how far the skin may go out past its frame. A morph's own motion is the
+/// body's (D-118), below.
 pub const SKIN_AREA: f32 = 0.3;
 pub const SKIN_ROOM: f32 = 10.0;
-/// A shape lands on where it goes (D-111): it heads this share of its way past it, and stops dead
-/// as it gets there, so it arrives at speed and what it carries goes into the skin. Anything but a
-/// popover opening, which eases in.
-pub const LAND_PAST: f32 = 0.2;
-/// Every morph flows (D-114). A tongue of the shape runs on ahead where it grows and hangs on
-/// behind where it shrinks, joined to it by a fillet, so a shape pours into its new place instead
-/// of growing as a box: out of an island and down into a popover, and back up into it.
-/// - Along the way the shape changes most, the tongue's growing end swings in `TONGUE_LEAD` of
-///   `MORPH`'s time, and its shrinking end in `TONGUE_LAG` of it.
-/// - Across, it's `TONGUE_WIDTH` of the shape, about its middle.
-/// - The fillet blends `POUR_BLEND` logical pixels once the tongue is `POUR_FULL` out of the
-///   shape, and less before, so it comes and goes with the tongue.
-pub const TONGUE_LEAD: f32 = 0.6;
-pub const TONGUE_LAG: f32 = 1.8;
-pub const TONGUE_WIDTH: f32 = 0.5;
-pub const POUR_BLEND: f32 = 24.0;
-pub const POUR_FULL: f32 = 24.0;
+/// The body (D-118): while a shape morphs, its outline is a ring of points, each pulled toward
+/// its place on where the shape is going on `MORPH`'s tempo, damped `BODY_DAMPING` (under 1, it
+/// goes past and bounces back). A point going out along the outline's normal there swings in
+/// `BODY_LEAD` of the time, one coming in, in `BODY_LAG` of it, as a share of how far the
+/// furthest point goes, raised to `BODY_FOCUS`, so the middle of a side going out runs ahead of
+/// its corners and the middle of one coming in hangs on.
+/// `BODY_TENSION` pulls each point toward its neighbors, as a share of `MORPH`'s stiffness: higher
+/// is smoother and stiffer. `BODY_AREA` keeps the area its frame has, likewise.
+pub const BODY_RESPONSE: f32 = 0.45;
+pub const BODY_DAMPING: f32 = 0.75;
+pub const BODY_LEAD: f32 = 0.7;
+pub const BODY_LAG: f32 = 1.15;
+pub const BODY_LAND: f32 = 0.9;
+pub const BODY_FOCUS: f32 = 2.5;
+pub const BODY_TENSION: f32 = 2.5;
+pub const BODY_AREA: f32 = 0.3;
+/// How much room a popover's surface keeps under it while its body moves, in logical pixels:
+/// enough for the furthest it bounces past.
+pub const BODY_ROOM: f32 = 48.0;
 /// A drop bounces as it falls into place so the bounce peaks as it arrives: when its bottom will be
 /// this close to where it's going, in logical pixels, by the time REACT peaks.
 pub const DROP_LAND: f32 = 1.0;

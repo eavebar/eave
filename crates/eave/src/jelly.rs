@@ -7,9 +7,8 @@
 //! ring has a fixed number of them, spread over the shape's size, so it keeps working while the
 //! shape morphs.
 //!
-//! The ring is also the island's skin (D-111): the island pushes each side as its edge speeds up
-//! and slows down ([`Jelly::push`]), and the ring keeps its area, so a side pushed in swells the
-//! others out. Every way an island's outline gives goes through it.
+//! The ring keeps its area (D-111), so a side poked in swells the others out. Every poke into an
+//! island's outline goes through it; a morph's own motion is the body's ([`crate::body`], D-118).
 //!
 //! On top of the ring, the top and bottom can each hold a shelf out (D-105): a flat stretch of the
 //! edge pushed out under an item, easing back into the edge at both ends. The island moves the
@@ -137,18 +136,6 @@ impl Jelly {
             } else {
                 self.velocity[i].min(speed)
             };
-        }
-    }
-
-    /// Adds `speed` to one side's springs at how far along the side each is (0 to 1, as for
-    /// [`Jelly::kick`]), outward in pixels per second: the skin feeling its edge speed up or slow
-    /// down. Unlike a kick, it piles up, as the edge's motion does.
-    pub fn push(&mut self, side: Side, speed: impl Fn(f32) -> f32) {
-        let (start, count) = side.span();
-        for k in 0..count {
-            let along = (k as f32 + 0.5) / count as f32;
-            let along = if side.backwards() { 1.0 - along } else { along };
-            self.velocity[start + k] += speed(along);
         }
     }
 

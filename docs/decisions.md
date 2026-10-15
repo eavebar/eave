@@ -2493,7 +2493,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 
 ## D-111: One skin
 
-**Status:** accepted (2026-10-15). Supersedes [D-110](#d-110-squish-and-splat-follow-the-motion)'s give and kicks, and with them D-44's squish and splat and D-83's splat timing. Their rules stay: opening stretches the way it grows and has nothing to hit, and a landing carries on the way it went, splatting into the top.
+**Status:** partly superseded by [D-118](#d-118-the-outline-is-a-body) (2026-10-16): a morph's own motion is the body's, so the frame no longer pushes the skin (`SKIN_STRETCH`, `SKIN_CARRY`, `OPEN_CARRY`, `SKIN_BOW`) and no longer lands past where it goes (`LAND_PAST`). The ring stays the skin for pokes, keeping its area. Accepted (2026-10-15). Supersedes [D-110](#d-110-squish-and-splat-follow-the-motion)'s give and kicks, and with them D-44's squish and splat and D-83's splat timing. Their rules stay: opening stretches the way it grows and has nothing to hit, and a landing carries on the way it went, splatting into the top.
 
 **Problem:** a morph read as square to square. The four edges ride `MORPH`, leave together and arrive together, so every frame was a rounded rect partway between two. The squish and splat were two kicks on top, fired at two moments, that resized that rect. The jelly ring, already a skin of coupled springs, never felt the morph. Each way an outline gave (give, jelly, shelves, bulge by hand) had its own rules.
 
@@ -2645,7 +2645,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 
 ## D-114: Every morph pours
 
-**Status:** accepted (2026-10-15). Builds on [D-111](#d-111-one-skin); the dormer's stops (D-86) stand.
+**Status:** superseded by [D-118](#d-118-the-outline-is-a-body) (2026-10-16): the tongue read as a box poking out of a box. Its reasoning stays below. The dormer's neck kept `pour.rs`. Builds on [D-111](#d-111-one-skin); the dormer's stops (D-86) stand.
 
 **Problem:** after D-111 the outline gave, but a morph was still a box growing into another box. Nothing said a popover came *out of* its island.
 
@@ -2736,4 +2736,45 @@ The fillet's rows are only where it can be: within a blend of either one's top o
 **Cost:** no dependency. One more socket2 event goes to `update` (a focus change), and one request on the way in. On an empty workspace, keys typed while the pointer is on the bar go to the bar, which ignores them; there's no window for them to go to anyway.
 
 **Measured** (Asahi aarch64, release, both renderers built in, run on tiny-skia, each alone on a session bus of its own, D-116 and D-117 together against main built in the same session, alternating runs): binary 20,868,784 bytes on both. RSS with two clocks 19.0–19.1 MB on main, 18.6–19.0 MB on the branch; with the user's config 23.2–23.6 MB on both. Idle CPU with two clocks 0–2 ticks in 10 s on both. With the user's config, idle CPU varied between runs in the same way on both: 0–14 ticks in 10 s in one set of runs, about 32–35 in another, which was something on the desktop rather than either build. Only aarch64 was built: nothing here is arch-specific.
+
+---
+
+## D-118: The outline is a body
+
+**Status:** accepted (2026-10-16). Supersedes [D-114](#d-114-every-morph-pours) and the frame's push into the skin from [D-111](#d-111-one-skin).
+
+**Problem:** D-111 and D-114 were meant to make morphs fluid and bouncy. On the user's screen the frames were smooth, but it read as a slideshow of boxes: one rounded rect sliding into another, with a rectangle stuck on. The model was still a rect with decorations:
+- **The shape was a rect.** The four edges ride `MORPH`, damped 0.95, so nothing bounced, and `LAND_PAST` stopped them dead.
+- **The skin couldn't change the shape.** It was a normal offset off that rect, held within `SKIN_ROOM` (10 px) and pushed 5 px at most. On a 400 px morph, 5 px doesn't register.
+- **The tongue was a second rect** on springs of its own, joined to the first by a fillet. It read as a box poking out of a box, because it was one.
+
+Tuning those numbers couldn't fix it. For a morph to flow, the outline itself has to be what moves.
+
+**What:** while a shape morphs, what's drawn is a body (`body.rs`): a ring of 112 points round the outline, each with its own place and speed. The frame (the edges, on `MORPH`, easing in) stays what lays out, hit-tests and places content.
+- **Topology.** The points are sampled off the squircle the shape is going to: 8 round each corner, 24 along the top and the bottom, 16 down each side, whatever its size. So corners go to corners and nothing swims round the outline.
+- **Each point springs to its place** there, on `BODY_RESPONSE`, damped `BODY_DAMPING` (0.75): it goes past a little and bounces back.
+- **Lead and lag are a field, not a rect.** When where it's going changes, each point's tempo is set by how far it goes along the outward normal there, as a share of the furthest any point goes, raised to `BODY_FOCUS`. Going out all the way, it swings in `BODY_LEAD` of the time; coming in, in `BODY_LAG` of it, damped up to `BODY_LAND`, so it lands without going through. So a popover pours out of its island, its bottom's middle running ahead of its corners, and drains back up with its middle hanging on. An island growing sideways runs on that way. A dialog pours toward the middle. No tongue and no fillet: one outline.
+- **Tension.** Each point is pulled toward its neighbors by how far they are from where they belong (`BODY_TENSION`), so what one point does spreads smoothly along the outline, and the corners, where the anchors themselves curve, aren't flattened.
+- **Area.** The body keeps the area its frame has (`BODY_AREA`), pushing along its normals, so a side running ahead draws the others in. The top, which hangs from the bar, takes no part.
+- **The top.** No point goes up past the higher of the frame's top and where it's going: one that gets there stops, as against the bar.
+- **Turning back** (closing while opening) keeps every point's place and speed, and only sets the tempos again.
+- **Drawn** as a closed Catmull-Rom curve through the points, with the jelly's pokes and the drag's stretch warped on top as before. At rest it's the squircle exactly, cached, as before. The spline through the points at rest is within a quarter pixel of it (a test checks it), so the swap when it settles doesn't show.
+- **Room.** The frame cached round the shape grows to cover the body. Glass is told the box round both. A popover's surface keeps `BODY_ROOM` (48 px) under the panel while its body moves, once, so the bounce isn't cut off, and gives it back when it rests. Content is clipped to the frame and the body's box.
+- **Not for an island attached to an edge** (bleed, shoulders): it hangs from the edge and morphs as before, a frame and its skin.
+- **What stays:** the jelly ring for pokes (nudges, shelves, walls, the drop's bounce) and `Jelly::at` for items riding it; the drag's stretch, the press's squeeze; the dormer's stops and neck (D-86), whose `pour.rs` lost the box it had for the tongue.
+
+**The feel: firm.** Three variants were built on branches, differing only in these numbers, as D-83, D-111 and D-114 were. The user ran them on their screen and picked firm (the numbers in `theme.rs`):
+
+| Feel | `BODY_DAMPING` | `BODY_LEAD` | `BODY_LAG` | `BODY_LAND` | `BODY_FOCUS` | `BODY_TENSION` | `BODY_AREA` |
+|---|---|---|---|---|---|---|---|
+| **firm** (taken) | 0.75 | 0.7 | 1.15 | 0.9 | 2.5 | 2.5 | 0.3 |
+| bouncy | 0.6 | 0.55 | 1.3 | 0.85 | 2.5 | 1.5 | 0.3 |
+| gooey | 0.48 | 0.45 | 1.6 | 0.8 | 2.0 | 0.8 | 0.5 |
+
+**Alternatives:**
+- **Tune D-114's numbers:** the three feels it had already been tuned through were all a rect with a rect on it.
+- **A metaball or signed-distance field over the whole shape:** one field, contoured every frame or drawn by a shader. A shader would be cheap on the GPU, but not on tiny-skia, the fallback and `renderer = "cpu"`, and the clip, the skin and glass would all have to come from it.
+- **Fold the jelly into the body:** one ring for everything. Possible later. Pokes are small, and the jelly's `room` and `displace` were made for them, so they stay for now.
+
+**Cost:** no dependency. While a shape morphs, 112 points stepped at 480 Hz (four substeps a frame at 120 Hz), and a path of 112 cubics, instead of the tongue's ~170 rows of bisections: about 6.5 µs a frame for both in release on the M1 Pro, against ~80 µs for the tongue's fillet. At rest nothing new runs. **Measured** (Asahi aarch64, release, tiny-skia, the user's config, each alone on a session bus of its own, 10 s idle after 10 s, against main built in the same session): binary 21,000,200 bytes (main 21,000,216). RSS 23.8 MB (main 23.7). Idle CPU 40 ticks in 10 s on both, the same desktop noise D-116 saw. Tessellating and filling the body's path while it moves wasn't measured end to end. x86_64 wasn't built; nothing here is arch-specific.
 
