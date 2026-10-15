@@ -1,8 +1,7 @@
 // Spike: liquid-glass refraction behind eave's layer surfaces.
 //
-// Before the top and overlay layers draw, this copies what's on screen under every `eave*`
-// layer, draws the layer's own pixels into a mask, and draws the backdrop refracted through the
-// mask's edges. eave's translucent islands then draw on top as usual. The shape comes only from
+// Before the top and overlay layers draw, this copies what's on screen around every `eave*`
+// layer and draws it refracted through the edges of the layer's own buffer. eave's translucent islands then draw on top as usual. The shape comes only from
 // the surface's alpha in the frame being drawn, so the glass can't lag a morph.
 //
 // Throwaway: no config, no transforms (rotated monitors), knobs through `hyprctl eaveglass`.
@@ -43,6 +42,7 @@ static struct {
     float chroma   = 0.12F; // spread between red and blue lookups, as a fraction of the bend
     float rim      = 0.35F; // brightness of the lit edge
     float frost    = 1.5F;  // radius of a light blur inside the glass (0 = clear)
+    int   pid      = 0;     // only this eave's layers (0 = every eave)
 } g_params;
 
 static struct {
@@ -51,7 +51,7 @@ static struct {
 } g_hooks;
 
 struct SMonitorGlass {
-    SP<IFramebuffer> backdrop, mask;
+    SP<IFramebuffer> backdrop;
 };
 static std::unordered_map<Monitor::CMonitor*, SMonitorGlass> g_fbs;
 
@@ -143,8 +143,14 @@ static std::string timingStats() {
     return out;
 }
 
-static GLuint g_prog = 0, g_vao = 0, g_vbo = 0;
-static GLint  u_backdrop, u_mask, u_fbSize, u_band, u_strength, u_chroma, u_rim, u_frost, u_rect;
+// One program per kind of surface texture: a dmabuf can come in as an external image, which
+// needs its own sampler type.
+struct SProgram {
+    GLuint id = 0;
+    GLint  backdrop, mask, fbSize, bdOrigin, bdSize, surf, fade, band, strength, chroma, rim, frost, rect;
+};
+static SProgram g_progs[2]; // [0] sampler2D, [1] samplerExternalOES
+static GLuint   g_vao = 0, g_vbo = 0;
 
 static const char* VERT = R"#(#version 300 es
 precision highp float;
@@ -157,13 +163,19 @@ void main() {
 }
 )#";
 
-// Both textures are laid out like the framebuffer, so gl_FragCoord indexes all three alike.
-// Framebuffer row 0 is the top of the screen, so "up" is -y.
+// gl_FragCoord is in framebuffer pixels, whose row 0 is the top of the screen ("up" is -y).
+// The backdrop is a copy of the part of the frame at bdOrigin; the mask is the layer's own
+// buffer, which covers `surf`. Both are stored top row first, like the frame.
 static const char* FRAG = R"#(#version 300 es
+EXTENSION
 precision highp float;
 uniform sampler2D backdrop;
-uniform sampler2D mask;
+uniform SAMPLER mask;
 uniform vec2 fbSize;
+uniform vec2 bdOrigin;  // where the copy starts in the frame, px
+uniform vec2 bdSize;    // the copy's texture size, px
+uniform vec4 surf;      // the layer, px
+uniform float fade;     // the layer's fade-in or -out
 uniform float band;     // px
 uniform float strength; // px
 uniform float chroma;
@@ -174,17 +186,24 @@ out vec4 fragColor;
 const float THRESHOLD = 0.08; // the islands are translucent: any alpha above this is glass
 
 float cover(vec2 px) {
-    return clamp(texture(mask, px / fbSize).a / THRESHOLD, 0.0, 1.0);
+    vec2 uv = (px - surf.xy) / surf.zw;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return 0.0;
+    return clamp(texture(mask, uv).a * fade / THRESHOLD, 0.0, 1.0);
+}
+
+vec3 tap(vec2 px) {
+    return texture(backdrop, (px - bdOrigin) / bdSize).rgb;
 }
 
 vec3 look(vec2 px) {
     if (frost <= 0.0)
-        return texture(backdrop, px / fbSize).rgb;
-    vec3 c = texture(backdrop, px / fbSize).rgb * 0.25;
-    c += texture(backdrop, (px + vec2( frost,  frost)) / fbSize).rgb * 0.1875;
-    c += texture(backdrop, (px + vec2(-frost,  frost)) / fbSize).rgb * 0.1875;
-    c += texture(backdrop, (px + vec2( frost, -frost)) / fbSize).rgb * 0.1875;
-    c += texture(backdrop, (px + vec2(-frost, -frost)) / fbSize).rgb * 0.1875;
+        return tap(px);
+    vec3 c = tap(px) * 0.25;
+    c += tap(px + vec2( frost,  frost)) * 0.1875;
+    c += tap(px + vec2(-frost,  frost)) * 0.1875;
+    c += tap(px + vec2( frost, -frost)) * 0.1875;
+    c += tap(px + vec2(-frost, -frost)) * 0.1875;
     return c;
 }
 
@@ -234,9 +253,10 @@ void main() {
 }
 )#";
 
-static GLuint compile(GLenum type, const char* src) {
-    GLuint s = glCreateShader(type);
-    glShaderSource(s, 1, &src, nullptr);
+static GLuint compile(GLenum type, const std::string& src) {
+    GLuint      s = glCreateShader(type);
+    const char* c = src.c_str();
+    glShaderSource(s, 1, &c, nullptr);
     glCompileShader(s);
     GLint ok = 0;
     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
@@ -250,59 +270,74 @@ static GLuint compile(GLenum type, const char* src) {
     return s;
 }
 
-static bool ensureProgram() {
-    if (g_prog)
-        return true;
+static std::string replaced(std::string s, const std::string& what, const std::string& with) {
+    s.replace(s.find(what), what.size(), with);
+    return s;
+}
 
-    GLuint vs = compile(GL_VERTEX_SHADER, VERT), fs = compile(GL_FRAGMENT_SHADER, FRAG);
+static SProgram* ensureProgram(bool external) {
+    auto& p = g_progs[external];
+    if (p.id)
+        return &p;
+
+    auto frag = replaced(replaced(FRAG, "EXTENSION", external ? "#extension GL_OES_EGL_image_external_essl3 : require" : ""), "SAMPLER",
+                         external ? "samplerExternalOES" : "sampler2D");
+    GLuint vs = compile(GL_VERTEX_SHADER, VERT), fs = compile(GL_FRAGMENT_SHADER, frag);
     if (!vs || !fs)
-        return false;
+        return nullptr;
 
-    g_prog = glCreateProgram();
-    glAttachShader(g_prog, vs);
-    glAttachShader(g_prog, fs);
-    glLinkProgram(g_prog);
+    p.id = glCreateProgram();
+    glAttachShader(p.id, vs);
+    glAttachShader(p.id, fs);
+    glLinkProgram(p.id);
     glDeleteShader(vs);
     glDeleteShader(fs);
     GLint ok = 0;
-    glGetProgramiv(g_prog, GL_LINK_STATUS, &ok);
+    glGetProgramiv(p.id, GL_LINK_STATUS, &ok);
     if (!ok) {
         char log[2048];
-        glGetProgramInfoLog(g_prog, sizeof(log), nullptr, log);
+        glGetProgramInfoLog(p.id, sizeof(log), nullptr, log);
         Log::logger->log(Log::ERR, "[eave-glass] link: {}", log);
-        glDeleteProgram(g_prog);
-        g_prog = 0;
-        return false;
+        glDeleteProgram(p.id);
+        p.id = 0;
+        return nullptr;
     }
 
-    u_backdrop = glGetUniformLocation(g_prog, "backdrop");
-    u_mask     = glGetUniformLocation(g_prog, "mask");
-    u_fbSize   = glGetUniformLocation(g_prog, "fbSize");
-    u_band     = glGetUniformLocation(g_prog, "band");
-    u_strength = glGetUniformLocation(g_prog, "strength");
-    u_chroma   = glGetUniformLocation(g_prog, "chroma");
-    u_rim      = glGetUniformLocation(g_prog, "rim");
-    u_frost    = glGetUniformLocation(g_prog, "frost");
-    u_rect     = glGetUniformLocation(g_prog, "rect");
+    auto at    = [&](const char* name) { return glGetUniformLocation(p.id, name); };
+    p.backdrop = at("backdrop");
+    p.mask     = at("mask");
+    p.fbSize   = at("fbSize");
+    p.bdOrigin = at("bdOrigin");
+    p.bdSize   = at("bdSize");
+    p.surf     = at("surf");
+    p.fade     = at("fade");
+    p.band     = at("band");
+    p.strength = at("strength");
+    p.chroma   = at("chroma");
+    p.rim      = at("rim");
+    p.frost    = at("frost");
+    p.rect     = at("rect");
 
-    static const float QUAD[] = {0, 0, 1, 0, 0, 1, 1, 1};
-    glGenVertexArrays(1, &g_vao);
-    glGenBuffers(1, &g_vbo);
-    GLint oldVao = 0, oldVbo = 0;
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &oldVao);
-    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &oldVbo);
-    glBindVertexArray(g_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(QUAD), QUAD, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
-    glBindVertexArray(oldVao);
-    glBindBuffer(GL_ARRAY_BUFFER, oldVbo);
-    return true;
+    if (!g_vao) {
+        static const float QUAD[] = {0, 0, 1, 0, 0, 1, 1, 1};
+        glGenVertexArrays(1, &g_vao);
+        glGenBuffers(1, &g_vbo);
+        GLint oldVao = 0, oldVbo = 0;
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &oldVao);
+        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &oldVbo);
+        glBindVertexArray(g_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(QUAD), QUAD, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glBindVertexArray(oldVao);
+        glBindBuffer(GL_ARRAY_BUFFER, oldVbo);
+    }
+    return &p;
 }
 
 static bool isGlass(const PHLLS& ls) {
-    return ls && ls->m_mapped && ls->visible() && ls->m_namespace.starts_with("eave");
+    return ls && ls->m_mapped && ls->visible() && ls->m_namespace.starts_with("eave") && (!g_params.pid || ls->getPID() == g_params.pid);
 }
 
 static std::vector<PHLLS> glassLayers(const PHLMONITOR& mon) {
@@ -356,106 +391,76 @@ static void onBegin() {
     ring.m_previous[ring.m_previousIdx].add(extra);
 }
 
-// `format` 0 copies the frame's format: the backdrop must match it to be blitted into.
-static void ensureFB(SP<IFramebuffer>& fb, const SP<IFramebuffer>& like, const char* name, DRMFormat format = 0) {
-    format = format ? format : like->m_drmFormat;
+// The backdrop copy only needs to hold the strips around the glass. It grows to the largest
+// asked for and stays, so a popover sliding open doesn't reallocate every frame.
+static void ensureBackdrop(SP<IFramebuffer>& fb, const SP<IFramebuffer>& like, const Vector2D& need) {
     if (!fb)
-        fb = g_pHyprRenderer->createFB(name);
-    if (fb->m_size != like->m_size || fb->m_drmFormat != format) {
+        fb = g_pHyprRenderer->createFB("eave-glass backdrop");
+    const Vector2D size = {std::max(need.x, fb->m_size.x), std::max(need.y, fb->m_size.y)};
+    if (!fb->isAllocated() || fb->m_size.x < need.x || fb->m_size.y < need.y || fb->m_drmFormat != like->m_drmFormat) {
         fb->release();
-        fb->alloc(like->m_size.x, like->m_size.y, format);
+        fb->alloc(size.x, size.y, like->m_drmFormat); // must match the frame to be blitted into
     }
-    // Drawing into it converts colors to its description; without one every draw logs an error.
     fb->setImageDescription(like->imageDescription());
 }
 
 static void drawGlass(const PHLMONITOR& mon) {
     auto& rd = g_pHyprRenderer->m_renderData;
-    if (!g_params.enabled || !mon || !rd.currentFB || !ensureProgram())
+    if (!g_params.enabled || !mon || !rd.currentFB)
         return;
-
-    const auto layers = glassLayers(mon);
-    if (layers.empty())
-        return;
-
 
     const auto  target = rd.currentFB;
     const auto  fbSize = target->m_size;
     const float REACH  = reach(mon);
-    auto&       fbs    = g_fbs[mon.get()];
-    ensureFB(fbs.backdrop, target, "eave-glass backdrop");
-    ensureFB(fbs.mask, target, "eave-glass mask", DRM_FORMAT_ARGB8888); // the frame may have no alpha; the mask is all alpha
 
     // Only what the damage asks for (onBegin made sure that's all of a layer or none of it).
-    std::vector<std::pair<PHLLS, CBox>> todo;
-    for (auto const& ls : layers) {
-        const auto box = pixelBox(ls, mon);
-        if (!rd.damage.copy().intersect(box).empty())
-            todo.emplace_back(ls, box);
+    struct SJob {
+        PHLLS        ls;
+        CBox         box;
+        SP<ITexture> tex;
+    };
+    std::vector<SJob> todo;
+    CBox              copy; // everything the lookups can reach
+    for (auto const& ls : glassLayers(mon)) {
+        const auto box  = pixelBox(ls, mon);
+        auto       surf = ls->wlSurface()->resource();
+        if (rd.damage.copy().intersect(box).empty() || !surf || !surf->m_current.texture || !surf->m_current.texture->ok())
+            continue;
+        todo.push_back({ls, box, surf->m_current.texture});
+        const auto r = box.copy().expand(REACH).intersection(CBox{{}, fbSize});
+        copy         = copy.empty() ? r : CRegion{copy}.add(r).getExtents();
     }
     if (todo.empty())
         return;
+    copy.round();
+
+    auto& fbs = g_fbs[mon.get()];
+    ensureBackdrop(fbs.backdrop, target, copy.size());
 
     const bool scissorWas = g_pHyprOpenGL->m_capStatus[CHyprOpenGLImpl::CAP_STATUS_SCISSOR_TEST];
     g_pHyprOpenGL->setCapStatus(GL_SCISSOR_TEST, false);
-
-    GLint oldRead = 0;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldRead);
 
     const bool sync = g_timing.mode == g_timing.SYNC;
     if (sync)
         glFinish();
     const auto syncStart = std::chrono::steady_clock::now();
 
-    // 1. Copy the backdrop, as far around each layer as the lookups reach.
+    // 1. Copy the backdrop around the glass into the corner of our buffer.
     timeBegin(T_COPY);
+    GLint oldRead = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldRead);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, GLFB(target)->getFBID());
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLFB(fbs.backdrop)->getFBID());
-    for (auto const& [ls, box] : todo) {
-        CBox r = box.copy().expand(REACH).intersection(CBox{{}, fbSize}).round();
-        glBlitFramebuffer(r.x, r.y, r.x + r.w, r.y + r.h, r.x, r.y, r.x + r.w, r.y + r.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    }
+    glBlitFramebuffer(copy.x, copy.y, copy.x + copy.w, copy.y + copy.h, 0, 0, copy.w, copy.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, oldRead);
     timeEnd();
 
-    // 2. Draw each layer's own pixels into the mask, the way Hyprland is about to draw them.
-    timeBegin(T_MASK);
-    {
-        auto guard                               = g_pHyprRenderer->bindTempFB(fbs.mask);
-        g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
-        for (auto const& [ls, box] : todo) {
-            CRegion region{box.copy().expand(REACH).intersection(CBox{{}, fbSize})};
-            g_pHyprRenderer->draw(CClearPassElement::SClearData{{0.F, 0.F, 0.F, 0.F}}, region);
-
-            CSurfacePassElement::SRenderData data = {mon, Time::steadyNow(), ls->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT)};
-            const auto                       size = ls->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
-            data.fadeAlpha                        = ls->alpha()[Desktop::View::LS_ALPHA_FADE]->value();
-            data.w                                = size.x;
-            data.h                                = size.y;
-            data.pLS                              = ls;
-            data.decorate                         = false;
-            data.clipBox                          = CBox{{}, fbSize};
-            auto surf                             = ls->wlSurface()->resource();
-            if (!surf || !surf->m_current.texture)
-                continue;
-            data.surface     = surf;
-            data.texture     = surf->m_current.texture;
-            data.mainSurface = true;
-            g_pHyprRenderer->draw(data, region);
-        }
-        g_pHyprRenderer->m_bBlockSurfaceFeedback = false;
-    }
-    timeEnd();
-
-    // 3. Refract the backdrop through the mask, into the frame.
+    // 2. Refract it through each layer's own buffer, into the frame.
     timeBegin(T_REFRACT);
-    GLint oldProg = 0, oldVao = 0, oldActive = 0, oldTex0 = 0, oldTex1 = 0;
+    GLint oldProg = 0, oldVao = 0, oldActive = 0, oldTex0 = 0;
     glGetIntegerv(GL_CURRENT_PROGRAM, &oldProg);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &oldVao);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &oldActive);
-    glActiveTexture(GL_TEXTURE1);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTex1);
-    glBindTexture(GL_TEXTURE_2D, fbs.mask->getTexture()->m_texID);
     glActiveTexture(GL_TEXTURE0);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTex0);
     glBindTexture(GL_TEXTURE_2D, fbs.backdrop->getTexture()->m_texID);
@@ -463,30 +468,40 @@ static void drawGlass(const PHLMONITOR& mon) {
     target->bind();
     g_pHyprOpenGL->blend(true);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glBindVertexArray(g_vao);
 
     const float S = mon->m_scale;
-    glUseProgram(g_prog);
-    glUniform1i(u_backdrop, 0);
-    glUniform1i(u_mask, 1);
-    glUniform2f(u_fbSize, fbSize.x, fbSize.y);
-    glUniform1f(u_band, g_params.band * S);
-    glUniform1f(u_strength, g_params.strength * S);
-    glUniform1f(u_chroma, g_params.chroma);
-    glUniform1f(u_rim, g_params.rim);
-    glUniform1f(u_frost, g_params.frost * S);
-    glBindVertexArray(g_vao);
-    for (auto const& [ls, box] : todo) {
-        glUniform4f(u_rect, box.x, box.y, box.w, box.h);
+    for (auto const& job : todo) {
+        const auto prog = ensureProgram(job.tex->m_type == Render::TEXTURE_EXTERNAL);
+        if (!prog)
+            continue;
+        glBindVertexArray(g_vao); // ensureProgram may have just made it
+        glUseProgram(prog->id);
+        glUniform1i(prog->backdrop, 0);
+        glUniform1i(prog->mask, 1);
+        glUniform2f(prog->fbSize, fbSize.x, fbSize.y);
+        glUniform2f(prog->bdOrigin, copy.x, copy.y);
+        glUniform2f(prog->bdSize, fbs.backdrop->m_size.x, fbs.backdrop->m_size.y);
+        glUniform4f(prog->surf, job.box.x, job.box.y, job.box.w, job.box.h);
+        glUniform1f(prog->fade, job.ls->alpha()[Desktop::View::LS_ALPHA_FADE]->value());
+        glUniform1f(prog->band, g_params.band * S);
+        glUniform1f(prog->strength, g_params.strength * S);
+        glUniform1f(prog->chroma, g_params.chroma);
+        glUniform1f(prog->rim, g_params.rim);
+        glUniform1f(prog->frost, g_params.frost * S);
+        glUniform4f(prog->rect, job.box.x, job.box.y, job.box.w, job.box.h);
+
+        glActiveTexture(GL_TEXTURE1);
+        job.tex->bind();
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        g_timing.pixels += box.w * box.h;
+        job.tex->unbind();
+        glActiveTexture(GL_TEXTURE0);
+        g_timing.pixels += job.box.w * job.box.h;
     }
     timeEnd();
 
     glBindVertexArray(oldVao);
     glUseProgram(oldProg);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, oldTex1);
-    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, oldTex0);
     glActiveTexture(oldActive);
     g_pHyprOpenGL->setCapStatus(GL_SCISSOR_TEST, scissorWas);
@@ -533,7 +548,7 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     if (key == "buffers") {
         std::string out;
         for (auto const& [mon, fbs] : g_fbs) {
-            for (auto const& fb : {fbs.backdrop, fbs.mask}) {
+            for (auto const& fb : {fbs.backdrop}) {
                 if (!fb)
                     continue;
                 const auto name = NFormatUtils::drmFormatName(fb->m_drmFormat);
@@ -545,8 +560,8 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     }
 
     if (key.empty() || key == "show")
-        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength, g_params.chroma,
-                           g_params.rim, g_params.frost, sc<int>(g_timing.mode));
+        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength, g_params.chroma,
+                           g_params.rim, g_params.frost, g_params.pid, sc<int>(g_timing.mode));
 
     if (key == "stats")
         return timingStats();
@@ -570,6 +585,8 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
             g_params.rim = std::stof(value);
         else if (key == "frost")
             g_params.frost = std::stof(value);
+        else if (key == "pid")
+            g_params.pid = std::stoi(value);
         else
             return "unknown key\n";
     } catch (...) { return "bad value\n"; }
@@ -613,8 +630,10 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pHyprRenderer->m_renderPass.removeAllOfType("CEaveGlassElement");
     g_hooks = {};
     g_fbs.clear();
-    if (g_prog)
-        glDeleteProgram(g_prog);
+    for (auto& p : g_progs) {
+        if (p.id)
+            glDeleteProgram(p.id);
+    }
     if (g_vao)
         glDeleteVertexArrays(1, &g_vao);
     if (g_vbo)
