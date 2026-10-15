@@ -601,25 +601,18 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Bezel<M> {
     fn mouse_interaction(
         &self,
         tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
+        _layout: Layout<'_>,
+        _cursor: mouse::Cursor,
         _viewport: &Rectangle,
         _renderer: &iced::Renderer,
     ) -> mouse::Interaction {
+        // Hovering keeps the plain arrow: the notch and the edge are part of the screen, as a
+        // physical notch is, not buttons. Only a drag shows the hand.
         let state = tree.state.downcast_ref::<State>();
-        let bounds = layout.bounds();
         if state.press.is_some() {
-            return mouse::Interaction::Grabbing;
-        }
-        let Some(at) = cursor.land().position_in(bounds) else {
-            return mouse::Interaction::None;
-        };
-        match self.hit(at, bounds.width) {
-            Some(held) if self.on_click.is_some() && self.clicks(held, at, bounds.width) => {
-                mouse::Interaction::Pointer
-            }
-            Some(_) => mouse::Interaction::Grab,
-            None => mouse::Interaction::None,
+            mouse::Interaction::Grabbing
+        } else {
+            mouse::Interaction::None
         }
     }
 }
