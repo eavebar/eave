@@ -60,6 +60,7 @@ static struct {
 struct SMonitorGlass {
     SP<IFramebuffer> backdrop;      // the frame around the glass, full size
     SP<IFramebuffer> half, quarter; // blurred down from it, for frost
+    SP<IFramebuffer> attached;      // a row: how far down each column is attached to the top
     CRegion          drawn;         // where the glass was drawn last, framebuffer pixels
 };
 static std::unordered_map<Monitor::CMonitor*, SMonitorGlass> g_fbs;
@@ -156,7 +157,7 @@ static std::string timingStats() {
 // needs its own sampler type.
 struct SProgram {
     GLuint id = 0;
-    GLint  backdrop, mask, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, clear, light, rect;
+    GLint  backdrop, mask, attached, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, clear, light, rect;
 };
 static SProgram g_progs[2]; // [0] sampler2D, [1] samplerExternalOES
 static GLuint   g_vao = 0, g_vbo = 0;
@@ -191,6 +192,7 @@ uniform float chroma;
 uniform float rim;
 uniform float clear;    // how much of the backdrop the island's color lets through
 uniform bool  light;
+uniform sampler2D attached; // per column of the surface: how far down it's attached to the top
 out vec4 fragColor;
 
 float cover(vec2 px) {
@@ -219,6 +221,11 @@ void main() {
     vec2  p = gl_FragCoord.xy;
     float a = cover(p);
     if (a <= 0.0)
+        discard;
+    // What hangs from the screen's top edge (the notch, the grown edge, the islands attached to it)
+    // stands for the hardware around the picture: it stays the layer's own black.
+    vec4 at = texelFetch(attached, ivec2(int(p.x - surf.x), 0), 0);
+    if (p.y - surf.y < round(at.r * 255.0) * 256.0 + round(at.g * 255.0))
         discard;
 
     // Deep inside, nothing bends: eight taps a band away settle most of a popover's pixels
@@ -336,6 +343,33 @@ struct SPassProgram {
 };
 static SPassProgram g_down, g_up;
 
+// One fragment per column of the surface: walks down from its top while the surface is covered,
+// and writes how far it got, in px, over two 8-bit channels.
+static const char* ATTACH_FRAG = R"#(#version 300 es
+EXTENSION
+precision highp float;
+uniform SAMPLER mask;
+uniform vec2 size; // the surface, px
+in vec2 uv;
+out vec4 fragColor;
+void main() {
+    float d = size.y;
+    for (float y = 0.5; y < size.y; y += 1.0) {
+        if (texture(mask, vec2(uv.x, y / size.y)).a < 0.5) {
+            d = y - 0.5;
+            break;
+        }
+    }
+    fragColor = vec4(floor(d / 256.0) / 255.0, mod(d, 256.0) / 255.0, 0.0, 1.0);
+}
+)#";
+
+struct SAttachProgram {
+    GLuint id = 0;
+    GLint  mask, size, srcScale;
+};
+static SAttachProgram g_attach[2]; // [0] sampler2D, [1] samplerExternalOES
+
 static GLuint compile(GLenum type, const std::string& src);
 
 static GLuint link(GLuint vs, GLuint fs) {
@@ -357,6 +391,23 @@ static GLuint link(GLuint vs, GLuint fs) {
         return 0;
     }
     return id;
+}
+
+static std::string replaced(std::string s, const std::string& what, const std::string& with);
+
+static SAttachProgram* ensureAttach(bool external) {
+    auto& p = g_attach[external];
+    if (p.id)
+        return &p;
+    auto frag = replaced(replaced(ATTACH_FRAG, "EXTENSION", external ? "#extension GL_OES_EGL_image_external_essl3 : require" : ""), "SAMPLER",
+                         external ? "samplerExternalOES" : "sampler2D");
+    p.id = link(compile(GL_VERTEX_SHADER, PASS_VERT), compile(GL_FRAGMENT_SHADER, frag));
+    if (!p.id)
+        return nullptr;
+    p.mask     = glGetUniformLocation(p.id, "mask");
+    p.size     = glGetUniformLocation(p.id, "size");
+    p.srcScale = glGetUniformLocation(p.id, "srcScale");
+    return &p;
 }
 
 static bool ensurePass(SPassProgram& p, const char* frag) {
@@ -436,6 +487,7 @@ static SProgram* ensureProgram(bool external) {
     p.rim      = at("rim");
     p.clear    = at("clear");
     p.light    = at("light");
+    p.attached = at("attached");
     p.rect     = at("rect");
 
     if (!g_vao) {
@@ -661,11 +713,35 @@ static void keyGlass(SJob& job) {
     auto&      rd     = g_pHyprRenderer->m_renderData;
     const auto fbSize = rd.currentFB->m_size;
 
+    const bool external = job.tex->m_type == Render::TEXTURE_EXTERNAL;
+    const auto attach   = ensureAttach(external);
+    if (!attach)
+        return;
+
     SGLState gl;
     gl.save();
     const auto start = syncBegin();
 
     timeBegin(T_REFRACT);
+    // What hangs from the top edge, column by column, into a row of its own.
+    auto& fbs = g_fbs[mon.get()];
+    ensureBackdrop(fbs.attached, rd.currentFB, Vector2D{job.box.w, 1.0});
+    g_pHyprOpenGL->blend(false);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLFB(fbs.attached)->getFBID());
+    g_pHyprOpenGL->setViewport(0, 0, job.box.w, 1);
+    glBindVertexArray(g_vao);
+    glUseProgram(attach->id);
+    glUniform1i(attach->mask, 1);
+    glUniform2f(attach->size, job.box.w, job.box.h);
+    glUniform2f(attach->srcScale, 1, 1);
+    glActiveTexture(GL_TEXTURE1);
+    job.tex->bind();
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    rd.currentFB->bind();
+
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, fbs.attached->getTexture()->m_texID);
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, job.sampled->getTexture()->m_texID);
     g_pHyprOpenGL->blend(true);
     if (g_params.light)
@@ -678,6 +754,7 @@ static void keyGlass(SJob& job) {
     glUseProgram(prog->id);
     glUniform1i(prog->backdrop, 0);
     glUniform1i(prog->mask, 1);
+    glUniform1i(prog->attached, 2);
     glUniform2f(prog->fbSize, fbSize.x, fbSize.y);
     glUniform2f(prog->bdOrigin, job.copy.x, job.copy.y);
     glUniform2f(prog->bdScale, job.level.x / job.sampled->m_size.x, job.level.y / job.sampled->m_size.y);
@@ -696,6 +773,8 @@ static void keyGlass(SJob& job) {
     if (g_params.skip != 2)
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     job.tex->unbind();
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, 0);
     g_timing.pixels += job.box.w * job.box.h;
     timeEnd();
 
@@ -783,7 +862,7 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     if (key == "buffers") {
         std::string out;
         for (auto const& [mon, fbs] : g_fbs) {
-            for (auto const& fb : {fbs.backdrop, fbs.half, fbs.quarter}) {
+            for (auto const& fb : {fbs.backdrop, fbs.half, fbs.quarter, fbs.attached}) {
                 if (!fb)
                     continue;
                 const auto name = NFormatUtils::drmFormatName(fb->m_drmFormat);
@@ -878,6 +957,10 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_hooks = {};
     g_fbs.clear();
     for (auto& p : g_progs) {
+        if (p.id)
+            glDeleteProgram(p.id);
+    }
+    for (auto& p : g_attach) {
         if (p.id)
             glDeleteProgram(p.id);
     }
