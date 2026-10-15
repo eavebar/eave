@@ -2546,6 +2546,12 @@ The fillet's rows are only where it can be: within a blend of either one's top o
 - **Lead and follow on the frame itself** (the edges along the way on a quicker spring): still a box at every frame.
 - **A metaball over the whole shape:** one field for everything, contoured every frame: the outline, the content's clip and the skin would all come from it, at many times the cost.
 
-**Variants:** to be picked by the user side by side, as D-83 and D-111 were.
+**The feel: flow.** Three variants were built on branches, differing only in these numbers, and run on the user's screen, as D-83 and D-111 were. The user picked flow (the numbers above):
+
+| Feel | `TONGUE_LEAD` | `TONGUE_LAG` | `TONGUE_WIDTH` | `POUR_BLEND` |
+|---|---|---|---|---|
+| subtle | 0.75 | 1.4 | 0.6 | 16 |
+| **flow** (taken) | 0.6 | 1.8 | 0.5 | 24 |
+| gooey | 0.45 | 2.4 | 0.4 | 36 |
 
 **Cost:** no dependency; four springs per island. While a tongue is out, each frame draws it and builds its fillet: about 170 rows of two bisections, ~80 µs in release on the M1 Pro. At rest nothing. **Measured** (Asahi aarch64, release, tiny-skia, the user's config, 10 s idle after 10 s, two runs): binary 20,868,800 bytes, as on main at D-111. RSS 23.6 MB (23.5 on main at D-111). Idle CPU 1 tick over 10 s. CPU while morphing wasn't measured end to end. x86_64 wasn't built (no cross pkg-config here); nothing in this change is arch-specific.
