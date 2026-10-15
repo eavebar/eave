@@ -2335,7 +2335,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 - **a crossfade**: iced has no group opacity, and the host fades by covering with the island's color, so two pages crossing would cover each other where they overlap. Fading out and then in is what tabs and alternates already do.
 - **keeping the old node and drawing it again**: drawing a node needs the host's icons and palette at view time, and a fresh widget state for it would lose the old page's scroll position as it leaves. Moving the built content into the widget state keeps both.
 
-**Measured:** no dependency is added, and nothing runs while no page changes. Only a page that's leaving is held, until it's gone.
+**Measured** (Asahi aarch64, release, default GPU build, the user's config, two alternating runs against main): binary 20,803,248 → 20,868,784 B (+64 KiB, one page, for D-106 and D-107 together); RSS ~79.7 MB both, within noise; CPU 6 s after start the same within noise (1.6–2.1 %, both still settling). No dependency is added, and nothing runs while no page changes. Only a page that's leaving is held, until it's gone.
 
 ---
 
@@ -2357,5 +2357,5 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 - **dropping the items at once and fading copies of them in the island:** iced can't draw an element it no longer has, so the host has to keep them laid out anyway.
 - **the island shrinking as each one goes:** the items left would slide under the ones still fading out.
 
-**Measured:** see the commit. Nothing runs while no item waits.
+**Measured** (Asahi aarch64, release, default GPU build, the user's config, two alternating runs against main): binary 20,803,248 → 20,868,784 B (+64 KiB, one page, for D-106 and D-107 together); RSS ~79.7 MB both, within noise; CPU 6 s after start the same within noise (1.6–2.1 %, both still settling). Nothing runs while no item waits.
 
