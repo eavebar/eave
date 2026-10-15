@@ -58,6 +58,8 @@ pub struct Island<'a, M> {
     /// Where the toggle is, and whether the collapsible items show.
     toggle_side: Horizontal,
     expanded: bool,
+    leaving: Vec<u64>,
+    on_gone: Option<M>,
     /// A live island: snug around its items.
     live: bool,
     /// How far its shape reaches past its layout, toward the edges it's attached to (D-70), and its
@@ -94,6 +96,11 @@ pub struct Toggle<'a, M> {
     /// Whether the collapsible items show. When it changes, the island squashes the way they
     /// went, like a nudge.
     pub expanded: bool,
+    /// The collapsible items going away, by key: still laid out, they fade out one at a time,
+    /// the furthest from the toggle first.
+    pub leaving: Vec<u64>,
+    /// Sent once the last of them is gone, to take them out.
+    pub on_gone: Option<M>,
 }
 
 /// The toggle's key among the items' keys: no item has it.
@@ -171,6 +178,8 @@ impl<'a, M> Island<'a, M> {
             toggle: None,
             toggle_side: Horizontal::Right,
             expanded: false,
+            leaving: Vec::new(),
+            on_gone: None,
             live: false,
             bleed: Padding::ZERO,
             notch: None,
@@ -276,12 +285,16 @@ impl<'a, M> Island<'a, M> {
             element,
             side,
             expanded,
+            leaving,
+            on_gone,
         }) = toggle
         else {
             return self;
         };
         self.toggle_side = side;
         self.expanded = expanded;
+        self.leaving = leaving;
+        self.on_gone = on_gone;
         let index = if side == Horizontal::Left {
             if !self.groups.is_empty() {
                 self.groups.insert(0, None);
@@ -382,6 +395,12 @@ struct Motion {
     pushing: f32,
     /// The previous frame, while something is moving.
     last: Option<Instant>,
+    /// Which end items come out of and go back into: the toggle's.
+    from: Horizontal,
+    /// The items going away, by key.
+    leaving: Vec<u64>,
+    /// Whether the island said they're gone.
+    told_gone: bool,
 }
 
 impl Default for Motion {
@@ -411,6 +430,9 @@ impl Default for Motion {
             pushed: 0.0,
             pushing: 0.0,
             last: None,
+            from: Horizontal::Right,
+            leaving: Vec::new(),
+            told_gone: false,
         }
     }
 }
@@ -485,6 +507,35 @@ struct ItemMotion {
     shown: Spring,
     /// How far its own sideways nudge moves it, on top of the island's push.
     kick: Spring,
+    /// Seconds before its fade sets off, when it comes or goes with others: one at a time.
+    wait: f32,
+    /// Where the fade heads once it does: shown (1) or gone (0).
+    want: f32,
+}
+
+impl ItemMotion {
+    fn new(key: u64, x: f32) -> Self {
+        Self {
+            key,
+            x: Spring::new(x, MORPH),
+            shown: Spring {
+                target: 1.0,
+                ..Spring::new(0.0, MORPH)
+            },
+            kick: Spring::new(0.0, REACT),
+            wait: 0.0,
+            want: 1.0,
+        }
+    }
+
+    /// Fades to `want` after `wait` seconds.
+    fn fade(&mut self, want: f32, wait: f32) {
+        self.want = want;
+        self.wait = wait;
+        if wait <= 0.0 {
+            self.shown.target = want;
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -719,6 +770,7 @@ impl Motion {
     ) {
         // A new island grows out of a sliver at its center. A drop starts as a dot, and one that
         // comes out of another island as that island.
+        let existed = self.island.is_some();
         if self.island.is_none() {
             let sliver = match (self.drop, &self.home) {
                 (Some(_), _) | (_, Some(_)) => self.home(island),
@@ -732,27 +784,40 @@ impl Motion {
         self.island = Some(island);
 
         let mut kept = Vec::with_capacity(self.items.len());
+        let (mut coming, mut going) = (Vec::new(), Vec::new());
         for (key, x) in items {
+            let leaving = self.leaving.contains(&key);
             match self.items.iter().position(|item| item.key == key) {
                 Some(index) => {
                     let mut item = self.items.swap_remove(index);
                     item.x.target = x;
+                    if leaving && item.want > 0.0 {
+                        going.push(kept.len());
+                    } else if !leaving && item.want < 1.0 {
+                        // Called back on its way out: back from where it got to.
+                        item.fade(1.0, 0.0);
+                    }
                     kept.push(item);
                 }
                 // New: in place at once, fading in.
-                None => kept.push(ItemMotion {
-                    key,
-                    x: Spring::new(x, MORPH),
-                    shown: Spring {
-                        target: 1.0,
-                        ..Spring::new(0.0, MORPH)
-                    },
-                    kick: Spring::new(0.0, REACT),
-                }),
+                None => {
+                    coming.push(kept.len());
+                    kept.push(ItemMotion::new(key, x));
+                }
             }
         }
         // Whatever is left in `self.items` is gone.
         self.items = kept;
+        // Several coming at once, like collapsible items shown, come one at a time from the
+        // toggle's end; going, they leave from the other end first. Not on a new island: it
+        // grows out with all its items.
+        if existed && coming.len() > 1 {
+            self.stagger(coming, 1.0);
+        }
+        self.stagger(going, 0.0);
+        if self.leaving.is_empty() {
+            self.told_gone = false;
+        }
 
         let popover_state = &mut self.popover;
         match popover {
@@ -788,6 +853,43 @@ impl Motion {
             None => {}
         }
         self.aim();
+    }
+
+    /// Fades the items at `indices` to `want` one after another, `STAGGER` apart: in from the
+    /// toggle's end, out from the other.
+    fn stagger(&mut self, mut indices: Vec<usize>, want: f32) {
+        let from_left = self.from == Horizontal::Left;
+        let items = &self.items;
+        indices.sort_by(|&a, &b| {
+            let (a, b) = (items[a].x.target, items[b].x.target);
+            if from_left == (want > 0.0) {
+                a.total_cmp(&b)
+            } else {
+                b.total_cmp(&a)
+            }
+        });
+        let step = theme::STAGGER.as_secs_f32();
+        for (order, index) in indices.into_iter().enumerate() {
+            let item = &mut self.items[index];
+            if want > 0.0 {
+                item.shown = Spring::new(0.0, MORPH);
+            }
+            item.fade(want, order as f32 * step);
+        }
+    }
+
+    /// Whether the items going away are all gone, and nobody's been told yet.
+    fn gone(&mut self) -> bool {
+        if self.leaving.is_empty() || self.told_gone {
+            return false;
+        }
+        let gone = self
+            .items
+            .iter()
+            .filter(|item| self.leaving.contains(&item.key))
+            .all(|item| item.want == 0.0 && item.wait <= 0.0 && item.shown.value < REST_DISTANCE);
+        self.told_gone = gone;
+        gone
     }
 
     /// Notes which popover the island has. Another one than before, while it's still a popover,
@@ -1155,7 +1257,8 @@ impl Motion {
     }
 
     fn at_rest(&mut self) -> bool {
-        self.jelly.at_rest()
+        self.items.iter().all(|item| item.wait <= 0.0)
+            && self.jelly.at_rest()
             && self.springs().all(|spring| spring.at_rest())
             && self.paced().all(|spring| spring.at_rest())
     }
@@ -1176,6 +1279,14 @@ impl Motion {
             .min(MAX_FRAME)
             .as_secs_f32();
         self.last = Some(now);
+        for item in &mut self.items {
+            if item.wait > 0.0 {
+                item.wait -= elapsed;
+                if item.wait <= 0.0 {
+                    item.fade(item.want, 0.0);
+                }
+            }
+        }
         for spring in self.springs() {
             spring.advance(elapsed);
         }
@@ -2046,6 +2157,8 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         if taken {
             motion.rehome();
         }
+        motion.from = self.toggle_side;
+        motion.leaving.clone_from(&self.leaving);
         // A hidden toggle isn't arranged, so it isn't drawn, and fades in when it shows.
         let positions = self
             .keys
@@ -2105,6 +2218,11 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             if motion.closing_done() {
                 shell.publish(popover.on_closed.clone());
             }
+        }
+        if motion.gone()
+            && let Some(on_gone) = &self.on_gone
+        {
+            shell.publish(on_gone.clone());
         }
         if !motion.at_rest() {
             shell.request_redraw();
@@ -2436,6 +2554,70 @@ mod tests {
         motion.arrange(island, positions, None);
         run(&mut motion, Instant::now(), |_| {});
         motion
+    }
+
+    #[test]
+    fn items_shown_together_come_one_at_a_time_from_the_toggle() {
+        let island = rect(0.0, 200.0);
+        let mut motion = settled(island, &[1]);
+        // The toggle on the left: the nearest the left comes first.
+        motion.from = Horizontal::Left;
+        let positions = [(1, 10.0), (2, 50.0), (3, 90.0), (4, 130.0)];
+        motion.arrange(rect(0.0, 300.0), positions.into_iter(), None);
+        let wait = |motion: &Motion, key| {
+            motion
+                .items
+                .iter()
+                .find(|item| item.key == key)
+                .unwrap()
+                .wait
+        };
+        assert_eq!(wait(&motion, 2), 0.0);
+        assert!(wait(&motion, 2) < wait(&motion, 3) && wait(&motion, 3) < wait(&motion, 4));
+        assert!(!motion.at_rest(), "waiting is moving");
+
+        // Shown at once: the first sets off, the last hasn't yet.
+        let start = Instant::now();
+        motion.step(start);
+        motion.step(start + FRAME);
+        assert!(motion.item(2, 50.0).1 > 0.0);
+        assert_eq!(motion.item(4, 130.0).1, 0.0);
+        run(&mut motion, start + 2 * FRAME, |_| {});
+        assert_eq!(motion.item(4, 130.0).1, 1.0);
+    }
+
+    #[test]
+    fn items_going_leave_from_the_far_end_and_say_when_they_are_gone() {
+        let island = rect(0.0, 300.0);
+        let mut motion = settled(island, &[1, 2, 3]);
+        motion.from = Horizontal::Right;
+        motion.leaving = vec![1, 2];
+        let positions = [(1, 10.0), (2, 50.0), (3, 90.0)];
+        motion.arrange(island, positions.into_iter(), None);
+        let item = |motion: &Motion, key| {
+            motion
+                .items
+                .iter()
+                .find(|item| item.key == key)
+                .unwrap()
+                .wait
+        };
+        assert!(
+            item(&motion, 1) < item(&motion, 2),
+            "the toggle on the right: the leftmost goes first"
+        );
+        assert!(!motion.gone());
+        run(&mut motion, Instant::now(), |_| {});
+        assert_eq!(motion.item(1, 10.0).1, 0.0);
+        assert_eq!(motion.item(3, 90.0).1, 1.0, "the rest stay");
+        assert!(motion.gone());
+        assert!(!motion.gone(), "said once");
+
+        // Called back on their way out: they come back.
+        motion.leaving.clear();
+        motion.arrange(island, positions.into_iter(), None);
+        run(&mut motion, Instant::now(), |_| {});
+        assert_eq!(motion.item(1, 10.0).1, 1.0);
     }
 
     #[test]

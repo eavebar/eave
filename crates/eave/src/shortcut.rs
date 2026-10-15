@@ -48,9 +48,7 @@ pub fn collect<M: Clone>(node: &Node<M>, out: &mut Vec<(Shortcut, M)>) {
         Kind::Center(content)
         | Kind::Page { content, .. }
         | Kind::Display(content)
-        | Kind::Scroll { content, .. } => {
-            collect(content, out)
-        }
+        | Kind::Scroll { content, .. } => collect(content, out),
         _ => {}
     }
 }
@@ -82,9 +80,7 @@ fn bindings<'a, M>(node: &'a mut Node<M>, out: &mut Vec<&'a mut Binding>) {
         Kind::Center(content)
         | Kind::Page { content, .. }
         | Kind::Display(content)
-        | Kind::Scroll { content, .. } => {
-            bindings(content, out)
-        }
+        | Kind::Scroll { content, .. } => bindings(content, out),
         _ => {}
     }
 }

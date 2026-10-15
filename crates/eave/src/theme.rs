@@ -121,6 +121,10 @@ pub const NUDGE_KICK_SQUISH: f32 = 0.03;
 /// How long the squash of an island showing or hiding its collapsible items lasts: a nudge's
 /// motion, slowed down to this.
 pub const COLLAPSE_SQUASH: Duration = Duration::from_millis(450);
+/// How far apart items that come or go together set off, like collapsible items shown or hidden:
+/// one at a time, in order from the toggle, so the eye follows them out. Short enough that a
+/// handful is all out about as soon as the island has sprung to its new width on `MORPH`.
+pub const STAGGER: Duration = Duration::from_millis(45);
 /// How long a collapsed item stays out after its widget nudges, from the last nudge.
 pub const REVEAL_SHOWN: Duration = Duration::from_millis(2000);
 /// A bar that shows on hover (D-88): how tall the strip at the top edge is that brings it out,

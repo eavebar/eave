@@ -93,7 +93,11 @@ impl State {
                 self.previous = Some(std::mem::replace(&mut self.current, previous));
             }
             previous => {
-                let index = self.current.index.max(previous.as_ref().map_or(0, |p| p.index)) + 1;
+                let index = self
+                    .current
+                    .index
+                    .max(previous.as_ref().map_or(0, |p| p.index))
+                    + 1;
                 let new = Shown::new(order, index, content);
                 // One still going out stays going; the one that hadn't come in yet never does.
                 let leaving = previous.filter(|previous| self.leaving() == Some(previous.index));
@@ -114,7 +118,9 @@ impl State {
     /// The page going out, while it's still there to draw.
     fn going(&self) -> Option<&Shown> {
         let index = self.pages.leaving()?;
-        self.previous.as_ref().filter(|previous| previous.index == index)
+        self.previous
+            .as_ref()
+            .filter(|previous| previous.index == index)
     }
 }
 
@@ -170,12 +176,11 @@ impl Widget<AnyMessage, iced::Theme, iced::Renderer> for Page {
             .as_mut()
             .filter(|previous| Some(previous.index) == going)
         {
-            children.push(
-                previous
-                    .content
-                    .as_widget_mut()
-                    .layout(&mut previous.tree, renderer, limits),
-            );
+            children.push(previous.content.as_widget_mut().layout(
+                &mut previous.tree,
+                renderer,
+                limits,
+            ));
         }
         layout::Node::with_children(size, children)
     }
@@ -379,7 +384,11 @@ mod tests {
         let state = tree.state.downcast_mut::<State>();
         let start = Instant::now();
         state.pages.step(start);
-        assert_eq!(state.pages.shown(state.current.index).0, 0, "the old one first");
+        assert_eq!(
+            state.pages.shown(state.current.index).0,
+            0,
+            "the old one first"
+        );
         assert!(!state.pages.step(start + theme::TAB_FADE));
         state.previous = None;
         assert_eq!(lay_out(&mut page, &mut tree).children().len(), 1);
@@ -399,7 +408,11 @@ mod tests {
         let state = tree.state.downcast_ref::<State>();
         assert_eq!(state.current.order, 0);
         assert_eq!(state.previous.as_ref().map(|p| p.order), Some(1));
-        assert_eq!(state.going().map(|p| p.order), Some(1), "what's on screen goes back");
+        assert_eq!(
+            state.going().map(|p| p.order),
+            Some(1),
+            "what's on screen goes back"
+        );
     }
 
     #[test]

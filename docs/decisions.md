@@ -2337,3 +2337,25 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 
 **Measured:** no dependency is added, and nothing runs while no page changes. Only a page that's leaving is held, until it's gone.
 
+---
+
+## D-107: Items that come or go together, one at a time
+
+**Status:** accepted (2026-10-15). Extends [D-55](#d-55-several-islands-per-zone-collapsible-items-and-dividers-set-in-configtoml) and [D-27](#d-27-islands-morph-when-their-content-changes).
+
+**What:** when several items come into an island at once, like the collapsible items shown by the chevron, each fades in `STAGGER` (45 ms) after the one before. The one nearest the chevron comes first. Hiding them goes the other way: the furthest goes first, and the island keeps its width until the last is gone. Then it springs to its new width.
+- **In:** `Motion::arrange` sees several new keys at once on an island that's already there, and gives each a `wait` before its fade sets off, in order from the toggle's end (`Motion::from`). A single new item, like a reveal (D-58) or a widget's item appearing, comes in at once as before. A new island grows out with all its items, as before.
+- **Out:** the items have to stay laid out while they fade, so the host keeps them. Pressing the chevron moves the island from `Bar::expanded` to `Bar::collapsing`. The view still lays out its collapsible items and hands their keys (dividers' too) to the island as `Toggle::leaving`. The island fades them out in turn and sends `Toggle::on_gone` (`Collapsed(island)`) once, when the last is out. The host then leaves them out, and the island springs narrower.
+- **Changing your mind:** pressing the chevron again while they leave brings them back, each from where its fade got to. A reload forgets an island's collapsing like its expanding.
+- The squash on pressing (`COLLAPSE_SQUASH`) is unchanged. The fades ride `MORPH`. `STAGGER` is a gap, not a feel.
+
+**Why:** the user asked for the icons to come out one at a time, in order. Coming out of the chevron in a line says where they came from, the way a popover grows out of its island. All at once, they just appear. Going back in the reverse order makes the round trip one motion, and keeping the width until they're gone means nothing slides under an item that's still fading.
+
+**Alternatives:**
+- **delaying each item's fade by its distance from the toggle in pixels:** wide items would wait longer for no reason. Their order is what the eye follows.
+- **staggering every new item, a new island's too:** the whole bar would ripple in at start, and a new island already grows out of a sliver.
+- **dropping the items at once and fading copies of them in the island:** iced can't draw an element it no longer has, so the host has to keep them laid out anyway.
+- **the island shrinking as each one goes:** the items left would slide under the ones still fading out.
+
+**Measured:** see the commit. Nothing runs while no item waits.
+

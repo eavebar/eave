@@ -98,6 +98,9 @@ pub struct Bar {
     alarm: Option<Instant>,
     /// Islands showing their collapsible items. The rest start, and stay, collapsed.
     expanded: Vec<IslandId>,
+    /// Islands whose collapsible items are on their way out, one at a time, until the island says
+    /// they're gone (`Collapsed`).
+    collapsing: Vec<IslandId>,
     /// How many times a collapsed item has come out on its own, so only the last timer of each
     /// puts it back.
     reveals: u64,
@@ -273,6 +276,8 @@ pub enum Message {
     BarPressed,
     /// The toggle on an island with collapsible items was pressed: show them, or hide them.
     ToggleCollapse(IslandId),
+    /// The island's collapsible items are all faded out: they can go.
+    Collapsed(IslandId),
     /// Hyprland saw a primary click somewhere ([`eave_hyprland::report_clicks`]).
     Clicked,
     PointerEntered,
@@ -376,6 +381,7 @@ impl Bar {
             timer: 0,
             alarm: None,
             expanded: Vec::new(),
+            collapsing: Vec::new(),
             reveals: 0,
             panel_wanted: None,
             screen: notch::Screen::default(),
@@ -470,11 +476,13 @@ impl Bar {
 
         // An island that no longer has collapsible items starts collapsed if it gets some again.
         let instances = &self.instances;
-        self.expanded.retain(|island| {
+        let collapsible = |island: &IslandId| {
             instances
                 .iter()
                 .any(|instance| instance.island() == *island && instance.entry.collapsible)
-        });
+        };
+        self.expanded.retain(collapsible);
+        self.collapsing.retain(collapsible);
 
         // A popover whose instance is gone has no island left to morph back into.
         let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.popovers)
@@ -1666,13 +1674,22 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
                     instance.revealed = None;
                 }
             }
+            // Out: they stay until they've faded out. On their way out: back.
             match bar.expanded.iter().position(|expanded| *expanded == island) {
                 Some(position) => {
                     bar.expanded.remove(position);
+                    bar.collapsing.push(island);
                 }
-                None => bar.expanded.push(island),
+                None => {
+                    bar.collapsing.retain(|collapsing| *collapsing != island);
+                    bar.expanded.push(island);
+                }
             }
             send(bar.close_popover())
+        }
+        Message::Collapsed(island) => {
+            bar.collapsing.retain(|collapsing| *collapsing != island);
+            Task::none()
         }
         Message::Clicked if !bar.pointer_inside => send(bar.close_popover()),
         Message::PointerEntered => {
@@ -2132,19 +2149,28 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             };
             let collapsible = instances().any(|instance| instance.entry.collapsible);
             let expanded = bar.expanded.contains(&island);
+            let collapsing = bar.collapsing.contains(&island);
             let mut items = Vec::new();
             let mut groups = Vec::new();
+            let mut leaving = Vec::new();
             for instance in instances() {
-                if instance.entry.collapsible && !expanded && instance.revealed.is_none() {
+                let hidden = instance.entry.collapsible && !expanded && instance.revealed.is_none();
+                if hidden && !collapsing {
                     continue;
                 }
                 let Some(item) = item_view(instance, window, &bar.icons, palette) else {
                     continue;
                 };
+                if hidden {
+                    leaving.push(instance.id);
+                }
                 // Only between two items that show: one next to a hidden item goes with it.
                 if instance.entry.divider && !items.is_empty() {
                     items.push((instance.id | DIVIDER_KEY, kit::divider(palette)));
                     groups.push(None);
+                    if hidden {
+                        leaving.push(instance.id | DIVIDER_KEY);
+                    }
                 }
                 items.push((instance.id, item));
                 groups.push(instance.entry.width_group.as_deref());
@@ -2180,6 +2206,8 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                 element: toggle_view(island, side, expanded, palette),
                 side,
                 expanded,
+                leaving,
+                on_gone: collapsing.then_some(Message::Collapsed(island)),
             });
             let attach = instances()
                 .next()
@@ -3755,6 +3783,20 @@ mod tests {
         let _ = update(&mut bar, Message::ToggleCollapse(island));
         let _ = update(&mut bar, Message::ToggleCollapse(island));
         assert!(bar.expanded.is_empty());
+        assert_eq!(
+            bar.collapsing,
+            [island],
+            "its items stay until they've faded out"
+        );
+        let _ = update(&mut bar, Message::ToggleCollapse(island));
+        assert_eq!(
+            (bar.expanded.as_slice(), bar.collapsing.as_slice()),
+            ([island].as_slice(), [].as_slice()),
+            "called back on their way out"
+        );
+        let _ = update(&mut bar, Message::ToggleCollapse(island));
+        let _ = update(&mut bar, Message::Collapsed(island));
+        assert!(bar.expanded.is_empty() && bar.collapsing.is_empty());
     }
 
     struct Nudger;
