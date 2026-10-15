@@ -182,6 +182,7 @@ It checks what the bar depends on and says what's wrong, and what to do about it
 - Every widget it names is in this build and takes its options.
 - No two actions in the dormer want the same key.
 - Hyprland answers. The monitor the bar opens on has its notch measured, if the kernel shows one.
+- Hyprland loads hypr-eave, and the one eave-build installed last, not an older copy ([D-113](decisions.md)). It's optional: a warning only when it's built and not loaded, or the glass theme needs it.
 - `eave.service` and `eave-rebuild.path` are enabled, systemd knows `WAYLAND_DISPLAY` and `HYPRLAND_INSTANCE_SIGNATURE`, and the update units are installed. Asked over D-Bus, and skipped without a systemd user manager.
 
 It doesn't need the bar, so it helps most when the bar won't start. It exits with 1 when it found a problem. Run it with the binary the bar runs, `~/.local/bin/eave doctor`: it checks the widgets that binary has. `--report <path>` also writes what it found as TOML. The `essential` widget's Check health, in the dormer, runs it that way and shows the report in a dialog.
@@ -242,7 +243,7 @@ bind = SUPER, M, event, eave-action volume mute
 
 ## Glass
 
-`theme = "glass"` makes the islands liquid glass: what's behind them shows through, frosted and bent at their edges ([D-112](decisions.md)). That takes `hypr-eave`, a Hyprland plugin in this repository. `eave-build` builds it against the Hyprland you have whenever Hyprland's headers are installed (`pkg-config hyprland`; on Arch they come with the `hyprland` package). It installs it as `~/.local/share/eave/hypr-eave.so`. Load it from Hyprland's config:
+`theme = "glass"` makes the islands liquid glass: what's behind them shows through, frosted and bent at their edges ([D-112](decisions.md)). That takes `hypr-eave`, a Hyprland plugin in this repository. `eave-build` builds it against the Hyprland you have whenever Hyprland's headers are installed (`pkg-config hyprland`; on Arch they come with the `hyprland` package). It installs it as `~/.local/share/eave/hypr-eave.so`. Nothing loads it for you: add it to Hyprland's config. While Hyprland doesn't load it, every `eave-build` prints this line, and `eave doctor` warns:
 
 ```lua
 -- hyprland.lua (Hyprland 0.56+)

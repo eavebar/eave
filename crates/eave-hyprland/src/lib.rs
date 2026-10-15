@@ -289,6 +289,15 @@ async fn read_events(bus: broadcast::Sender<Signal>) {
     }
 }
 
+/// Hyprland's process id, from its instance's lock file.
+pub fn pid() -> io::Result<u32> {
+    let lock = std::fs::read_to_string(socket_path("hyprland.lock")?)?;
+    lock.lines()
+        .next()
+        .and_then(|line| line.trim().parse().ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "hyprland.lock has no pid"))
+}
+
 fn socket_path(name: &str) -> io::Result<PathBuf> {
     let signature = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").ok_or_else(|| {
         io::Error::new(

@@ -160,7 +160,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/app.rs               state, Message, update/view/subscription, popover lifecycle, the notifications panel and its clocks, surface fit, reload
   src/config.rs            config.toml → zone entries, with their island, divider and collapsible
   src/watch.rs             inotify watch on the config directory
-  src/doctor/              eave doctor: checks config.toml, widgets, keys, the screen and systemd; text and TOML report
+  src/doctor/              eave doctor: checks config.toml, widgets, keys, the screen, hypr-eave and systemd; text and TOML report
   src/kit.rs               ui nodes → iced elements, styled
   src/icon.rs              status icons (volume, Wi-Fi, wired, battery, brightness, media) as vector paths
   src/apps.rs              app icons: desktop entry → icon theme → 32 px bitmap, off the UI thread

@@ -53,6 +53,13 @@ pub struct WorkspaceRef {
     pub name: String,
 }
 
+/// From `plugin list`: a plugin loaded into Hyprland.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Plugin {
+    pub name: String,
+}
+
 /// From `devices`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
