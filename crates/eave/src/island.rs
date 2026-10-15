@@ -2031,7 +2031,11 @@ fn draw_island<M>(
         state.shape.clear();
     }
     // Squeezed by the same few pixels whatever the island's width, about its center.
-    let scale = (1.0 - 2.0 * motion.inset.value / shape.width).max(0.5);
+    let scale = if shown {
+        (1.0 - 2.0 * motion.inset.value / shape.width).max(0.5)
+    } else {
+        1.0
+    };
     let center = shape.center();
     let transformation = Transformation::translate(center.x, center.y)
         * Transformation::scale(scale)
@@ -2096,46 +2100,50 @@ fn draw_island<M>(
     renderer.with_translation(motion.offset(), |renderer| {
         renderer.with_transformation(transformation, |renderer| {
             let frame_size = Size::new(body.width + 2.0 * room.x, body.height + 2.0 * room.y);
-            let geometry = state.shape.draw(renderer, frame_size, |frame| {
-                let size = body.size();
-                let outline = Rectangle::new(Point::ORIGIN + room, size);
-                // The jelly bends the shape itself: its sides are where they'd be without the
-                // reach, and what reaches past one moves with it.
-                let jellied = Rectangle::new(
-                    Point::ORIGIN + room + Vector::new(bleed.left, bleed.top),
-                    shape.size(),
-                );
-                // Bent by the jelly and stretched by the drag while they move, both paths the
-                // same way.
-                let bend = |path: Path| {
-                    if bent {
-                        warp(&path, |at| {
-                            let at = motion.jelly.displace(jellied, at);
-                            if pulled {
-                                at + motion.pull(jellied, at)
-                            } else {
-                                at
-                            }
-                        })
-                    } else {
-                        path
-                    }
-                };
-                // Hanging from the top edge, where the surface starts, if it's attached there and
-                // has shoulders: on the sides that don't reach on, and no further than the frame.
-                // In a solid bar, flowing out of its bottom instead (D-89).
-                let hanging = shoulders.filter(|_| bleed.top > 0.0).map(|shoulder| {
-                    let most = room.x / (1.0 + shoulder.smoothing);
-                    let shoulder = CornerShape::new(shoulder.radius.min(most), shoulder.smoothing);
-                    let sides = [bleed.left <= 0.0, bleed.right <= 0.0];
-                    (room.y + band.unwrap_or(0.0) - body.y, shoulder, sides)
-                });
-                // Black on black, with no border: what touches the notch or the bezel reads as
-                // one shape with it (D-74).
-                let outline = island_path(outline, corners, hanging, band.is_some());
-                frame.fill(&bend(outline), fill);
+            // Not while it has no size yet: the skin can't bend nothing.
+            let geometry = shown.then(|| {
+                state.shape.draw(renderer, frame_size, |frame| {
+                    let size = body.size();
+                    let outline = Rectangle::new(Point::ORIGIN + room, size);
+                    // The jelly bends the shape itself: its sides are where they'd be without the
+                    // reach, and what reaches past one moves with it.
+                    let jellied = Rectangle::new(
+                        Point::ORIGIN + room + Vector::new(bleed.left, bleed.top),
+                        shape.size(),
+                    );
+                    // Bent by the jelly and stretched by the drag while they move, both paths the
+                    // same way.
+                    let bend = |path: Path| {
+                        if bent {
+                            warp(&path, |at| {
+                                let at = motion.jelly.displace(jellied, at);
+                                if pulled {
+                                    at + motion.pull(jellied, at)
+                                } else {
+                                    at
+                                }
+                            })
+                        } else {
+                            path
+                        }
+                    };
+                    // Hanging from the top edge, where the surface starts, if it's attached there and
+                    // has shoulders: on the sides that don't reach on, and no further than the frame.
+                    // In a solid bar, flowing out of its bottom instead (D-89).
+                    let hanging = shoulders.filter(|_| bleed.top > 0.0).map(|shoulder| {
+                        let most = room.x / (1.0 + shoulder.smoothing);
+                        let shoulder =
+                            CornerShape::new(shoulder.radius.min(most), shoulder.smoothing);
+                        let sides = [bleed.left <= 0.0, bleed.right <= 0.0];
+                        (room.y + band.unwrap_or(0.0) - body.y, shoulder, sides)
+                    });
+                    // Black on black, with no border: what touches the notch or the bezel reads as
+                    // one shape with it (D-74).
+                    let outline = island_path(outline, corners, hanging, band.is_some());
+                    frame.fill(&bend(outline), fill);
+                })
             });
-            if shown {
+            if let Some(geometry) = geometry {
                 renderer.with_translation(Vector::new(body.x, body.y) - room, |renderer| {
                     renderer.draw_geometry(geometry);
                 });
@@ -3320,6 +3328,16 @@ mod tests {
             let shape = motion.shape();
             if shape.height >= 1.0 {
                 joined &= motion.pour(shape).is_none_or(|pour| pour.joined());
+            }
+            // Whatever it is, its outline is somewhere: a NaN aborts the tessellator.
+            if let Some(path) = motion.pour(shape).and_then(|pour| pour.path()) {
+                assert!(
+                    path.raw()
+                        .iter()
+                        .flat_map(|event| [event.from(), event.to()])
+                        .all(|at| at.x.is_finite() && at.y.is_finite()),
+                    "a finite pour"
+                );
             }
             // The top hangs back: it's still in the island once the bottom's most of the way.
             let bottom = (shape.y + shape.height - 38.0) / (206.0 - 38.0);
