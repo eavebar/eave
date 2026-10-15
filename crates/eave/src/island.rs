@@ -519,6 +519,10 @@ struct PopoverMotion {
     items: Spring,
     /// How much the panel's content shows.
     panel: Spring,
+    /// Whether the content has shown in full since this way of the morph set off. Until then it
+    /// waits for the shape to be halfway out of the island; after, the panel only changes size,
+    /// and the content stays while it does.
+    out: bool,
     /// Which popover it is.
     key: Option<u64>,
     /// Whether the pointer is on it, as last reported.
@@ -542,6 +546,7 @@ impl Default for PopoverMotion {
             arrived: false,
             items: Spring::new(1.0, FADE),
             panel: Spring::new(0.0, FADE),
+            out: false,
             key: None,
             hovered: false,
         }
@@ -759,6 +764,7 @@ impl Motion {
                 // Turning around squishes again, and a drop goes by its ball again.
                 if open != popover_state.open {
                     popover_state.squished = false;
+                    popover_state.out = false;
                     popover_state.via = 0;
                     popover_state.arrived = false;
                 }
@@ -796,6 +802,7 @@ impl Motion {
         {
             popover.panel = Spring::new(0.0, FADE);
             popover.squished = false;
+            popover.out = false;
             popover.closed = false;
             true
         } else {
@@ -857,8 +864,13 @@ impl Motion {
                     bounce = true;
                 }
                 popover.items.target = 0.0;
-                popover.panel.target = if popover.items.value < REST_DISTANCE
-                    && self.edges.progress(ball.unwrap_or(island), panel) > 0.5
+                // Out once, a change of size (another page, a row more) keeps the content: the
+                // halfway rule measures from the island, and a big enough change of size would
+                // cover the content with the island's color until the shape got there.
+                popover.out |= popover.panel.value >= 1.0 - REST_DISTANCE;
+                popover.panel.target = if popover.out
+                    || popover.items.value < REST_DISTANCE
+                        && self.edges.progress(ball.unwrap_or(island), panel) > 0.5
                 {
                     1.0
                 } else {
@@ -2638,6 +2650,30 @@ mod tests {
         assert_eq!(motion.popover.panel.value, 0.0);
         assert!(motion.closing_done());
         assert!(!motion.closing_done(), "said only once");
+    }
+
+    #[test]
+    fn a_panel_changing_size_keeps_its_content() {
+        let island = rect(100.0, 120.0);
+        let tall = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 480.0));
+        let short = Rectangle {
+            height: 150.0,
+            ..tall
+        };
+        let mut motion = settled(island, &[1]);
+        popover(&mut motion, true, tall, true);
+        run(&mut motion, Instant::now(), |_| {});
+        assert_eq!(motion.popover.panel.value, 1.0);
+
+        for to in [short, tall] {
+            popover(&mut motion, true, to, true);
+            let mut faded = false;
+            run(&mut motion, Instant::now(), |motion| {
+                faded |= motion.popover.panel.value < 1.0;
+            });
+            assert!(!faded, "no flash of the island's color");
+            assert_eq!(motion.edges.rect(), to);
+        }
     }
 
     #[test]
