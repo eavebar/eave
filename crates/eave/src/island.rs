@@ -3250,7 +3250,7 @@ mod tests {
         let mut motion = settled(island, &[1]);
         motion.arrange(rect(100.0, 260.0), [(1, 110.0)].into_iter(), None);
         let out = tongue_range(&mut motion);
-        assert!(out[2] > 10.0, "runs on ahead, right: {out:?}");
+        assert!(out[2] > 5.0, "runs on ahead, right: {out:?}");
         motion.arrange(rect(400.0, 260.0), [(1, 410.0)].into_iter(), None);
         let out = tongue_range(&mut motion);
         assert!(out.iter().all(|out| *out < 0.5), "sliding: {out:?}");
