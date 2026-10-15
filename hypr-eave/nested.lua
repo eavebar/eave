@@ -1,7 +1,7 @@
 -- Nested Hyprland for the eave glass spike. ALT is the modifier, so the outer session keeps SUPER.
 hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 1.75 })
 
-hl.plugin.load("/home/francesco/code/fran/eaveshell/eave/.worktrees/glass-spike/hypr-glass/eave-glass.so")
+hl.plugin.load("/home/francesco/code/fran/eaveshell/eave/.worktrees/glass-spike/hypr-eave/hypr-eave.so")
 
 hl.config({
 	general = { gaps_in = 5, gaps_out = 5, border_size = 1 },

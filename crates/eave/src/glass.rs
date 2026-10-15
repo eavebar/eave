@@ -1,7 +1,7 @@
 //! glass-spike: what's behind the bar, as the compositor's glass plugin sees it, so an island
 //! over something bright can turn light and keep its ink readable.
 //!
-//! The plugin (`hypr-glass/`) sends a coarse grid of the frosted backdrop's brightness over
+//! The plugin (`hypr-eave/`) sends a coarse grid of the frosted backdrop's brightness over
 //! each eave surface, as a Hyprland custom event, whenever it changes:
 //! `eave-glass <pid> <cell> <cols> <rows> <one hex digit per cell, row by row>`, with cells
 //! `cell` logical pixels square from the surface's top left.

@@ -7,7 +7,7 @@
 // so they fade to glass with no change in eave. The shape comes only from the buffer drawn this
 // frame, at the box it's drawn at, so the glass can't lag a morph or a resize.
 //
-// Throwaway: no config, no transforms (rotated monitors), knobs through `hyprctl eaveglass`.
+// Throwaway: no config, no transforms (rotated monitors), knobs through `hyprctl hypreave`.
 
 // Standard headers first: they must not see the define below.
 #include <any>
@@ -514,7 +514,7 @@ static GLuint link(GLuint vs, GLuint fs) {
     if (!ok) {
         char log[2048];
         glGetProgramInfoLog(id, sizeof(log), nullptr, log);
-        Log::logger->log(Log::ERR, "[eave-glass] link: {}", log);
+        Log::logger->log(Log::ERR, "[hypr-eave] link: {}", log);
         glDeleteProgram(id);
         return 0;
     }
@@ -561,7 +561,7 @@ static GLuint compile(GLenum type, const std::string& src) {
     if (!ok) {
         char log[2048];
         glGetShaderInfoLog(s, sizeof(log), nullptr, log);
-        Log::logger->log(Log::ERR, "[eave-glass] shader: {}", log);
+        Log::logger->log(Log::ERR, "[hypr-eave] shader: {}", log);
         glDeleteShader(s);
         return 0;
     }
@@ -595,7 +595,7 @@ static SProgram* ensureProgram(bool external) {
     if (!ok) {
         char log[2048];
         glGetProgramInfoLog(p.id, sizeof(log), nullptr, log);
-        Log::logger->log(Log::ERR, "[eave-glass] link: {}", log);
+        Log::logger->log(Log::ERR, "[hypr-eave] link: {}", log);
         glDeleteProgram(p.id);
         p.id = 0;
         return nullptr;
@@ -708,7 +708,7 @@ static void onBegin() {
 // asked for and stays, so a popover sliding open doesn't reallocate every frame.
 static void ensureBackdrop(SP<IFramebuffer>& fb, const SP<IFramebuffer>& like, const Vector2D& need) {
     if (!fb)
-        fb = g_pHyprRenderer->createFB("eave-glass");
+        fb = g_pHyprRenderer->createFB("hypr-eave");
     const Vector2D size = {std::max(need.x, fb->m_size.x), std::max(need.y, fb->m_size.y)};
     if (!fb->isAllocated() || fb->m_size.x < need.x || fb->m_size.y < need.y || fb->m_drmFormat != like->m_drmFormat) {
         fb->release();
@@ -1276,7 +1276,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     PHANDLE = handle;
 
     if (std::string{__hyprland_api_get_hash()} != __hyprland_api_get_client_hash())
-        throw std::runtime_error("[eave-glass] built for a different Hyprland");
+        throw std::runtime_error("[hypr-eave] built for a different Hyprland");
 
     g_hooks.stage = Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
         if (stage == RENDER_BEGIN)
@@ -1291,9 +1291,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         }
     });
     g_hooks.monitorRemoved = Event::bus()->m_events.monitor.destroyMon.listen([](PHLMONITOR mon) { g_fbs.erase(mon.get()); });
-    g_hooks.command        = HyprlandAPI::registerHyprCtlCommand(PHANDLE, SHyprCtlCommand{.name = "eaveglass", .exact = false, .fn = onCommand});
+    g_hooks.command        = HyprlandAPI::registerHyprCtlCommand(PHANDLE, SHyprCtlCommand{.name = "hypreave", .exact = false, .fn = onCommand});
 
-    return {"eave-glass", "Refraction behind eave's surfaces (spike)", "eave", "0.0.1"};
+    return {"hypr-eave", "Liquid glass behind eave's islands (spike)", "eave", "0.0.1"};
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
