@@ -126,6 +126,9 @@ pub struct Bar {
     /// The `notch`, `screen` and `islands` settings, the top level's and each monitor's, being or
     /// last looked into. `None` before the first.
     screen_setting: Option<config::Screens>,
+    /// Numbers the looks into the screen, so only the last one's answer counts: a scale changed
+    /// twice in a row can be answered out of order.
+    looks: u64,
     /// The connector of the output the bar is on, once the first look into the screen found it:
     /// the one its settings are picked for (D-94), whichever has focus later.
     output: Option<String>,
@@ -370,9 +373,8 @@ pub enum Message {
     ConfigChanged(Result<Config, String>),
     /// The desktop's color scheme, now or since it changed.
     ColorScheme(ColorScheme),
-    /// The screen for the `notch`, `screen` and `islands` settings has been looked into, on this
-    /// output.
-    ScreenFound(config::Screens, Option<String>, notch::Screen),
+    /// The screen has been looked into, the `look`th time, on this output.
+    ScreenFound(u64, Option<String>, notch::Screen),
     /// An app's icon has loaded, or turned out not to exist.
     AppIcon(String, Option<AppIcon>),
     /// A plugin's icon file has been drawn, or turned out not to be one.
@@ -430,6 +432,7 @@ impl Bar {
             panel_wanted: None,
             screen: notch::Screen::default(),
             screen_setting: None,
+            looks: 0,
             output: None,
             fullscreen: false,
             checks: 0,
@@ -447,6 +450,20 @@ impl Bar {
         (bar, task)
     }
 
+    /// Looks into the screen for the current settings, at the output's scale now. Settings in
+    /// physical pixels become logical ones here, so it's done again whenever the scale changes.
+    fn look_at_screen(&mut self) -> Task<Message> {
+        let Some(setting) = self.screen_setting.clone() else {
+            return Task::none();
+        };
+        self.looks += 1;
+        let look = self.looks;
+        Task::perform(
+            notch::resolve(setting, self.output.clone()),
+            move |(output, screen)| Message::ScreenFound(look, output, screen),
+        )
+    }
+
     /// Makes the bar match `config`. Instances whose entry didn't change are kept as they are,
     /// state, subscription and open popover included; the rest are built fresh.
     fn apply(&mut self, config: Config) -> Task<Message> {
@@ -461,11 +478,8 @@ impl Bar {
         let mut tasks = Vec::new();
         let setting = config.screens();
         if self.screen_setting.as_ref() != Some(&setting) {
-            self.screen_setting = Some(setting.clone());
-            tasks.push(Task::perform(
-                notch::resolve(setting.clone(), self.output.clone()),
-                move |(output, screen)| Message::ScreenFound(setting.clone(), output, screen),
-            ));
+            self.screen_setting = Some(setting);
+            tasks.push(self.look_at_screen());
         }
 
         // Each entry's instance, by the entry's index, so parts find their owner.
@@ -1950,10 +1964,13 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::Width(window, width) => {
-            if bar.widths.insert(window, width) == Some(width) {
-                return Task::none();
+            match bar.widths.insert(window, width) {
+                Some(was) if was == width => Task::none(),
+                // The bar spans its output, so a new width is a new scale or mode: the screen's
+                // physical pixels are a different number of logical ones now (D-115).
+                Some(_) => Task::batch([bar.look_at_screen(), bar.fit(window)]),
+                None => bar.fit(window),
             }
-            bar.fit(window)
         }
         Message::PointerLeft => {
             bar.pointer_inside = false;
@@ -2183,12 +2200,12 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             }
             Task::none()
         }
-        Message::ScreenFound(setting, output, screen) => {
+        Message::ScreenFound(look, output, screen) => {
             if bar.output.is_none() {
                 bar.output = output;
             }
-            // Looked into for a setting that has changed since: its own answer is on the way.
-            if bar.screen_setting.as_ref() != Some(&setting) || bar.screen == screen {
+            // Looked into before the setting or the scale changed: the newer answer is on the way.
+            if look != bar.looks || bar.screen == screen {
                 return Task::none();
             }
             let moved = bar.screen.inset != screen.inset
@@ -3850,6 +3867,35 @@ mod tests {
         fullscreen(&mut bar, true);
         let _ = update(&mut bar, Message::WorkspaceChanged);
         assert!(!bar.out());
+    }
+
+    #[test]
+    fn a_new_width_looks_into_the_screen_again_and_only_the_last_look_counts() {
+        let mut bar = notifying_bar_with("");
+        let window = bar.windows[0];
+        let looks = bar.looks;
+        // Laid out the first time: nothing changed.
+        let _ = update(&mut bar, Message::Width(window, 1512.0));
+        let _ = update(&mut bar, Message::Width(window, 1512.0));
+        assert_eq!(bar.looks, looks);
+        // The scale changed twice: two looks, and the first one's late answer is dropped.
+        let _ = update(&mut bar, Message::Width(window, 2268.0));
+        let _ = update(&mut bar, Message::Width(window, 1512.0));
+        assert_eq!(bar.looks, looks + 2);
+        let stale = notch::Screen {
+            grow: 9.0,
+            ..notch::Screen::default()
+        };
+        let _ = update(
+            &mut bar,
+            Message::ScreenFound(looks + 1, None, stale.clone()),
+        );
+        assert_ne!(bar.screen, stale);
+        let _ = update(
+            &mut bar,
+            Message::ScreenFound(looks + 2, None, stale.clone()),
+        );
+        assert_eq!(bar.screen, stale);
     }
 
     #[test]
