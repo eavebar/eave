@@ -6,7 +6,7 @@
 //! widgets' dialogs, which come out of whatever was acted on to open them (D-90).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant, SystemTime};
 
 use eave_api::erased::{AnyMessage, DialogRequest, ErasedWidget, PopoverRequest};
@@ -30,6 +30,7 @@ use crate::countdown::Countdown;
 use crate::cover::{self, Cover};
 use crate::dialog::{self, Dialog, Origin, Touch, Touched};
 use crate::dormer::{self, Recent, Session, Source};
+use crate::glass;
 use crate::island::{self, Island, Placement, Toggle};
 use crate::lift::{self, Lift};
 use crate::notch::{self, Notch, Place, Side};
@@ -80,6 +81,8 @@ pub struct Bar {
     dialog: Option<Dialog>,
     /// Each island's shape as it was last drawn, for a dialog to come out of and go back into.
     shapes: RefCell<HashMap<IslandId, island::Shape>>,
+    /// glass-spike: the islands over something bright, which draw light (see `glass`).
+    light_islands: HashSet<IslandId>,
     /// The dialog asked for, while where its top goes is looked up: whose, and where it comes
     /// out of.
     asked: Option<(u64, Origin)>,
@@ -342,6 +345,8 @@ pub enum Message {
     Unreveal(u64, u64),
     /// Hyprland's windows or workspaces changed: whether one covers the screen may have too.
     CheckFullscreen,
+    /// glass-spike: how bright it is behind the bar, from the compositor's glass.
+    Backdrop(glass::Backdrop),
     /// Whether a window covers the screen, as of the check with this number.
     Fullscreen(u64, bool),
     /// The focused workspace changed.
@@ -402,6 +407,7 @@ impl Bar {
             recent: Recent::default(),
             dialog: None,
             shapes: RefCell::default(),
+            light_islands: HashSet::new(),
             asked: None,
             touched: None,
             warned: Vec::new(),
@@ -1963,6 +1969,18 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             bar.sinking = None;
             bar.move_to(Layer::Top)
         }
+        Message::Backdrop(backdrop) => {
+            let shapes = bar.shapes.borrow();
+            let light = shapes
+                .iter()
+                .filter(|(_, shape)| shape.get().width > 0.0)
+                .filter(|(id, shape)| backdrop.light(shape.get(), bar.light_islands.contains(id)))
+                .map(|(id, _)| *id)
+                .collect();
+            drop(shapes);
+            bar.light_islands = light;
+            Task::none()
+        }
         Message::CheckFullscreen => {
             bar.checks += 1;
             let check = bar.checks;
@@ -2383,6 +2401,28 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                     .filter(move |instance| instance.island() == island && instance.owner.is_none())
             };
             let collapsible = instances().any(|instance| instance.entry.collapsible);
+            // The open one wins over one still closing in the same island.
+            let popover = bar
+                .popovers
+                .iter()
+                .filter(|popover| popover.window == window)
+                .filter(|popover| instances().any(|instance| instance.id == popover.instance))
+                .max_by_key(|popover| popover.open);
+            // A popover wins: the notifications wait for it.
+            let popover = match popover {
+                Some(popover) => Some(popover_view(bar, popover)),
+                None => notices
+                    .filter(|_| island == notice_island)
+                    .map(|panel| notices_view(bar, panel)),
+            };
+            // glass-spike: light over something bright. Popovers build with the bar's palette,
+            // so an island with one stays as the bar is.
+            let light = popover.is_none() && bar.light_islands.contains(&island);
+            let palette = if light {
+                Scheme::Light.palette()
+            } else {
+                palette
+            };
             let expanded = bar.expanded.contains(&island);
             let collapsing = bar.collapsing.contains(&island);
             let mut items = Vec::new();
@@ -2413,20 +2453,6 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
             let nudges = instances()
                 .filter_map(|instance| Some((instance.id, instance.nudge?)))
                 .collect();
-            // The open one wins over one still closing in the same island.
-            let popover = bar
-                .popovers
-                .iter()
-                .filter(|popover| popover.window == window)
-                .filter(|popover| instances().any(|instance| instance.id == popover.instance))
-                .max_by_key(|popover| popover.open);
-            // A popover wins: the notifications wait for it.
-            let popover = match popover {
-                Some(popover) => Some(popover_view(bar, popover)),
-                None => notices
-                    .filter(|_| island == notice_island)
-                    .map(|panel| notices_view(bar, panel)),
-            };
 
             if items.is_empty() && popover.is_none() && !collapsible {
                 // Not drawn: nothing can come out of it.
@@ -2452,6 +2478,7 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                 .unwrap_or_default();
             Some((
                 Island::new(items)
+                    .theme(light.then(|| Scheme::Light.theme()))
                     .align(align)
                     .popover(popover)
                     .nudges(nudges)
@@ -3201,6 +3228,9 @@ fn hyprland(update: eave_hyprland::Update<()>) -> Option<Message> {
         Event::Custom(data) => match data.as_str() {
             eave_hyprland::CLICK => Some(Message::Clicked),
             eave_hyprland::DORMER => Some(Message::Dormer(dormer::Event::Toggle)),
+            data if data.starts_with(glass::EVENT) => {
+                glass::Backdrop::parse(&data[glass::EVENT.len()..]).map(Message::Backdrop)
+            }
             data => {
                 let mut words = data.split_whitespace();
                 match (words.next()?, words.next(), words.next(), words.next()) {

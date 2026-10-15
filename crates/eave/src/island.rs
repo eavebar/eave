@@ -83,6 +83,8 @@ pub struct Island<'a, M> {
     height: f32,
     /// Where it puts its shape as it's drawn, if given: for another island to come out of it.
     shape: Option<Shape>,
+    /// glass-spike: draws with this theme instead of the bar's.
+    theme: Option<iced::Theme>,
     /// The screen's edges it keeps clear of, if any (D-104).
     walls: Option<Walls>,
 }
@@ -194,7 +196,14 @@ impl<'a, M> Island<'a, M> {
             height: theme::ISLAND_HEIGHT as f32,
             shape: None,
             walls: None,
+            theme: None,
         }
+    }
+
+    /// glass-spike: drawn with this theme instead of the bar's: its fill and its items'.
+    pub fn theme(mut self, theme: Option<iced::Theme>) -> Self {
+        self.theme = theme;
+        self
     }
 
     /// Keeps `WALL_GAP` from these edges of the screen, and bounces off them (D-104).
@@ -2344,6 +2353,11 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         if self.popover.is_some() {
             return;
         }
+        let own = self.theme.as_ref().map(|theme| renderer::Style {
+            text_color: Palette::of(theme).normal,
+        });
+        let theme = self.theme.as_ref().unwrap_or(theme);
+        let style = own.as_ref().unwrap_or(style);
         draw_island(
             tree.state.downcast_ref::<State>(),
             &self.keys,

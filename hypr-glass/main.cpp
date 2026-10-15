@@ -29,6 +29,9 @@
 #include <hyprland/src/protocols/core/Compositor.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/event/EventBus.hpp>
+#include <hyprland/src/managers/EventManager.hpp>
+#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
+#include <hyprland/src/managers/eventLoop/EventLoopTimer.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/protocols/wlr-layer-shell-unstable-v1.hpp>
 #undef private
@@ -48,7 +51,8 @@ static struct {
     float frost    = 2.F;   // spread of each blur step (0 = clear glass)
     int   depth    = 3;     // how many times the blur halves the backdrop: each doubles its reach
     float clear    = 0.7F;  // how much of the backdrop shows through the island's color
-    bool  light    = false; // white islands: multiply the glass in, instead of screening it
+    bool  invert   = false; // ink: the opposite of the glass behind each pixel
+    bool  report   = true;  // tell eave how bright it is behind each surface, so islands can turn light
     std::vector<int> pids;  // only these eaves' layers (none = every eave)
     int   skip     = 0;     // for measuring: 1 skips the copy, 2 the refraction
 } g_params;
@@ -158,7 +162,7 @@ static std::string timingStats() {
 // needs its own sampler type.
 struct SProgram {
     GLuint id = 0;
-    GLint  backdrop, mask, attached, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, clear, light, rect;
+    GLint  backdrop, mask, attached, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, clear, invert, rect;
 };
 static SProgram g_progs[2]; // [0] sampler2D, [1] samplerExternalOES
 static GLuint   g_vao = 0, g_vbo = 0;
@@ -192,26 +196,47 @@ uniform float strength; // px
 uniform float chroma;
 uniform float rim;
 uniform float clear;    // how much of the backdrop the island's color lets through
-uniform bool  light;
+uniform bool  invert;   // ink: the opposite of the glass behind each pixel, not its own
 uniform sampler2D attached; // per column of the surface: how far down it's attached to the top
 out vec4 fragColor;
 
-float cover(vec2 px) {
+vec4 layer(vec2 px) {
     vec2 uv = (px - surf.xy) / surf.zw;
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
-        return 0.0;
-    return texture(mask, uv).a;
+        return vec4(0.0);
+    return texture(mask, uv); // premultiplied
 }
 
-// Over the layer, which is already drawn. Dark: screen, so black island becomes glass and white
-// ink stays white. Light: multiply, so white island becomes glass and black ink stays black. The
-// blend function does the other half.
+float cover(vec2 px) {
+    return layer(px).a;
+}
+
+float luma(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// How light the island around p is: 0 for a black one, 1 for a white one (eave turns an island
+// light over something bright). Most of what's a band away is the island's own color, not ink.
+float lightness;
+
+// Replaces the layer's pixel, which is already drawn. A black island becomes glass by a screen,
+// so white ink stays white; a white island by a multiply, so black ink stays black.
 void put(vec3 glass, float a) {
+    vec4 t = layer(gl_FragCoord.xy);
+    vec3 ink = t.rgb / max(t.a, 1e-4);
+    vec3 dark  = clear * glass;
+    vec3 light = vec3(1.0 - clear) + clear * glass;
+    vec3 col = mix(ink + (1.0 - ink) * dark, ink * light, lightness);
+    if (invert) {
+        // How much of the pixel is ink rather than island, for the grey ink only: the opposite
+        // of the glass right behind it, in proportion, so edges stay smooth.
+        vec3  behind = mix(dark, light, lightness);
+        float amount = abs(luma(ink) - lightness);
+        float grey   = 1.0 - smoothstep(0.08, 0.25, max(ink.r, max(ink.g, ink.b)) - min(ink.r, min(ink.g, ink.b)));
+        col = mix(col, mix(behind, vec3(1.0) - behind, amount), grey);
+    }
     a *= fade;
-    if (light)
-        fragColor = vec4(mix(vec3(1.0), vec3(1.0 - clear) + clear * glass, a), 1.0);
-    else
-        fragColor = vec4(glass * clear * a, 1.0);
+    fragColor = vec4(col * a, a);
 }
 
 vec3 look(vec2 px) {
@@ -231,11 +256,17 @@ void main() {
 
     // Deep inside, nothing bends: eight taps a band away settle most of a popover's pixels
     // without the rings below.
-    float inside = 1.0;
+    float inside = 1.0, bright = 0.0, counted = 0.0;
     for (int i = 0; i < 8; i++) {
         float ang = float(i) * 0.7853982;
-        inside = min(inside, cover(p + vec2(cos(ang), sin(ang)) * band * 1.05));
+        vec4  t   = layer(p + vec2(cos(ang), sin(ang)) * band * 1.05);
+        inside = min(inside, t.a);
+        if (t.a > 0.5) {
+            bright += step(0.5, luma(t.rgb / t.a));
+            counted += 1.0;
+        }
     }
+    lightness = counted > 0.0 ? smoothstep(0.3, 0.7, bright / counted) : step(0.5, luma(layer(p).rgb / max(a, 1e-4)));
     if (inside >= 1.0) {
         put(look(p), a);
         return;
@@ -273,8 +304,8 @@ void main() {
     col.b = look(p + offset * (1.0 - chroma)).b;
 
     // Light from above and a little left; a softer bounce on the far side.
-    vec2  light = normalize(vec2(-0.35, -1.0));
-    float lit   = max(dot(n, light), 0.0) + 0.35 * max(dot(n, -light), 0.0);
+    vec2  sun = normalize(vec2(-0.35, -1.0));
+    float lit = max(dot(n, sun), 0.0) + 0.35 * max(dot(n, -sun), 0.0);
     col += rim * lit * pow(edge, 3.0);
 
     put(col, a);
@@ -487,7 +518,7 @@ static SProgram* ensureProgram(bool external) {
     p.chroma   = at("chroma");
     p.rim      = at("rim");
     p.clear    = at("clear");
-    p.light    = at("light");
+    p.invert   = at("invert");
     p.attached = at("attached");
     p.rect     = at("rect");
 
@@ -593,7 +624,172 @@ struct SJob {
     SP<IFramebuffer> sampled;
     Vector2D         level; // the sampled texture's size over the frame's
     bool             ready = false;
+    int              pid   = 0;
+    CBox             global; // the layer, logical px on the whole desktop
 };
+
+// How bright it is behind each glass surface, for eave: a grid of cells over the surface, read
+// back without stalling (a pixel pack buffer and a fence, polled from a timer) and sent as a
+// Hyprland custom event when it changed. At most every REPORT_EVERY, and once more after the
+// last change, so eave hears where things settled.
+static const char* GRID_FRAG = R"#(#version 300 es
+precision highp float;
+uniform sampler2D src;
+uniform vec2 origin;   // the surface's top left, frame px
+uniform float cell;    // frame px
+uniform vec2 bdOrigin; // as in the glass
+uniform vec2 bdScale;
+uniform vec2 limit;    // the part of src that holds content, uv
+out vec4 fragColor;
+void main() {
+    vec2  c = origin + gl_FragCoord.xy * cell; // the cell's middle
+    float l = 0.0;
+    for (int i = 0; i < 4; i++) {
+        vec2 o  = (vec2(float(i & 1), float(i >> 1)) - 0.5) * 0.5 * cell;
+        vec2 uv = clamp((c + o - bdOrigin) * bdScale, vec2(0.0), limit);
+        l += dot(texture(src, uv).rgb, vec3(0.2126, 0.7152, 0.0722));
+    }
+    fragColor = vec4(l / 4.0, 0.0, 0.0, 1.0);
+}
+)#";
+
+constexpr float REPORT_CELL  = 16.F; // logical px
+constexpr auto  REPORT_EVERY = std::chrono::milliseconds(100);
+
+static struct {
+    GLuint                                program = 0;
+    GLint                                 src, origin, cell, bdOrigin, bdScale, limit;
+    SP<IFramebuffer>                      grid;
+    GLuint                                pbo   = 0;
+    GLsync                                fence = nullptr;
+    int                                   pid = 0, cols = 0, rows = 0;
+    std::chrono::steady_clock::time_point last;
+    bool                                  missed = false; // a change came too soon after the last
+    CBox                                  missedBox;      // global logical, to redraw for it
+    std::unordered_map<int, std::string>  sent;           // by pid
+    SP<CEventLoopTimer>                   timer;
+    uint64_t                              read = 0, posted = 0; // for `stats`
+} g_report;
+
+static void armReport(std::chrono::milliseconds in) {
+    if (g_report.timer && (!g_report.timer->armed() || g_report.timer->leftUs() > in.count() * 1000.F))
+        g_report.timer->updateTimeout(in);
+}
+
+static bool differs(const std::string& a, const std::string& b) {
+    if (a.size() != b.size())
+        return true;
+    for (size_t i = 0; i < a.size(); i++) {
+        if (std::abs(std::stoi(std::string{a[i]}, nullptr, 16) - std::stoi(std::string{b[i]}, nullptr, 16)) >= 2)
+            return true;
+    }
+    return false;
+}
+
+static void post(int pid, const std::string& cells, int cols, int rows) {
+    g_pEventManager->postEvent(SHyprIPCEvent{.event = "custom", .data = std::format("eave-glass {} {} {} {} {}", pid, REPORT_CELL, cols, rows, cells)});
+}
+
+static void onReportTimer() {
+    const auto now = std::chrono::steady_clock::now();
+    if (g_report.fence) {
+        g_pHyprOpenGL->makeEGLCurrent();
+        const GLenum status = glClientWaitSync(g_report.fence, 0, 0);
+        if (status != GL_ALREADY_SIGNALED && status != GL_CONDITION_SATISFIED) {
+            armReport(std::chrono::milliseconds(4));
+            return;
+        }
+        glDeleteSync(g_report.fence);
+        g_report.fence = nullptr;
+        const size_t n = sc<size_t>(g_report.cols) * g_report.rows;
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, g_report.pbo);
+        const auto* px = sc<const uint8_t*>(glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, n * 4, GL_MAP_READ_BIT));
+        std::string cells;
+        if (px) {
+            cells.reserve(n);
+            for (size_t i = 0; i < n; i++)
+                cells += "0123456789abcdef"[(px[i * 4] * 15 + 127) / 255];
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        auto& sent = g_report.sent[g_report.pid];
+        if (!cells.empty() && differs(cells, sent)) {
+            sent = cells;
+            g_report.posted++;
+            post(g_report.pid, cells, g_report.cols, g_report.rows);
+        }
+    }
+    if (g_report.missed) {
+        const auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(g_report.last + REPORT_EVERY - now);
+        if (wait.count() > 0)
+            armReport(wait);
+        else {
+            g_report.missed = false;
+            g_pHyprRenderer->damageBox(g_report.missedBox); // the glass redraws, and reads again
+        }
+    }
+}
+
+// In the backdrop step, once it's frosted: the grid of the surface's cells, read back later.
+static void reportBackdrop(const SJob& job, const PHLMONITOR& mon, const SP<IFramebuffer>& target) {
+    const auto now = std::chrono::steady_clock::now();
+    if (g_report.fence || now - g_report.last < REPORT_EVERY) {
+        g_report.missed    = true;
+        g_report.missedBox = job.global;
+        armReport(std::chrono::milliseconds(4));
+        return;
+    }
+    if (!g_report.program) {
+        g_report.program = link(compile(GL_VERTEX_SHADER, PASS_VERT), compile(GL_FRAGMENT_SHADER, GRID_FRAG));
+        if (!g_report.program)
+            return;
+        auto at             = [](const char* name) { return glGetUniformLocation(g_report.program, name); };
+        g_report.src        = at("src");
+        g_report.origin     = at("origin");
+        g_report.cell       = at("cell");
+        g_report.bdOrigin   = at("bdOrigin");
+        g_report.bdScale    = at("bdScale");
+        g_report.limit      = at("limit");
+        g_report.timer      = makeShared<CEventLoopTimer>(std::nullopt, [](SP<CEventLoopTimer>, void*) { onReportTimer(); }, nullptr);
+        g_pEventLoopManager->addTimer(g_report.timer);
+        glGenBuffers(1, &g_report.pbo);
+    }
+    const float cell = REPORT_CELL * mon->m_scale;
+    const int   cols = std::ceil(job.box.w / cell), rows = std::ceil(job.box.h / cell);
+    if (cols <= 0 || rows <= 0)
+        return;
+
+    ensureBackdrop(g_report.grid, target, Vector2D{sc<double>(cols), sc<double>(rows)});
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLFB(g_report.grid)->getFBID());
+    g_pHyprOpenGL->setViewport(0, 0, cols, rows);
+    glBindVertexArray(g_vao);
+    glUseProgram(g_report.program);
+    glBindTexture(GL_TEXTURE_2D, job.sampled->getTexture()->m_texID);
+    glUniform1i(g_report.src, 0);
+    glUniform2f(g_report.origin, job.box.x, job.box.y);
+    glUniform1f(g_report.cell, cell);
+    glUniform2f(g_report.bdOrigin, job.copy.x, job.copy.y);
+    glUniform2f(g_report.bdScale, job.level.x / job.sampled->m_size.x, job.level.y / job.sampled->m_size.y);
+    glUniform2f(g_report.limit, job.level.x * job.copy.w / job.sampled->m_size.x, job.level.y * job.copy.h / job.sampled->m_size.y);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    GLint oldRead = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldRead);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, GLFB(g_report.grid)->getFBID());
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, g_report.pbo);
+    glBufferData(GL_PIXEL_PACK_BUFFER, sc<GLsizeiptr>(cols) * rows * 4, nullptr, GL_STREAM_READ);
+    glReadPixels(0, 0, cols, rows, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, oldRead);
+
+    g_report.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    g_report.pid   = job.pid;
+    g_report.cols  = cols;
+    g_report.rows  = rows;
+    g_report.last  = now;
+    g_report.read++;
+    armReport(std::chrono::milliseconds(4));
+}
 
 struct SGLState {
     GLint prog = 0, vao = 0, active = 0, tex0 = 0;
@@ -699,9 +895,11 @@ static void takeBackdrop(SJob& job) {
             pass(g_up, fbs.levels[i], sizes[i], fbs.levels[i - 1], sizes[i - 1]);
         job.sampled = fbs.levels[0];
         job.level   = {sizes[0].x / c.w, sizes[0].y / c.h};
-        g_pHyprOpenGL->blend(true);
         timeEnd();
     }
+    if (g_params.report)
+        reportBackdrop(job, mon, target);
+    g_pHyprOpenGL->blend(true);
 
     target->bind(); // and its viewport, for the layer that draws next
     gl.restore();
@@ -752,10 +950,6 @@ static void keyGlass(SJob& job) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, job.sampled->getTexture()->m_texID);
     g_pHyprOpenGL->blend(true);
-    if (g_params.light)
-        glBlendFuncSeparate(GL_ZERO, GL_SRC_COLOR, GL_ZERO, GL_ONE);
-    else
-        glBlendFuncSeparate(GL_ONE_MINUS_DST_COLOR, GL_ONE, GL_ZERO, GL_ONE);
     glBindVertexArray(g_vao);
 
     const float S = mon->m_scale;
@@ -773,7 +967,7 @@ static void keyGlass(SJob& job) {
     glUniform1f(prog->chroma, g_params.chroma);
     glUniform1f(prog->rim, g_params.rim);
     glUniform1f(prog->clear, g_params.clear);
-    glUniform1i(prog->light, g_params.light);
+    glUniform1i(prog->invert, g_params.invert);
     glUniform4f(prog->rect, job.box.x, job.box.y, job.box.w, job.box.h);
 
     glActiveTexture(GL_TEXTURE1);
@@ -846,6 +1040,8 @@ static void wrapLayers() {
         job->box  = surf->getTexBox().scale(mon->m_scale).round();
         job->tex  = d.texture;
         job->fade = d.alpha * d.fadeAlpha;
+        job->pid  = d.pLS->getPID();
+        job->global = CBox{d.pLS->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT), d.pLS->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)};
         drawn.add(job->box);
 
         elements.insert(elements.begin() + i, {.element = makeUnique<CGlassElement>(job, CGlassElement::BACKDROP)});
@@ -884,11 +1080,11 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     }
 
     if (key.empty() || key == "show")
-        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\ndepth {}\nclear {}\nlight {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength,
-                           g_params.chroma, g_params.rim, g_params.frost, g_params.depth, g_params.clear, g_params.light, pidList(), sc<int>(g_timing.mode));
+        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\ndepth {}\nclear {}\ninvert {}\nreport {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength,
+                           g_params.chroma, g_params.rim, g_params.frost, g_params.depth, g_params.clear, g_params.invert, g_params.report, pidList(), sc<int>(g_timing.mode));
 
     if (key == "stats")
-        return timingStats();
+        return timingStats() + std::format("reports read {}, posted {}, pending {}\n", g_report.read, g_report.posted, g_report.fence != nullptr);
 
     auto setBool = [&](bool& b) {
         b = value == "1" || value == "on" || value == "true";
@@ -913,8 +1109,16 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
             g_params.depth = std::stoi(value);
         else if (key == "clear")
             g_params.clear = std::stof(value);
-        else if (key == "light")
-            setBool(g_params.light);
+        else if (key == "invert")
+            setBool(g_params.invert);
+        else if (key == "report") {
+            setBool(g_params.report);
+            if (!g_params.report) {
+                for (auto const& [pid, cells] : g_report.sent)
+                    post(pid, "", 0, 0);
+                g_report.sent.clear();
+            }
+        }
         else if (key == "skip")
             g_params.skip = std::stoi(value);
         else if (key == "pid") {
@@ -968,6 +1172,18 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pHyprRenderer->m_renderPass.removeAllOfType("CEaveGlassElement");
     g_hooks = {};
     g_fbs.clear();
+    if (g_report.timer)
+        g_pEventLoopManager->removeTimer(g_report.timer);
+    if (g_report.fence)
+        glDeleteSync(g_report.fence);
+    if (g_report.pbo)
+        glDeleteBuffers(1, &g_report.pbo);
+    if (g_report.program)
+        glDeleteProgram(g_report.program);
+    // Islands that turned light go back to dark.
+    for (auto const& [pid, cells] : g_report.sent)
+        post(pid, "", 0, 0);
+    g_report = {};
     for (auto& p : g_progs) {
         if (p.id)
             glDeleteProgram(p.id);
