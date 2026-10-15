@@ -3280,6 +3280,16 @@ mod tests {
         (out, inward, flattest)
     }
 
+    /// How far a side stretched the way its edge went out, opening: out if the skin stretches,
+    /// in if it squashes instead (a negative `SKIN_STRETCH`).
+    fn stretched(out: [f32; 4], inward: [f32; 4], side: usize) -> f32 {
+        if theme::SKIN_STRETCH >= 0.0 {
+            out[side]
+        } else {
+            -inward[side]
+        }
+    }
+
     #[test]
     fn opening_stretches_the_way_it_grows_and_closing_splats_against_the_top() {
         // Only down: the bottom leads, and the sides draw in to keep its area.
@@ -3288,11 +3298,13 @@ mod tests {
         let mut motion = settled(island, &[1]);
         popover(&mut motion, true, panel, true);
         let (out, inward, _) = skin_range(&mut motion);
-        eprintln!("open down: out {out:?} in {inward:?}");
-        assert!(out[3] > 1.0, "the bottom goes ahead: {out:?}");
         assert!(
-            inward[0] < -0.1 && inward[2] < -0.1,
-            "the sides draw in: {inward:?}"
+            stretched(out, inward, 3) > 1.0,
+            "the bottom stretches: {out:?} {inward:?}"
+        );
+        assert!(
+            stretched(inward, out, 0) < -0.1 && stretched(inward, out, 2) < -0.1,
+            "the sides draw in: {out:?} {inward:?}"
         );
         assert!(
             out[1].abs() < 0.5 && inward[1].abs() < 0.5,
@@ -3303,7 +3315,6 @@ mod tests {
         // Closing: the bottom carries on up into the top as it lands, and the sides bulge.
         popover(&mut motion, false, panel, true);
         let (out, inward, flattest) = skin_range(&mut motion);
-        eprintln!("close up: out {out:?} in {inward:?} at {flattest:?}");
         assert!(inward[3] < -1.0, "lands flatter: {inward:?}");
         assert!(out[0] > 0.2 && out[2] > 0.2, "and wider: {out:?}");
         assert!(
@@ -3321,9 +3332,12 @@ mod tests {
         let mut motion = settled(island, &[1]);
         popover(&mut motion, true, panel, true);
         let (out, inward, _) = skin_range(&mut motion);
-        eprintln!("open wide: out {out:?} in {inward:?}");
-        assert!(out[0] > 1.0 && out[2] > 1.0, "both sides go ahead: {out:?}");
-        assert!(out[3] < out[2], "more across than down: {out:?}");
+        let (left, right) = (stretched(out, inward, 0), stretched(out, inward, 2));
+        assert!(
+            left > 1.0 && right > 1.0,
+            "both sides stretch: {out:?} {inward:?}"
+        );
+        assert!(stretched(out, inward, 3) < right, "more across than down");
         assert_eq!(motion.shape(), panel);
     }
 
@@ -3335,14 +3349,13 @@ mod tests {
         let mut motion = settled(island, &[1]);
         popover(&mut motion, true, panel, true);
         let (out, inward, _) = skin_range(&mut motion);
-        eprintln!("open right: out {out:?} in {inward:?}");
-        assert!(out[2] > 1.0, "leans right: {out:?}");
-        assert!(out[0] < out[2] / 3.0, "the left barely: {out:?}");
+        let (left, right) = (stretched(out, inward, 0), stretched(out, inward, 2));
+        assert!(right > 1.0, "leans right: {out:?} {inward:?}");
+        assert!(left < right / 3.0, "the left barely: {out:?} {inward:?}");
 
         // Back right to left: the right side carries on in, past the island's.
         popover(&mut motion, false, panel, true);
         let (out, inward, _) = skin_range(&mut motion);
-        eprintln!("close left: out {out:?} in {inward:?}");
         assert!(inward[2] < -1.0, "the right side carries on in: {inward:?}");
         assert!(
             out[0].max(-inward[0]) < -inward[2] / 2.0,
