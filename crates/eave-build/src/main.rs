@@ -415,6 +415,9 @@ fn build(config_path: &Path, sources: &mut Sources, summary: bool) -> Result<()>
     } else {
         eprintln!("eave-build: {} is up to date", target.display());
     }
+    if glass_enabled(&text) {
+        build_glass(&eave_dir)?;
+    }
 
     // A new eave-build may ship new units. This keeps config.toml and rewrites only the units.
     if eave_moved || handed_over {
@@ -500,6 +503,69 @@ fn read_config(text: &str) -> Result<(Option<String>, Vec<String>)> {
         })
         .collect();
     Ok((eave, widgets))
+}
+
+/// Whether config.toml leaves glass on: `[glass] enabled`, true unless it says otherwise.
+fn glass_enabled(text: &str) -> bool {
+    let table: toml::Table = text.parse().unwrap_or_default();
+    table
+        .get("glass")
+        .and_then(|glass| glass.get("enabled"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// Builds hypr-eave, the Hyprland plugin that draws glass, against the Hyprland installed now, and
+/// installs it when it changed. A plugin only loads into the Hyprland it was built for, so this
+/// runs every time: make rebuilds only when the sources or Hyprland's headers changed. Without
+/// Hyprland's headers or a C++ compiler there's no glass, and the bar is built anyway.
+fn build_glass(eave_dir: &Path) -> Result<()> {
+    let source = eave_dir.join("hypr-eave");
+    if !source.join("Makefile").exists() {
+        return Ok(());
+    }
+    let headers = Command::new("pkg-config")
+        .args(["--exists", "hyprland"])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !headers {
+        eprintln!(
+            "eave-build: no glass: Hyprland's headers aren't installed (pkg-config hyprland)"
+        );
+        return Ok(());
+    }
+    let status = Command::new("make")
+        .arg("-s")
+        .arg("-C")
+        .arg(&source)
+        .status();
+    if !status.is_ok_and(|status| status.success()) {
+        eprintln!(
+            "eave-build: no glass: building hypr-eave failed (make -C {})",
+            source.display()
+        );
+        return Ok(());
+    }
+    let target = data_dir()?.join("eave/hypr-eave.so");
+    let new = source.join("hypr-eave.so");
+    let bytes = std::fs::read(&new).map_err(|e| format!("{}: {e}", new.display()))?;
+    if std::fs::read(&target).is_ok_and(|old| old == bytes) {
+        eprintln!("eave-build: {} is up to date", target.display());
+        return Ok(());
+    }
+    let dir = target.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    // Beside it, then renamed over it: Hyprland may have the old one mapped, and writing into a
+    // mapped library would change the code under it.
+    let staging = dir.join(".hypr-eave.so.new");
+    std::fs::write(&staging, &bytes).map_err(|e| format!("{}: {e}", staging.display()))?;
+    std::fs::rename(&staging, &target).map_err(|e| format!("{}: {e}", target.display()))?;
+    eprintln!(
+        "eave-build: installed {}: Hyprland loads it from its config (docs/running.md), and a \
+         new one when it restarts",
+        target.display()
+    );
+    Ok(())
 }
 
 /// References grouped by source, in order of first use. One source asked for at two revisions is
@@ -1298,6 +1364,17 @@ fn cache_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glass_is_built_unless_the_config_turns_it_off() {
+        assert!(glass_enabled(""));
+        assert!(glass_enabled("[glass]\nband = 8"));
+        assert!(!glass_enabled("[glass]\nenabled = false"));
+        assert!(
+            glass_enabled("not toml ["),
+            "a broken file is the bar's to report"
+        );
+    }
 
     #[test]
     fn units_run_eave_build_by_its_full_path() {
