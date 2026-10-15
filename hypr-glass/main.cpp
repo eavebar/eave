@@ -41,11 +41,12 @@ static HANDLE PHANDLE = nullptr;
 // Logical pixels unless said otherwise; scaled by the monitor's scale when drawn.
 static struct {
     bool  enabled  = true;
-    float band     = 10.F;  // how far in from the edge the glass bends
-    float strength = 14.F;  // the most a pixel's lookup moves, at the very edge
-    float chroma   = 0.12F; // spread between red and blue lookups, as a fraction of the bend
-    float rim      = 0.35F; // brightness of the lit edge
-    float frost    = 1.5F;  // spread of each blur step (0 = clear glass)
+    float band     = 12.F;  // how far in from the edge the glass bends
+    float strength = 22.F;  // the most a pixel's lookup moves, at the very edge
+    float chroma   = 0.18F; // spread between red and blue lookups, as a fraction of the bend
+    float rim      = 0.7F;  // brightness of the lit edge
+    float frost    = 2.F;   // spread of each blur step (0 = clear glass)
+    int   depth    = 3;     // how many times the blur halves the backdrop: each doubles its reach
     float clear    = 0.7F;  // how much of the backdrop shows through the island's color
     bool  light    = false; // white islands: multiply the glass in, instead of screening it
     std::vector<int> pids;  // only these eaves' layers (none = every eave)
@@ -59,7 +60,7 @@ static struct {
 
 struct SMonitorGlass {
     SP<IFramebuffer> backdrop;      // the frame around the glass, full size
-    SP<IFramebuffer> half, quarter; // blurred down from it, for frost
+    std::vector<SP<IFramebuffer>> levels; // blurred down from it, for frost: a half, a quarter...
     SP<IFramebuffer> attached;      // a row: how far down each column is attached to the top
     CRegion          drawn;         // where the glass was drawn last, framebuffer pixels
 };
@@ -280,9 +281,9 @@ void main() {
 }
 )#";
 
-// Frost: a dual Kawase blur. Two steps down to a quarter, one back up to a half, each with
-// linear filtering doing half the work, so it's smooth where single taps at a distance were
-// grainy, and it runs on a sixteenth of the pixels.
+// Frost: a dual Kawase blur. `depth` steps down, each to half the size, and back up to a half,
+// each with linear filtering doing half the work, so it's smooth where single taps at a distance
+// were grainy. Each step down doubles how far it reaches, at a quarter of the pixels.
 static const char* PASS_VERT = R"#(#version 300 es
 precision highp float;
 uniform vec2 srcScale; // the part of the source texture that holds content, as uv
@@ -533,7 +534,7 @@ static CBox pixelBox(const PHLLS& ls, const PHLMONITOR& mon) {
 }
 
 static float reach(const PHLMONITOR& mon) {
-    return (g_params.strength * (1.F + g_params.chroma) + g_params.frost * 4.F + 2.F) * mon->m_scale;
+    return (g_params.strength * (1.F + g_params.chroma) + g_params.frost * (1 << g_params.depth) + 2.F) * mon->m_scale;
 }
 
 // The glass reads around every pixel it draws, so a change anywhere it can see redraws all of
@@ -663,15 +664,20 @@ static void takeBackdrop(SJob& job) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, oldRead);
     timeEnd();
 
-    // 2. Frost it: blur down to a quarter and back up to a half.
+    // 2. Frost it: blur down `depth` halvings and back up to a half.
     job.sampled    = fbs.backdrop;
     job.level      = {1, 1};
+    const int  depth = std::clamp(g_params.depth, 1, 6);
     const bool frost = g_params.frost > 0 && ensurePass(g_down, DOWN_FRAG) && ensurePass(g_up, UP_FRAG) && ensureProgram(false);
     if (frost) {
         timeBegin(T_MASK);
-        const Vector2D half = {std::ceil(c.w / 2.0), std::ceil(c.h / 2.0)}, quarter = {std::ceil(c.w / 4.0), std::ceil(c.h / 4.0)};
-        ensureBackdrop(fbs.half, target, half);
-        ensureBackdrop(fbs.quarter, target, quarter);
+        fbs.levels.resize(std::max<size_t>(fbs.levels.size(), depth));
+        std::vector<Vector2D> sizes;
+        for (int i = 0; i < depth; i++) {
+            const double div = 2 << i;
+            sizes.push_back({std::ceil(c.w / div), std::ceil(c.h / div)});
+            ensureBackdrop(fbs.levels[i], target, sizes.back());
+        }
         glBindVertexArray(g_vao);
         g_pHyprOpenGL->blend(false);
 
@@ -686,11 +692,13 @@ static void takeBackdrop(SJob& job) {
             glUniform1f(prog.offset, g_params.frost);
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         };
-        pass(g_down, fbs.backdrop, c.size(), fbs.half, half);
-        pass(g_down, fbs.half, half, fbs.quarter, quarter);
-        pass(g_up, fbs.quarter, quarter, fbs.half, half);
-        job.sampled = fbs.half;
-        job.level   = {half.x / c.w, half.y / c.h};
+        pass(g_down, fbs.backdrop, c.size(), fbs.levels[0], sizes[0]);
+        for (int i = 1; i < depth; i++)
+            pass(g_down, fbs.levels[i - 1], sizes[i - 1], fbs.levels[i], sizes[i]);
+        for (int i = depth - 1; i > 0; i--)
+            pass(g_up, fbs.levels[i], sizes[i], fbs.levels[i - 1], sizes[i - 1]);
+        job.sampled = fbs.levels[0];
+        job.level   = {sizes[0].x / c.w, sizes[0].y / c.h};
         g_pHyprOpenGL->blend(true);
         timeEnd();
     }
@@ -862,7 +870,9 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     if (key == "buffers") {
         std::string out;
         for (auto const& [mon, fbs] : g_fbs) {
-            for (auto const& fb : {fbs.backdrop, fbs.half, fbs.quarter, fbs.attached}) {
+            std::vector<SP<IFramebuffer>> all = {fbs.backdrop, fbs.attached};
+            all.insert(all.end(), fbs.levels.begin(), fbs.levels.end());
+            for (auto const& fb : all) {
                 if (!fb)
                     continue;
                 const auto name = NFormatUtils::drmFormatName(fb->m_drmFormat);
@@ -874,8 +884,8 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     }
 
     if (key.empty() || key == "show")
-        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\nclear {}\nlight {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength,
-                           g_params.chroma, g_params.rim, g_params.frost, g_params.clear, g_params.light, pidList(), sc<int>(g_timing.mode));
+        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\ndepth {}\nclear {}\nlight {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength,
+                           g_params.chroma, g_params.rim, g_params.frost, g_params.depth, g_params.clear, g_params.light, pidList(), sc<int>(g_timing.mode));
 
     if (key == "stats")
         return timingStats();
@@ -899,6 +909,8 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
             g_params.rim = std::stof(value);
         else if (key == "frost")
             g_params.frost = std::stof(value);
+        else if (key == "depth")
+            g_params.depth = std::stoi(value);
         else if (key == "clear")
             g_params.clear = std::stof(value);
         else if (key == "light")
