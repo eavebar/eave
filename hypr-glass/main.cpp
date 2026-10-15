@@ -162,7 +162,7 @@ static std::string timingStats() {
 // needs its own sampler type.
 struct SProgram {
     GLuint id = 0;
-    GLint  backdrop, mask, attached, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, clear, invert, rect;
+    GLint  backdrop, mask, attached, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, clear, invert, mixed, rect;
 };
 static SProgram g_progs[2]; // [0] sampler2D, [1] samplerExternalOES
 static GLuint   g_vao = 0, g_vbo = 0;
@@ -197,6 +197,7 @@ uniform float chroma;
 uniform float rim;
 uniform float clear;    // how much of the backdrop the island's color lets through
 uniform bool  invert;   // ink: the opposite of the glass behind each pixel, not its own
+uniform bool  mixed;    // light islands may show (eave hears how bright it is behind)
 uniform sampler2D attached; // per column of the surface: how far down it's attached to the top
 out vec4 fragColor;
 
@@ -257,16 +258,19 @@ void main() {
     // Deep inside, nothing bends: eight taps a band away settle most of a popover's pixels
     // without the rings below.
     float inside = 1.0, bright = 0.0, counted = 0.0;
-    for (int i = 0; i < 8; i++) {
-        float ang = float(i) * 0.7853982;
-        vec4  t   = layer(p + vec2(cos(ang), sin(ang)) * band * 1.05);
-        inside = min(inside, t.a);
+    for (int i = 0; i < 16; i++) {
+        float ang = float(i) * 0.7853982 + (i < 8 ? 0.0 : 0.3926991);
+        vec4  t   = layer(p + vec2(cos(ang), sin(ang)) * band * (i < 8 ? 1.05 : 2.1));
+        if (i < 8)
+            inside = min(inside, t.a);
         if (t.a > 0.5) {
             bright += step(0.5, luma(t.rgb / t.a));
             counted += 1.0;
         }
     }
-    lightness = counted > 0.0 ? smoothstep(0.3, 0.7, bright / counted) : step(0.5, luma(layer(p).rgb / max(a, 1e-4)));
+    // Ink is never most of what's around, so it takes a clear majority to call an island light:
+    // a split vote would mark the island's own pixels as half ink, and speckle them.
+    lightness = !mixed || counted == 0.0 ? 0.0 : smoothstep(0.6, 0.8, bright / counted);
     if (inside >= 1.0) {
         put(look(p), a);
         return;
@@ -519,6 +523,7 @@ static SProgram* ensureProgram(bool external) {
     p.rim      = at("rim");
     p.clear    = at("clear");
     p.invert   = at("invert");
+    p.mixed    = at("mixed");
     p.attached = at("attached");
     p.rect     = at("rect");
 
@@ -968,6 +973,7 @@ static void keyGlass(SJob& job) {
     glUniform1f(prog->rim, g_params.rim);
     glUniform1f(prog->clear, g_params.clear);
     glUniform1i(prog->invert, g_params.invert);
+    glUniform1i(prog->mixed, g_params.report);
     glUniform4f(prog->rect, job.box.x, job.box.y, job.box.w, job.box.h);
 
     glActiveTexture(GL_TEXTURE1);
