@@ -82,6 +82,8 @@ struct Press {
     when: Instant,
     /// Whether it has moved far enough to be a drag, not a click.
     dragged: bool,
+    /// Whether it's somewhere a click brings the dormer out: the notch, or the middle of the top.
+    clicks: bool,
 }
 
 /// The notch and the grown edge as last drawn, and what they were drawn from.
@@ -214,9 +216,23 @@ impl<M> Bezel<M> {
         if self.solid.is_none() && grow > 0.0 && at.y <= grow {
             return Some(Held::Edge);
         }
-        let middle = (at.x - width / 2.0).abs() <= theme::EDGE_CLICK_WIDTH / 2.0
-            && at.y <= grow + f32::from(theme::EDGE_GAP);
-        (self.notch.is_none() && middle).then_some(Held::Middle)
+        (self.notch.is_none() && self.middle(at, width)).then_some(Held::Middle)
+    }
+
+    /// Whether a click on `held` at `at` brings the dormer out: on the notch, or without one, in
+    /// the middle of the top.
+    fn clicks(&self, held: Held, at: Point, width: f32) -> bool {
+        match held {
+            Held::Notch | Held::Middle => true,
+            Held::Edge => self.notch.is_none() && self.middle(at, width),
+        }
+    }
+
+    /// Whether `at` is in the middle of the top, above the islands, on a surface `width` wide.
+    fn middle(&self, at: Point, width: f32) -> bool {
+        let grow = self.edge.map_or(0.0, |(grow, _)| grow);
+        (at.x - width / 2.0).abs() <= theme::EDGE_CLICK_WIDTH / 2.0
+            && at.y <= grow + f32::from(theme::EDGE_GAP)
     }
 
     /// The notch the bar draws, if any: none under a solid bar.
@@ -592,14 +608,18 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Bezel<M> {
     ) -> mouse::Interaction {
         let state = tree.state.downcast_ref::<State>();
         let bounds = layout.bounds();
-        let over = cursor
-            .land()
-            .position_in(bounds)
-            .and_then(|at| self.hit(at, bounds.width));
-        match (state.press, over, &self.on_click) {
-            (Some(_), _, _) => mouse::Interaction::Grabbing,
-            (None, Some(_), Some(_)) => mouse::Interaction::Pointer,
-            _ => mouse::Interaction::None,
+        if state.press.is_some() {
+            return mouse::Interaction::Grabbing;
+        }
+        let Some(at) = cursor.land().position_in(bounds) else {
+            return mouse::Interaction::None;
+        };
+        match self.hit(at, bounds.width) {
+            Some(held) if self.on_click.is_some() && self.clicks(held, at, bounds.width) => {
+                mouse::Interaction::Pointer
+            }
+            Some(_) => mouse::Interaction::Grab,
+            None => mouse::Interaction::None,
         }
     }
 }
@@ -628,11 +648,13 @@ impl<M: Clone> Bezel<M> {
                     return;
                 };
                 shell.capture_event();
+                let clicks = self.clicks(held, at, bounds.width);
                 state.press = Some(Press {
                     held,
                     at,
                     when: Instant::now(),
                     dragged: false,
+                    clicks,
                 });
                 state.grab = Some((held, at));
                 if let (Held::Notch, Some((notch, _))) = (held, self.drawn_notch()) {
@@ -674,6 +696,7 @@ impl<M: Clone> Bezel<M> {
                     Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
                 );
                 if released
+                    && press.clicks
                     && !press.dragged
                     && press.when.elapsed() < theme::LONG_PRESS
                     && let Some(on_click) = &self.on_click
@@ -805,8 +828,13 @@ mod tests {
         );
         // The edge is grown, so it can be pulled anywhere along it, but only clicks in the middle.
         assert_eq!(bezel.hit(Point::new(50.0, 2.0), 1000.0), Some(Held::Edge));
-        let side = Point::new(50.0, 6.0);
+        let side = Point::new(50.0, 2.0);
         assert!(play(&bezel, &mut state, &[(side, PRESS), (side, RELEASE)]).is_empty());
+        let on_edge = Point::new(500.0, 2.0);
+        assert_eq!(
+            play(&bezel, &mut state, &[(on_edge, PRESS), (on_edge, RELEASE)]),
+            [1]
+        );
         // Below the islands' top, nothing.
         assert_eq!(bezel.hit(Point::new(500.0, 20.0), 1000.0), None);
     }
