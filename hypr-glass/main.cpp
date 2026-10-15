@@ -67,6 +67,7 @@ enum eTimed : uint8_t {
     T_MASK,
     T_REFRACT,
     T_FRAME,
+    T_SYNC,
     T_LAST
 };
 
@@ -74,7 +75,8 @@ static struct {
     enum : uint8_t {
         OFF,
         STAGES,
-        FRAME
+        FRAME,
+        SYNC // glFinish before and after our work: stalls, but the only clock Asahi gets right
     } mode = OFF;
     double                                 sum[T_LAST] = {}, worst[T_LAST] = {};
     uint64_t                               n[T_LAST]   = {};
@@ -126,7 +128,7 @@ static void timePoll() {
 }
 
 static std::string timingStats() {
-    static const char* NAMES[] = {"copy", "mask", "refract", "frame"};
+    static const char* NAMES[] = {"copy", "mask", "refract", "frame", "sync"};
     std::string        out     = std::format("monitor frames {}, {} redrew glass, {:.0f} glass px per redraw\n", g_timing.rendered, g_timing.glassed,
                                              g_timing.glassed ? g_timing.pixels / g_timing.glassed : 0.0);
     for (int i = 0; i < T_LAST; i++) {
@@ -354,12 +356,14 @@ static void onBegin() {
     ring.m_previous[ring.m_previousIdx].add(extra);
 }
 
-static void ensureFB(SP<IFramebuffer>& fb, const SP<IFramebuffer>& like, const char* name) {
+// `format` 0 copies the frame's format: the backdrop must match it to be blitted into.
+static void ensureFB(SP<IFramebuffer>& fb, const SP<IFramebuffer>& like, const char* name, DRMFormat format = 0) {
+    format = format ? format : like->m_drmFormat;
     if (!fb)
         fb = g_pHyprRenderer->createFB(name);
-    if (fb->m_size != like->m_size || fb->m_drmFormat != like->m_drmFormat) {
+    if (fb->m_size != like->m_size || fb->m_drmFormat != format) {
         fb->release();
-        fb->alloc(like->m_size.x, like->m_size.y, like->m_drmFormat);
+        fb->alloc(like->m_size.x, like->m_size.y, format);
     }
     // Drawing into it converts colors to its description; without one every draw logs an error.
     fb->setImageDescription(like->imageDescription());
@@ -380,7 +384,7 @@ static void drawGlass(const PHLMONITOR& mon) {
     const float REACH  = reach(mon);
     auto&       fbs    = g_fbs[mon.get()];
     ensureFB(fbs.backdrop, target, "eave-glass backdrop");
-    ensureFB(fbs.mask, target, "eave-glass mask");
+    ensureFB(fbs.mask, target, "eave-glass mask", DRM_FORMAT_ARGB8888); // the frame may have no alpha; the mask is all alpha
 
     // Only what the damage asks for (onBegin made sure that's all of a layer or none of it).
     std::vector<std::pair<PHLLS, CBox>> todo;
@@ -397,6 +401,11 @@ static void drawGlass(const PHLMONITOR& mon) {
 
     GLint oldRead = 0;
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldRead);
+
+    const bool sync = g_timing.mode == g_timing.SYNC;
+    if (sync)
+        glFinish();
+    const auto syncStart = std::chrono::steady_clock::now();
 
     // 1. Copy the backdrop, as far around each layer as the lookups reach.
     timeBegin(T_COPY);
@@ -481,6 +490,14 @@ static void drawGlass(const PHLMONITOR& mon) {
     glBindTexture(GL_TEXTURE_2D, oldTex0);
     glActiveTexture(oldActive);
     g_pHyprOpenGL->setCapStatus(GL_SCISSOR_TEST, scissorWas);
+
+    if (sync) {
+        glFinish();
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - syncStart).count();
+        g_timing.sum[T_SYNC] += ms;
+        g_timing.worst[T_SYNC] = std::max(g_timing.worst[T_SYNC], ms);
+        g_timing.n[T_SYNC]++;
+    }
 }
 
 class CGlassElement : public IPassElement {
@@ -513,6 +530,20 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     std::string        cmd, key, value;
     in >> cmd >> key >> value;
 
+    if (key == "buffers") {
+        std::string out;
+        for (auto const& [mon, fbs] : g_fbs) {
+            for (auto const& fb : {fbs.backdrop, fbs.mask}) {
+                if (!fb)
+                    continue;
+                const auto name = NFormatUtils::drmFormatName(fb->m_drmFormat);
+                const int  bpp  = name.contains("16") ? 8 : 4; // 16 bits a channel, or 8
+                out += std::format("{} {} {}x{} {} bytes/px = {:.1f} MiB\n", mon->m_name, name, fb->m_size.x, fb->m_size.y, bpp, fb->m_size.x * fb->m_size.y * bpp / 1048576.0);
+            }
+        }
+        return out.empty() ? "none yet\n" : out;
+    }
+
     if (key.empty() || key == "show")
         return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength, g_params.chroma,
                            g_params.rim, g_params.frost, sc<int>(g_timing.mode));
@@ -528,7 +559,7 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
         if (key == "enabled")
             setBool(g_params.enabled);
         else if (key == "timing")
-            g_timing.mode = value == "stages" ? g_timing.STAGES : value == "frame" ? g_timing.FRAME : g_timing.OFF;
+            g_timing.mode = value == "stages" ? g_timing.STAGES : value == "frame" ? g_timing.FRAME : value == "sync" ? g_timing.SYNC : g_timing.OFF;
         else if (key == "band")
             g_params.band = std::stof(value);
         else if (key == "strength")
