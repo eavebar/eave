@@ -1310,7 +1310,9 @@ impl Motion {
                 .zip([Side::Left, Side::Top, Side::Right, Side::Bottom])
         {
             let change = now - was;
-            if change == 0.0 {
+            // Pouring, the top climbs up through what it comes out of: it hangs from the bar
+            // once there, and isn't pushed on the way (D-112).
+            if change == 0.0 || side == Side::Top && self.popover.present {
                 continue;
             }
             let speeding = was * now >= 0.0 && now.abs() > was.abs();
