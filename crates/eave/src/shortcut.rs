@@ -11,8 +11,8 @@ use iced::keyboard::{self, key::Named};
 /// `None` for none.
 pub type Keys = BTreeMap<String, Option<Shortcut>>;
 
-/// Every row in `node` with a shortcut and something to press, in order. Rows inside tabs are
-/// left out: only one page shows, and a key shouldn't press a row that's hidden.
+/// Every row and button in `node` with a shortcut and something to press, in order. Those inside
+/// tabs are left out: only one page shows, and a key shouldn't press what's hidden.
 pub fn collect<M: Clone>(node: &Node<M>, out: &mut Vec<(Shortcut, M)>) {
     match node.kind() {
         Kind::ListItem {
@@ -23,7 +23,22 @@ pub fn collect<M: Clone>(node: &Node<M>, out: &mut Vec<(Shortcut, M)>) {
                 }),
             on_press: Some(message),
             ..
+        }
+        | Kind::Button {
+            shortcut:
+                Some(Binding {
+                    key: Some(shortcut),
+                    ..
+                }),
+            on_press: message,
+            ..
         } => out.push((*shortcut, message.clone())),
+        Kind::Header {
+            leading, trailing, ..
+        } => leading
+            .iter()
+            .chain(trailing)
+            .for_each(|child| collect(child, out)),
         Kind::Row(children)
         | Kind::Column(children)
         | Kind::List(children)
@@ -44,7 +59,17 @@ fn bindings<'a, M>(node: &'a mut Node<M>, out: &mut Vec<&'a mut Binding>) {
             shortcut: Some(binding),
             on_press: Some(_),
             ..
+        }
+        | Kind::Button {
+            shortcut: Some(binding),
+            ..
         } => out.push(binding),
+        Kind::Header {
+            leading, trailing, ..
+        } => leading
+            .iter_mut()
+            .chain(trailing)
+            .for_each(|child| bindings(child, out)),
         Kind::Row(children)
         | Kind::Column(children)
         | Kind::List(children)
@@ -58,7 +83,7 @@ fn bindings<'a, M>(node: &'a mut Node<M>, out: &mut Vec<&'a mut Binding>) {
     }
 }
 
-/// Gives the rows of a popover's panel their keys: the user's from `keys` where they set one,
+/// Gives the rows and buttons of a popover's panel their keys: the user's from `keys` where they set one,
 /// else the plugin's. Where two want the same key, the user's wins, then the first. A row that
 /// loses has no key, so it shows none either.
 pub fn resolve_panel<M>(node: &mut Node<M>, keys: &Keys) {
@@ -304,6 +329,26 @@ mod tests {
         let mut out = Vec::new();
         collect(&panel, &mut out);
         assert_eq!(out, vec![(shortcut('1'), 1), (shortcut('0'), 10)]);
+    }
+
+    #[test]
+    fn buttons_have_keys_too_even_in_a_header() {
+        let show = || ui::button(ui::label("Show"), 5).shortcut("show", shortcut('t').ctrl());
+        let mut panel: Node<u8> = ui::column([
+            ui::header("Chat").trailing(show()),
+            ui::row([ui::button(ui::label("No key"), 6), show()]),
+        ]);
+        let mut out = Vec::new();
+        collect(&panel, &mut out);
+        assert_eq!(
+            out,
+            vec![(shortcut('t').ctrl(), 5), (shortcut('t').ctrl(), 5)]
+        );
+        // The user's key wins, and the second loses the one it shares.
+        resolve_panel(&mut panel, &keys(&[("show", Some(shortcut('s').alt()))]));
+        let mut out = Vec::new();
+        collect(&panel, &mut out);
+        assert_eq!(out, vec![(shortcut('s').alt(), 5)]);
     }
 
     fn keys(pairs: &[(&str, Option<Shortcut>)]) -> Keys {

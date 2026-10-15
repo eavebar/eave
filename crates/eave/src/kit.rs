@@ -1217,6 +1217,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             on_press,
             on_secondary,
             prominent,
+            shortcut,
         } => {
             let only_icon = matches!(content.kind(), Kind::Icon { .. } | Kind::Image { .. });
             let button = if !ctx.panel() {
@@ -1252,7 +1253,17 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                     ..ctx
                 };
                 let fill = prominent.then(|| ctx.fill());
-                button(container(render(*content, inner, icons)).center_y(Length::Fill))
+                let content = render(*content, inner, icons);
+                // Its key, if it has one, on the button after what it says.
+                let content: Element<'_, AnyMessage> =
+                    match shortcut.and_then(|binding| binding.key) {
+                        Some(key) => row![content, keycaps(&key, inner.color(None), p)]
+                            .spacing(theme::SPACING)
+                            .align_y(alignment::Vertical::Center)
+                            .into(),
+                        None => content,
+                    };
+                button(container(content).center_y(Length::Fill))
                     .on_press(on_press)
                     .height(theme::BUTTON_HEIGHT)
                     .padding([0, 14])

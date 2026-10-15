@@ -154,8 +154,8 @@ pub struct Binding {
     pub key: Option<Shortcut>,
 }
 
-/// A key to press, for [`list_item`]'s [`shortcut`](Node::shortcut) or to show with [`keys`]:
-/// `shortcut('1')`, `shortcut('k').ctrl()`.
+/// A key to press, for a [`list_item`]'s or a [`button`]'s [`shortcut`](Node::shortcut), or to
+/// show with [`keys`]: `shortcut('1')`, `shortcut('k').ctrl()`.
 pub fn shortcut(key: impl Into<Key>) -> Shortcut {
     Shortcut {
         key: key.into(),
@@ -257,6 +257,8 @@ pub enum Kind<M> {
         on_secondary: Option<M>,
         /// The main action of a popover page: filled, so it stands out.
         prominent: bool,
+        /// A key that presses it while its popover or dialog is open.
+        shortcut: Option<Binding>,
     },
     Switcher {
         options: Vec<(Node<M>, M)>,
@@ -528,6 +530,7 @@ pub fn button<M>(content: Node<M>, on_press: M) -> Node<M> {
         on_press,
         on_secondary: None,
         prominent: false,
+        shortcut: None,
     })
 }
 
@@ -882,13 +885,14 @@ impl<M> Node<M> {
         self
     }
 
-    /// For a [`list_item`] with an [`on_press`](Node::on_press): a key that presses it while its
-    /// popover is open, named `id`. `key` is the default: the user can give the row another key,
-    /// or none, under that name in config.toml (`keys = { chat-1 = "alt+1" }`). The host shows the
-    /// key at the row's end. A key with no Ctrl, Alt or Super does nothing while a text field has
-    /// the focus, so it can be typed. Rows inside [`tabs`] get no key. Other nodes ignore it.
+    /// For a [`list_item`] with an [`on_press`](Node::on_press), or a [`button`] in a popover or
+    /// dialog: a key that presses it while that is open, named `id`. `key` is the default: the
+    /// user can give it another key, or none, under that name in config.toml
+    /// (`keys = { chat-1 = "alt+1" }`). The host shows the key at the row's end, or on the
+    /// button. A key with no Ctrl, Alt or Super does nothing while a text field has the focus, so
+    /// it can be typed. Nothing inside [`tabs`] gets a key. Other nodes ignore it.
     pub fn shortcut(mut self, id: impl Into<String>, key: Shortcut) -> Self {
-        if let Kind::ListItem { shortcut, .. } = &mut self.0 {
+        if let Kind::ListItem { shortcut, .. } | Kind::Button { shortcut, .. } = &mut self.0 {
             *shortcut = Some(Binding {
                 id: id.into(),
                 key: Some(key),
@@ -1132,11 +1136,13 @@ impl<M> Node<M> {
                 on_press,
                 on_secondary,
                 prominent,
+                shortcut,
             } => Kind::Button {
                 content: Box::new(content.map(f)),
                 on_press: f(on_press),
                 on_secondary: on_secondary.map(f),
                 prominent,
+                shortcut,
             },
             Kind::Switcher { options, current } => Kind::Switcher {
                 options: options

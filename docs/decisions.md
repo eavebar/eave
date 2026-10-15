@@ -2003,7 +2003,7 @@ The settings are grouped by the thing they're about, not by situation, because e
 **Alternatives:**
 - a `Panel::on_key` that hands plugins raw keys: they'd draw their own hints, or none, and every plugin would match keys its own way.
 - `iced::keyboard::Key` in the API: ties eave-api to iced's types and lets plugins bind keys the host can't draw.
-- keys on buttons too: no use for it yet; a row is what the keyboard picks among.
+- keys on buttons too: no use for it yet; a row is what the keyboard picks among. *(Superseded by [D-100](#d-100-buttons-take-shortcuts-too): eave-claude's chat has a use.)*
 - unnamed shortcuts: they can't be rebound.
 - eave adding its global binds to Hyprland over IPC (`keyword bind`), checked against `binds`: it writes into the user's compositor config behind their back, and `hyprctl reload` wipes them, so eave would have to put them back.
 - `hyprland-global-shortcuts-v1`: one more protocol for the same result as a custom event, and the user still binds the keys in hyprland.conf.
@@ -2242,3 +2242,19 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 - **30 fps or more for good is not:** ~10% of one core on the GPU, 50–100× the bar at rest, and it wakes the CPU and GPU 30–120 times a second, which this didn't measure on battery. Keep fast motion to bursts.
 
 **Damage for the GPU?** Not pursued. eave's ~1.5 ms likely isn't pixels (0.3 Mpx is nothing to a GPU, and tiny-skia walks the same tree for ~0.1 ms). It's probably fixed per-frame work: iced_wgpu preparing layers and text, encoding, submitting, acquiring a frame. Damage would mostly relieve Hyprland, and wgpu exposes neither buffer age nor present-with-damage, so it means patching wgpu too. **Next step if this comes back:** `perf record` the GPU bar at 60 fps to see where eave's 1.5 ms goes. If it's iced_wgpu redoing text or layers every frame, caching that is a far smaller patch.
+
+---
+
+## D-100: Buttons take shortcuts too
+
+**Status:** accepted (2026-10-15). Amends [D-91](#d-91-shortcuts-plugins-name-them-users-rebind-them-hyprland-owns-the-global-ones).
+
+**What:** `button(..).shortcut(id, key)`, as on a `list_item`. In a popover or dialog the host binds the key to the button's `on_press` and draws its keycaps on the button, after what it says. It resolves with the panel's rows: the user's key from `keys` by id first, then the first to want it. Buttons in a `header`'s leading or trailing node count, which rows never needed. In the bar, and on icon-only buttons, the key works but isn't drawn.
+
+**Why:** eave-claude's chat has a Show button in its header, to go to the session's terminal. That's an action on the page, not one of a list to pick among, so it isn't a row; and the chat's field has the keyboard, so it needs a key with a modifier (`Ctrl+T`), which only a shortcut gives. D-91 turned buttons down for having no use yet.
+
+**Alternatives:**
+- a row for Show: it's the header's action, not an entry in the conversation.
+- a dormer action with a key: works only while the dormer is open, not in the chat.
+
+**Cost:** one optional field on `Kind::Button`. eave-api grows, compatibly: plugins using it need the next eave-api.
