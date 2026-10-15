@@ -2530,7 +2530,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 
 ## D-112: Glass, drawn by a Hyprland plugin that eave tells what's glass
 
-**Status:** accepted (2026-10-15), experimental until the user signs off the look. It amends [D-23](#d-23-core-plugins-depend-only-on-hyprland-and-the-kernel): an optional compositor plugin, built from this repository, is allowed, and [D-92](#d-92-light-and-dark-the-palette-mirrors): glass is a third theme. Without the plugin, nothing changes.
+**Status:** accepted (2026-10-15), experimental until the user signs off the look. It amends [D-23](#d-23-core-plugins-depend-only-on-hyprland-and-the-kernel): an optional compositor plugin, built from this repository, is allowed, and [D-92](#d-92-light-and-dark-the-palette-mirrors): glass is a third theme. Without the plugin, nothing changes. Amended by [D-113](#d-113-the-pointer-slides-under-the-notch): the plugin also puts the pointer under the notch, so `eave-build` builds it in every theme, and eave talks to it in every theme.
 
 **What:** `theme = "glass"` in config.toml, next to dark, light and system. With the `hypr-eave` plugin loaded in Hyprland, the islands are liquid glass. What's behind them shows through, frosted, and is bent at their edges with a lit rim. eave still draws every island opaque, in its own fill, exactly as without the plugin. The plugin keys the glass in where an island is that fill, so fades, which cover content with the island's color, fade to glass for free.
 - **The plugin** (`hypr-eave/`, C++, Hyprland 0.56):
@@ -2604,3 +2604,39 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 - **Threads:** there's one more, the glass queue's, with a 128 KiB stack. It sleeps until the compositor speaks.
 - **Without the plugin:** nothing is gathered or sent per frame.
 - **In the plugin:** a glass redraw cost the spike about 0.6–1.2 ms of GPU time (Asahi, measured with glFinish). The redraw no longer has the attached-columns pass or the 16-tap vote. Nothing runs while nothing near the glass changes, and eave's commits damage it only when what eave says changed.
+
+## D-113: The pointer slides under the notch
+
+**Status:** accepted (2026-10-15). Amends [D-112](#d-112-glass-drawn-by-a-hyprland-plugin-that-eave-tells-whats-glass): hypr-eave is built, and spoken to, in every theme.
+
+**What:** with `hypr-eave` loaded, the pointer goes under the notch and the grown edge the way it goes under a MacBook's physical notch: the part of it over them is hidden, the rest shows. Islands, popovers and everything else keep it on top. In every theme.
+- **eave says where** (`eave_glass_v1` version 2): a new region kind, `bezel`, for the notch and the grown edge exactly where they rest (`Bar::bezel_rects`), sent with every frame in every theme. Without the glass theme they're all eave sends: no look, no reports. The glass theme still sends them a margin wider as solid, to keep glass out; that margin would hide the pointer over an island fused to the notch, so the bezel records have none.
+- **The plugin draws it** (`hypr-eave/src/Cursor.cpp`):
+  - Hyprland's software cursor is a texture it adds to the render pass last, right before `RENDER_LAST_MOMENT`. There, after the glass has wrapped eave's surface, the plugin finds it, and where it's over a bezel record it draws a copy right before eave's surface (after the glass's backdrop copy, so the glass doesn't show it either). The notch's opaque pixels cover it and its clear ones let it through, so the cut follows the notch's shape this frame, rounded corners, kicks and all. Hyprland's own is clipped to the rest. Both are clipped to the frame's damage, since a clip region replaces the damage as the scissor.
+  - A hardware cursor is a plane over the whole frame: nothing covers it. So while the pointer is within 16 px of a bezel record, its monitor draws the cursor in software, with the lock Hyprland counts for screen sharing (`lockSoftwareForMonitor`). It's taken and given back on pointer moves, never polled, and given back on unload.
+  - `plugin:hypreave:cursor_under = false` turns it off. `hyprctl hypreave` shows the bezel records and which monitors draw the cursor in software.
+- **eave-build** builds hypr-eave whenever Hyprland's headers are there, not only for the glass theme.
+- **Hovering the notch or the edge** shows the plain arrow, not the pointing hand: they're part of the screen's border, not buttons (D-106).
+
+**Why:**
+- The user wanted the notch to act like the physical one. A notch the pointer slides over reads as something drawn; one it slides under reads as the screen's edge.
+- Only the compositor draws the pointer, and it draws it over every layer. A client can hide it or change its image, nothing more.
+- The user chose every theme, since the notch is black in all of them, and only the notch and the edge, so the pointer never disappears over something it can click.
+
+**Alternatives:**
+- **Hiding the pointer over the notch** (`wl_pointer.set_cursor` with no surface): all or nothing, at its hotspot. No partial cut.
+- **eave drawing a cursor image cut to the notch:** the compositor moves the cursor at once and the new image comes a frame later, so the cut lags behind a fast move. It would also mean loading the cursor theme in eave.
+- **Under every pixel eave draws** (the spike): the pointer disappeared over islands while pointing at them.
+- **A software cursor everywhere** (`cursor:no_hardware_cursors`): a redraw on every pointer move on every monitor, for something that matters near the notch only.
+- **A second plugin:** both edit the same pass at the same moment, and the cursor must land after the glass's backdrop copy. In one plugin that's one line; across two it's load order.
+
+**Cost:**
+- **eave:** the bezel records, two rectangles a frame, sent only when they change. In the dark theme the glass thread now starts whenever hypr-eave is loaded.
+- **The plugin:** a pass search per frame while the cursor is software, and one more texture draw while it's over the notch. Near the notch the monitor redraws the cursor's box on every pointer move instead of moving a plane.
+- **Binary:** the release binary is the same size, 20,934,680 bytes on aarch64, against main at 423a70c.
+
+**Limits:**
+- Only the first bar's frames reach the plugin (D-112, *One bar*): on a second bar's monitor the pointer isn't cut.
+- While the notch is dragged, the pointer is under it too.
+- Something drawn above eave, such as a notification over the notch, covers the pointer as it always did.
+

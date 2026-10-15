@@ -97,7 +97,8 @@ pub fn events() -> impl iced::futures::Stream<Item = Event> {
 }
 
 /// Tells the glass about the frame being drawn: called as it's drawn, after everything else in it.
-/// `look` is `None` without the glass theme.
+/// `look` is `None` without the glass theme: then only the notch and the grown edge are told, so
+/// the pointer goes under them (D-113).
 pub fn present(look: Option<&config::Glass>, records: Vec<super::frame::Record>) {
     let Some(surface) = layershellev::layer_surfaces()
         .into_iter()
@@ -112,12 +113,6 @@ pub fn present(look: Option<&config::Glass>, records: Vec<super::frame::Record>)
     }
     let mut guard = shared();
     let Some(shared) = guard.as_mut() else {
-        return;
-    };
-    let Some(look) = look else {
-        // Turned off: the glass goes with this frame.
-        shared.glass = None;
-        set_active(false);
         return;
     };
     let Some(manager) = &shared.manager else {
@@ -145,7 +140,9 @@ pub fn present(look: Option<&config::Glass>, records: Vec<super::frame::Record>)
     let Some(glass) = shared.glass.as_mut() else {
         return;
     };
-    if glass.look.as_ref() != Some(look) {
+    if let Some(look) = look
+        && glass.look.as_ref() != Some(look)
+    {
         glass.object.set_look(
             f64::from(look.band),
             f64::from(look.strength),
@@ -164,14 +161,20 @@ pub fn present(look: Option<&config::Glass>, records: Vec<super::frame::Record>)
         );
         glass.look = Some(*look);
     }
-    let report = crate::theme::GLASS_REPORT_CELL;
-    if glass.report != Some(report) {
+    // No reports without glass: nothing would read them.
+    let report = look.map_or(0, |_| crate::theme::GLASS_REPORT_CELL);
+    if glass.report.unwrap_or(0) != report {
         glass.object.set_report(report);
         glass.report = Some(report);
     }
     // Never more than fits in one message, which `fit` sees to: past it, the request would cut the
     // bar's connection.
     debug_assert!(records.len() <= crate::theme::GLASS_MAX_REGIONS);
+    // A compositor from before bezel records (version 1) would take them for nothing.
+    let mut records = records;
+    if glass.object.version() < 2 {
+        records.retain(|record| record.kind != super::frame::Kind::Bezel);
+    }
     let regions =
         super::frame::encode(&records[..records.len().min(crate::theme::GLASS_MAX_REGIONS)]);
     if glass.regions.as_ref() != Some(&regions) {
@@ -205,7 +208,7 @@ fn run(connection: Connection) -> Result<(), String> {
         registry_queue_init::<State>(&connection).map_err(|error| error.to_string())?;
     let handle = queue.handle();
     let manager = globals
-        .bind::<EaveGlassManagerV1, _, _>(&handle, 1..=1, ())
+        .bind::<EaveGlassManagerV1, _, _>(&handle, 1..=2, ())
         .ok();
     let mut state = State {
         name: globals.contents().with_list(|list| {
@@ -247,9 +250,12 @@ impl Dispatch<WlRegistry, GlobalListContents> for State {
         match event {
             // hypr-eave loaded while the bar runs.
             wl_registry::Event::Global {
-                name, interface, ..
+                name,
+                interface,
+                version,
             } if interface == EaveGlassManagerV1::interface().name && state.name.is_none() => {
-                let manager = registry.bind::<EaveGlassManagerV1, _, _>(name, 1, handle, ());
+                let manager =
+                    registry.bind::<EaveGlassManagerV1, _, _>(name, version.min(2), handle, ());
                 state.name = Some(name);
                 if let Some(shared) = shared().as_mut() {
                     shared.glass = None;

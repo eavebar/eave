@@ -242,14 +242,14 @@ bind = SUPER, M, event, eave-action volume mute
 
 ## Glass
 
-`theme = "glass"` makes the islands liquid glass: what's behind them shows through, frosted and bent at their edges ([D-112](decisions.md)). That takes `hypr-eave`, a Hyprland plugin in this repository. `eave-build` builds it against the Hyprland you have whenever the theme is glass and Hyprland's headers are installed (`pkg-config hyprland`; on Arch they come with the `hyprland` package). It installs it as `~/.local/share/eave/hypr-eave.so`. Load it from Hyprland's config:
+`theme = "glass"` makes the islands liquid glass: what's behind them shows through, frosted and bent at their edges ([D-112](decisions.md)). That takes `hypr-eave`, a Hyprland plugin in this repository. `eave-build` builds it against the Hyprland you have whenever Hyprland's headers are installed (`pkg-config hyprland`; on Arch they come with the `hyprland` package). It installs it as `~/.local/share/eave/hypr-eave.so`. Load it from Hyprland's config:
 
 ```lua
 -- hyprland.lua (Hyprland 0.56+)
 hl.plugin.load(os.getenv("HOME") .. "/.local/share/eave/hypr-eave.so")
 ```
 
-Without it, the glass theme looks like the dark one. A plugin only loads into the Hyprland it was built for. After updating Hyprland, run `eave-build`, then restart Hyprland. A rebuilt plugin also takes effect only when Hyprland restarts: loading the same path again gets the code already in memory.
+Without it, the glass theme looks like the dark one. In every theme, it also puts the pointer under the notch and the grown edge, as under a physical notch ([D-113](decisions.md)). `plugin:hypreave:cursor_under = false` turns that off. A plugin only loads into the Hyprland it was built for. After updating Hyprland, run `eave-build`, then restart Hyprland. A rebuilt plugin also takes effect only when Hyprland restarts: loading the same path again gets the code already in memory.
 
 Over something bright, an island's text turns dark so it stays readable. Popovers, the dormer and dialogs are glass too; the dormer, and a dialog that drops from the notch, once they let go of it. The notch, the grown edge, islands attached to an edge and a solid bar stay black: they stand for the screen's border. Tune it in config.toml:
 
@@ -269,7 +269,7 @@ contrast = 4.5     # with "readable": the contrast ratio it reaches
 ink-blur = 12      # how wide an area the ink's color is chosen over
 ```
 
-To turn it off for every client at once: `plugin:hypreave:enabled = false` in Hyprland's config. `hyprctl hypreave` shows what the plugin knows: the surfaces with glass, their regions and look, its reports and buffers.
+To turn it off for every client at once: `plugin:hypreave:enabled = false` in Hyprland's config. `hyprctl hypreave` shows what the plugin knows: the surfaces with glass, their regions and look, its reports and buffers, and which monitors draw the pointer in software for the notch.
 
 ## Notifications
 

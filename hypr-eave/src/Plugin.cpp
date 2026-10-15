@@ -1,4 +1,4 @@
-// hypr-eave's entry points: loading, unloading, its one config value, and `hyprctl hypreave`.
+// hypr-eave's entry points: loading, unloading, its config values, and `hyprctl hypreave`.
 
 #include "Glass.hpp"
 
@@ -19,9 +19,9 @@ namespace Glass {
     void removeElements();
 
     static struct {
-        CHyprSignalListener               stage, monitorRemoved, configReloaded;
+        CHyprSignalListener               stage, monitorRemoved, configReloaded, mouseMove;
         SP<SHyprCtlCommand>               command;
-        SP<Config::Values::CBoolValue>    enabled;
+        SP<Config::Values::CBoolValue>    enabled, cursorUnder;
         bool                              failed = false;
         std::string                       why;
     } g_state;
@@ -32,6 +32,10 @@ namespace Glass {
 
     bool enabled() {
         return !g_state.failed && (!g_state.enabled || g_state.enabled->value());
+    }
+
+    bool cursorUnder() {
+        return !g_state.cursorUnder || g_state.cursorUnder->value();
     }
 
     // Every surface hears whether there's glass now, and the screens redraw with or without it.
@@ -60,10 +64,11 @@ namespace Glass {
             size_t      islands = 0, solid = 0;
             for (auto const& region : s.regions)
                 (region.kind == EAVE_GLASS_SURFACE_V1_KIND_SOLID ? solid : islands)++;
-            out += std::format("surface: {} glass regions, {} solid; report every {} px: {} reads, {} sent\n", islands, solid, s.reportCell, r.reads, r.posted);
+            out += std::format("surface: {} glass regions, {} solid, {} bezel; report every {} px: {} reads, {} sent\n", islands, solid, s.bezel.size(), s.reportCell, r.reads, r.posted);
             out += std::format("  look: band {} strength {} chroma {} rim {} frost {} depth {} tint {} ink {} contrast {} ink-blur {}\n", s.look.band, s.look.strength,
                                s.look.chroma, s.look.rim, s.look.frost, s.look.depth, s.look.tint, s.look.ink, s.look.contrast, s.look.inkBlur);
         }
+        out += cursorStatus();
         const auto bufs = buffers();
         if (!bufs.empty())
             out += "buffers:\n" + bufs;
@@ -92,6 +97,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_state.enabled = makeShared<Config::Values::CBoolValue>("plugin:hypreave:enabled", "glass behind eave's islands", true);
     if (!HyprlandAPI::addConfigValueV2(PHANDLE, g_state.enabled))
         g_state.enabled.reset();
+    g_state.cursorUnder = makeShared<Config::Values::CBoolValue>("plugin:hypreave:cursor_under", "the pointer slides under eave's notch and grown edge", true);
+    if (!HyprlandAPI::addConfigValueV2(PHANDLE, g_state.cursorUnder))
+        g_state.cursorUnder.reset();
 
     startProtocol();
 
@@ -102,9 +110,26 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             else if (stage == RENDER_LAST_MOMENT)
                 wrapLayers();
         } catch (const std::exception& e) { fail(std::format("render: {}", e.what())); }
+        // After the glass: the cursor goes between its backdrop copy and the surface.
+        if (stage == RENDER_LAST_MOMENT) {
+            try {
+                tuckCursor();
+            } catch (const std::exception& e) { log(std::format("cursor: {}", e.what())); }
+        }
     });
-    g_state.monitorRemoved = Event::bus()->m_events.monitor.destroyMon.listen([](PHLMONITOR mon) { forgetMonitor(mon.get()); });
-    g_state.configReloaded = Event::bus()->m_events.config.reloaded.listen([] { announce(); });
+    g_state.mouseMove = Event::bus()->m_events.input.mouse.move.listen([](Vector2D at, Event::SCallbackInfo&) {
+        try {
+            updateCursorLocks(at);
+        } catch (const std::exception& e) { log(std::format("cursor: {}", e.what())); }
+    });
+    g_state.monitorRemoved = Event::bus()->m_events.monitor.destroyMon.listen([](PHLMONITOR mon) {
+        forgetMonitor(mon.get());
+        forgetCursorMonitor(mon.get());
+    });
+    g_state.configReloaded = Event::bus()->m_events.config.reloaded.listen([] {
+        announce();
+        updateCursorLocks();
+    });
     g_state.command        = HyprlandAPI::registerHyprCtlCommand(PHANDLE, SHyprCtlCommand{.name = "hypreave", .exact = true, .fn = [](eHyprCtlOutputFormat, std::string) {
                                                                       try {
                                                                           return status();
@@ -122,6 +147,8 @@ APICALL EXPORT void PLUGIN_EXIT() {
         g_state.stage.reset();
         g_state.monitorRemoved.reset();
         g_state.configReloaded.reset();
+        g_state.mouseMove.reset();
+        releaseCursorLocks();
         if (g_state.command)
             HyprlandAPI::unregisterHyprCtlCommand(PHANDLE, g_state.command);
         g_pHyprOpenGL->makeEGLCurrent();
@@ -131,6 +158,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
         freeReports();
         freeRender();
         g_state.enabled.reset();
+        g_state.cursorUnder.reset();
         g_state.command.reset();
     } catch (const std::exception& e) { log(std::format("unload: {}", e.what())); }
 }

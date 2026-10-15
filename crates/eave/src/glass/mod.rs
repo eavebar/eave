@@ -30,16 +30,24 @@ pub struct Present {
     look: Option<config::Glass>,
     /// What's drawn outside the islands that's never glass: the notch and the grown edge.
     solid: Vec<Rectangle>,
+    /// The notch and the grown edge, exactly: the pointer goes under them, in every theme.
+    bezel: Vec<Rectangle>,
     /// Whether this is the first bar's frame: the one with glass. Records are gathered for every
     /// bar's frame alike, and the others' are dropped, so they can't land on its glass.
     primary: bool,
 }
 
 impl Present {
-    pub fn new(look: Option<config::Glass>, solid: Vec<Rectangle>, primary: bool) -> Self {
+    pub fn new(
+        look: Option<config::Glass>,
+        solid: Vec<Rectangle>,
+        bezel: Vec<Rectangle>,
+        primary: bool,
+    ) -> Self {
         Self {
             look,
             solid,
+            bezel,
             primary,
         }
     }
@@ -82,6 +90,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Present {
         Some(overlay::Element::new(Box::new(Sender {
             look: self.look,
             solid: &self.solid,
+            bezel: &self.bezel,
             primary: self.primary,
         })))
     }
@@ -90,6 +99,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Present {
 struct Sender<'a> {
     look: Option<config::Glass>,
     solid: &'a [Rectangle],
+    bezel: &'a [Rectangle],
     primary: bool,
 }
 
@@ -108,6 +118,9 @@ impl<M> overlay::Overlay<M, iced::Theme, iced::Renderer> for Sender<'_> {
     ) {
         for rect in self.solid {
             frame::opaque(*rect);
+        }
+        for rect in self.bezel {
+            frame::bezel(*rect);
         }
         let records = frame::take();
         if self.primary {

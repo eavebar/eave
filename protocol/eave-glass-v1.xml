@@ -33,11 +33,15 @@
     the client how bright it is behind its surface, so the ink of islands
     over something bright can turn dark and stay readable.
 
+    Since version 2 it also says where the notch and the grown edge are, in
+    every theme, so the compositor can draw the pointer under them, the way
+    a physical notch hides it. A client without glass sends only those.
+
     When the global is absent the client draws as it would anyway: nothing
     depends on it.
   </description>
 
-  <interface name="eave_glass_manager_v1" version="1">
+  <interface name="eave_glass_manager_v1" version="2">
     <description summary="glass for eave's surfaces"/>
 
     <request name="destroy" type="destructor">
@@ -60,7 +64,7 @@
     </request>
   </interface>
 
-  <interface name="eave_glass_surface_v1" version="1">
+  <interface name="eave_glass_surface_v1" version="2">
     <description summary="the glass of one surface">
       All requests set double-buffered state, applied on the surface's next
       wl_surface.commit, so what they say lands with the frame it describes.
@@ -80,6 +84,8 @@
              summary="an island: its fill color turns to glass"/>
       <entry name="solid" value="1"
              summary="content that never lets glass through, over any island"/>
+      <entry name="bezel" value="2" since="2"
+             summary="the notch or the grown edge: solid, and the pointer goes under it"/>
     </enum>
 
     <request name="set_regions">
@@ -88,7 +94,8 @@
         x, y, width, height (signed), kind (see the kind enum), fill (an
         ARGB color, the island's exact fill) and ink (0 to 255: which way
         the island's grey ink goes over the glass, 0 lighter, 255 darker,
-        and in between while it turns). Fill and ink are ignored for solid.
+        and in between while it turns). Fill and ink are ignored for solid
+        and bezel.
 
         A glass record is the island's shape as the client drew it. A pixel
         belongs to the nearest one, if it's close: an island's pixels may
@@ -96,6 +103,12 @@
         only where it's that island's fill color, and not inside a solid
         record: the rest of the island, its text, icons and other content,
         is kept. Pixels near no glass record are never touched.
+
+        A bezel record is the notch or the grown edge, exactly where it's
+        drawn. The compositor draws the pointer under the surface there, so
+        the surface's opaque pixels cover it and its clear ones let it
+        through; elsewhere the pointer stays on top. It doesn't keep glass
+        out: a solid record does that.
 
         The initial value is empty: no glass. At most 64 records: the
         compositor ignores the rest. 64 also keeps the request well inside
