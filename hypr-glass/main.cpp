@@ -51,7 +51,10 @@ static struct {
     float frost    = 2.F;   // spread of each blur step (0 = clear glass)
     int   depth    = 3;     // how many times the blur halves the backdrop: each doubles its reach
     float clear    = 0.7F;  // how much of the backdrop shows through the island's color
-    bool  invert   = false; // ink: the opposite of the glass behind each pixel
+    int   ink      = 2;     // grey ink: 0 as eave drew it, 1 the opposite of the glass behind, 2 black or white, whichever reads
+    float halo     = 0.5F;  // contrast: how far the glass around ink goes the other way
+    float haloSize = 3.F;   // contrast: how far around ink that reaches
+    float hue      = 0.1F;  // contrast: how much of the glass's color the ink takes
     bool  colored  = true;  // the glass tinted by what's behind it instead of darkened
     float tint     = 0.35F; // how strong that tint is (0 = clear glass)
     bool  report   = true;  // tell eave how bright it is behind each surface, so islands can turn light
@@ -164,7 +167,7 @@ static std::string timingStats() {
 // needs its own sampler type.
 struct SProgram {
     GLuint id = 0;
-    GLint  backdrop, mask, attached, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, clear, invert, mixed, colored, tint, rect;
+    GLint  backdrop, mask, attached, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, clear, inkMode, halo, haloSize, hue, mixed, colored, tint, rect;
 };
 static SProgram g_progs[2]; // [0] sampler2D, [1] samplerExternalOES
 static GLuint   g_vao = 0, g_vbo = 0;
@@ -198,7 +201,10 @@ uniform float strength; // px
 uniform float chroma;
 uniform float rim;
 uniform float clear;    // how much of the backdrop the island's color lets through
-uniform bool  invert;   // ink: the opposite of the glass behind each pixel, not its own
+uniform int   inkMode;  // grey ink: 0 its own, 1 the opposite of the glass behind, 2 black or white
+uniform float halo;     // 2: how far the glass around ink goes the other way
+uniform float haloSize; // 2: px
+uniform float hue;      // 2: how much of the glass's color the ink takes
 uniform bool  mixed;    // light islands may show (eave hears how bright it is behind)
 uniform bool  colored;  // the glass tinted by what's behind it, not by the island's color
 uniform float tint;     // how strong that tint is
@@ -224,6 +230,16 @@ float luma(vec3 c) {
 // light over something bright). Most of what's a band away is the island's own color, not ink.
 float lightness;
 
+// How much of the pixel at px is grey ink, rather than its island's color.
+float inkAt(vec2 px) {
+    vec4 t = layer(px);
+    if (t.a < 0.5)
+        return 0.0;
+    vec3 c = t.rgb / t.a;
+    float grey = 1.0 - smoothstep(0.08, 0.25, max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)));
+    return abs(luma(c) - lightness) * grey;
+}
+
 // Replaces the layer's pixel, which is already drawn. A black island becomes glass by a screen,
 // so white ink stays white; a white island by a multiply, so black ink stays black.
 void put(vec3 glass, float a) {
@@ -237,13 +253,34 @@ void put(vec3 glass, float a) {
         dark = light = mix(glass, rich, tint);
     }
     vec3 col = mix(ink + (1.0 - ink) * dark, ink * light, lightness);
-    if (invert) {
-        // How much of the pixel is ink rather than island, for the grey ink only: the opposite
-        // of the glass right behind it, in proportion, so edges stay smooth.
+    if (inkMode != 0) {
+        // How much of the pixel is ink rather than island, for the grey ink only, so edges stay
+        // smooth and colored content keeps its colors.
         vec3  behind = mix(dark, light, lightness);
-        float amount = abs(luma(ink) - lightness);
+        float amount = inkAt(gl_FragCoord.xy);
         float grey   = 1.0 - smoothstep(0.08, 0.25, max(ink.r, max(ink.g, ink.b)) - min(ink.r, min(ink.g, ink.b)));
-        col = mix(col, mix(behind, vec3(1.0) - behind, amount), grey);
+        vec3  drawn;
+        if (inkMode == 1) {
+            drawn = mix(behind, vec3(1.0) - behind, amount);
+        } else {
+            // Black or white, whichever contrasts more with the glass behind: they tie at a
+            // relative luminance of 0.18, and the ink fades across a little band around it.
+            // The glass is frosted, so it changes smoothly along the bar, not letter by letter.
+            float y     = dot(pow(behind, vec3(2.2)), vec3(0.2126, 0.7152, 0.0722));
+            float dark_ = smoothstep(0.14, 0.23, y); // 1: black ink
+            vec3  color = mix(mix(vec3(1.0), vec3(0.0), dark_), behind, hue);
+            // The glass around ink leans the other way, a soft halo, so thin strokes hold up.
+            float near = 0.0;
+            for (int i = 0; i < 8; i++) {
+                float ang = float(i) * 0.7853982;
+                vec2  d   = vec2(cos(ang), sin(ang));
+                near = max(near, inkAt(gl_FragCoord.xy + d * haloSize * 0.5));
+                near = max(near, 0.5 * inkAt(gl_FragCoord.xy + d * haloSize));
+            }
+            vec3 under = mix(behind, vec3(dark_), halo * near);
+            drawn = mix(under, color, amount);
+        }
+        col = mix(col, drawn, grey);
     }
     a *= fade;
     fragColor = vec4(col * a, a);
@@ -531,7 +568,10 @@ static SProgram* ensureProgram(bool external) {
     p.chroma   = at("chroma");
     p.rim      = at("rim");
     p.clear    = at("clear");
-    p.invert   = at("invert");
+    p.inkMode  = at("inkMode");
+    p.halo     = at("halo");
+    p.haloSize = at("haloSize");
+    p.hue      = at("hue");
     p.mixed    = at("mixed");
     p.colored  = at("colored");
     p.tint     = at("tint");
@@ -983,7 +1023,10 @@ static void keyGlass(SJob& job) {
     glUniform1f(prog->chroma, g_params.chroma);
     glUniform1f(prog->rim, g_params.rim);
     glUniform1f(prog->clear, g_params.clear);
-    glUniform1i(prog->invert, g_params.invert);
+    glUniform1i(prog->inkMode, g_params.ink);
+    glUniform1f(prog->halo, g_params.halo);
+    glUniform1f(prog->haloSize, g_params.haloSize * S);
+    glUniform1f(prog->hue, g_params.hue);
     glUniform1i(prog->mixed, g_params.report);
     glUniform1i(prog->colored, g_params.colored);
     glUniform1f(prog->tint, g_params.tint);
@@ -1099,8 +1142,8 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     }
 
     if (key.empty() || key == "show")
-        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\ndepth {}\nclear {}\ncolored {}\ntint {}\ninvert {}\nreport {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength,
-                           g_params.chroma, g_params.rim, g_params.frost, g_params.depth, g_params.clear, g_params.colored, g_params.tint, g_params.invert, g_params.report, pidList(), sc<int>(g_timing.mode));
+        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\ndepth {}\nclear {}\ncolored {}\ntint {}\nink {}\nhalo {}\nhalo-size {}\nhue {}\nreport {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength,
+                           g_params.chroma, g_params.rim, g_params.frost, g_params.depth, g_params.clear, g_params.colored, g_params.tint, g_params.ink, g_params.halo, g_params.haloSize, g_params.hue, g_params.report, pidList(), sc<int>(g_timing.mode));
 
     if (key == "stats")
         return timingStats() + std::format("reports read {}, posted {}, pending {}\n", g_report.read, g_report.posted, g_report.fence != nullptr);
@@ -1132,8 +1175,14 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
             setBool(g_params.colored);
         else if (key == "tint")
             g_params.tint = std::stof(value);
-        else if (key == "invert")
-            setBool(g_params.invert);
+        else if (key == "ink")
+            g_params.ink = value == "off" ? 0 : value == "invert" ? 1 : value == "contrast" ? 2 : std::stoi(value);
+        else if (key == "halo")
+            g_params.halo = std::stof(value);
+        else if (key == "halo-size")
+            g_params.haloSize = std::stof(value);
+        else if (key == "hue")
+            g_params.hue = std::stof(value);
         else if (key == "report") {
             setBool(g_params.report);
             if (!g_params.report) {
