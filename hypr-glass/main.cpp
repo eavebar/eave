@@ -53,6 +53,7 @@ static struct {
     float clear    = 0.7F;  // how much of the backdrop shows through the island's color
     int   ink      = 2;     // grey ink: 0 as eave drew it, 1 the opposite of the glass behind, 2 that, as light or dark as it takes to read
     float contrast = 4.5F;  // ink 2: the contrast ratio it reaches (any background allows up to about 4.58)
+    float inkBlur  = 12.F;  // ink: how far apart the taps of the extra blur its color is chosen on are
     bool  colored  = true;  // the glass tinted by what's behind it instead of darkened
     float tint     = 0.35F; // how strong that tint is (0 = clear glass)
     bool  report   = true;  // tell eave how bright it is behind each surface, so islands can turn light
@@ -165,7 +166,7 @@ static std::string timingStats() {
 // needs its own sampler type.
 struct SProgram {
     GLuint id = 0;
-    GLint  backdrop, mask, attached, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, clear, inkMode, contrast, mixed, colored, tint, rect;
+    GLint  backdrop, mask, attached, fbSize, bdOrigin, bdScale, surf, fade, band, strength, chroma, rim, clear, inkMode, contrast, wide, wideScale, wideLimit, wideSize, mixed, colored, tint, rect;
 };
 static SProgram g_progs[2]; // [0] sampler2D, [1] samplerExternalOES
 static GLuint   g_vao = 0, g_vbo = 0;
@@ -201,6 +202,10 @@ uniform float rim;
 uniform float clear;    // how much of the backdrop the island's color lets through
 uniform int   inkMode;  // grey ink: 0 its own, 1 the opposite of the glass behind, 2 that, made to read
 uniform float contrast; // 2: the contrast ratio it reaches
+uniform sampler2D wide; // the most blurred level of the backdrop, for choosing the ink's color
+uniform vec2  wideScale; // frame px from bdOrigin -> uv in it
+uniform vec2  wideLimit; // the part of it that holds content, uv
+uniform float wideSize;  // px between its taps
 uniform bool  mixed;    // light islands may show (eave hears how bright it is behind)
 uniform bool  colored;  // the glass tinted by what's behind it, not by the island's color
 uniform float tint;     // how strong that tint is
@@ -261,9 +266,8 @@ float inkAt(vec2 px) {
 
 // Replaces the layer's pixel, which is already drawn. A black island becomes glass by a screen,
 // so white ink stays white; a white island by a multiply, so black ink stays black.
-void put(vec3 glass, float a) {
-    vec4 t = layer(gl_FragCoord.xy);
-    vec3 ink = t.rgb / max(t.a, 1e-4);
+// What a dark island ([0]) and a light one ([1]) look like over `glass`.
+vec3[2] body(vec3 glass) {
     vec3 dark  = clear * glass;
     vec3 light = vec3(1.0 - clear) + clear * glass;
     if (colored) {
@@ -271,15 +275,35 @@ void put(vec3 glass, float a) {
         vec3 rich = clamp(mix(vec3(luma(glass)), glass, 1.6), 0.0, 1.0);
         dark = light = mix(glass, rich, tint);
     }
-    vec3 col = mix(ink + (1.0 - ink) * dark, ink * light, lightness);
+    return vec3[2](dark, light);
+}
+
+// The glass behind px, much more blurred than the glass itself, and without its bend: what the
+// ink's color is chosen against, so it changes slowly along the bar instead of under each letter.
+vec3 wideLook(vec2 px) {
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < 9; i++) {
+        vec2 o  = vec2(float(i % 3) - 1.0, float(i / 3) - 1.0) * wideSize;
+        vec2 uv = clamp((px + o - bdOrigin) * wideScale, vec2(0.0), wideLimit);
+        sum += texture(wide, uv).rgb;
+    }
+    return sum / 9.0;
+}
+
+void put(vec3 glass, float a) {
+    vec4 t = layer(gl_FragCoord.xy);
+    vec3 ink = t.rgb / max(t.a, 1e-4);
+    vec3[2] b = body(glass);
+    vec3 col = mix(ink + (1.0 - ink) * b[0], ink * b[1], lightness);
     if (inkMode != 0) {
         // How much of the pixel is ink rather than island, for the grey ink only, so edges stay
         // smooth and colored content keeps its colors.
-        vec3  behind = mix(dark, light, lightness);
+        vec3[2] wb     = body(wideLook(gl_FragCoord.xy));
+        vec3    behind = mix(wb[0], wb[1], lightness);
         float amount = inkAt(gl_FragCoord.xy);
         float grey   = 1.0 - smoothstep(0.08, 0.25, max(ink.r, max(ink.g, ink.b)) - min(ink.r, min(ink.g, ink.b)));
         vec3  opposite = vec3(1.0) - behind;
-        vec3  drawn    = mix(behind, inkMode == 1 ? opposite : readable(opposite, behind), amount);
+        vec3  drawn    = mix(mix(b[0], b[1], lightness), inkMode == 1 ? opposite : readable(opposite, behind), amount);
         col = mix(col, drawn, grey);
     }
     a *= fade;
@@ -570,6 +594,10 @@ static SProgram* ensureProgram(bool external) {
     p.clear    = at("clear");
     p.inkMode  = at("inkMode");
     p.contrast = at("contrast");
+    p.wide      = at("wide");
+    p.wideScale = at("wideScale");
+    p.wideLimit = at("wideLimit");
+    p.wideSize  = at("wideSize");
     p.mixed    = at("mixed");
     p.colored  = at("colored");
     p.tint     = at("tint");
@@ -677,6 +705,8 @@ struct SJob {
     CBox             copy; // the part of the frame the backdrop holds
     SP<IFramebuffer> sampled;
     Vector2D         level; // the sampled texture's size over the frame's
+    SP<IFramebuffer> wide;  // the most blurred level, for the ink's color
+    Vector2D         wideLevel;
     bool             ready = false;
     int              pid   = 0;
     CBox             global; // the layer, logical px on the whole desktop
@@ -917,6 +947,8 @@ static void takeBackdrop(SJob& job) {
     // 2. Frost it: blur down `depth` halvings and back up to a half.
     job.sampled    = fbs.backdrop;
     job.level      = {1, 1};
+    job.wide       = fbs.backdrop;
+    job.wideLevel  = {1, 1};
     const int  depth = std::clamp(g_params.depth, 1, 6);
     const bool frost = g_params.frost > 0 && ensurePass(g_down, DOWN_FRAG) && ensurePass(g_up, UP_FRAG) && ensureProgram(false);
     if (frost) {
@@ -947,8 +979,10 @@ static void takeBackdrop(SJob& job) {
             pass(g_down, fbs.levels[i - 1], sizes[i - 1], fbs.levels[i], sizes[i]);
         for (int i = depth - 1; i > 0; i--)
             pass(g_up, fbs.levels[i], sizes[i], fbs.levels[i - 1], sizes[i - 1]);
-        job.sampled = fbs.levels[0];
-        job.level   = {sizes[0].x / c.w, sizes[0].y / c.h};
+        job.sampled   = fbs.levels[0];
+        job.level     = {sizes[0].x / c.w, sizes[0].y / c.h};
+        job.wide      = fbs.levels[depth - 1]; // only blurred down: the way up starts from it
+        job.wideLevel = {sizes[depth - 1].x / c.w, sizes[depth - 1].y / c.h};
         timeEnd();
     }
     if (g_params.report)
@@ -1001,6 +1035,8 @@ static void keyGlass(SJob& job) {
 
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, fbs.attached->getTexture()->m_texID);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, job.wide->getTexture()->m_texID);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, job.sampled->getTexture()->m_texID);
     g_pHyprOpenGL->blend(true);
@@ -1011,6 +1047,10 @@ static void keyGlass(SJob& job) {
     glUniform1i(prog->backdrop, 0);
     glUniform1i(prog->mask, 1);
     glUniform1i(prog->attached, 2);
+    glUniform1i(prog->wide, 3);
+    glUniform2f(prog->wideScale, job.wideLevel.x / job.wide->m_size.x, job.wideLevel.y / job.wide->m_size.y);
+    glUniform2f(prog->wideLimit, job.wideLevel.x * job.copy.w / job.wide->m_size.x, job.wideLevel.y * job.copy.h / job.wide->m_size.y);
+    glUniform1f(prog->wideSize, g_params.inkBlur * S);
     glUniform2f(prog->fbSize, fbSize.x, fbSize.y);
     glUniform2f(prog->bdOrigin, job.copy.x, job.copy.y);
     glUniform2f(prog->bdScale, job.level.x / job.sampled->m_size.x, job.level.y / job.sampled->m_size.y);
@@ -1034,6 +1074,8 @@ static void keyGlass(SJob& job) {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     job.tex->unbind();
     glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, 0);
     g_timing.pixels += job.box.w * job.box.h;
     timeEnd();
@@ -1138,8 +1180,8 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     }
 
     if (key.empty() || key == "show")
-        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\ndepth {}\nclear {}\ncolored {}\ntint {}\nink {}\ncontrast {}\nreport {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength,
-                           g_params.chroma, g_params.rim, g_params.frost, g_params.depth, g_params.clear, g_params.colored, g_params.tint, g_params.ink, g_params.contrast, g_params.report, pidList(), sc<int>(g_timing.mode));
+        return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\ndepth {}\nclear {}\ncolored {}\ntint {}\nink {}\ncontrast {}\nink-blur {}\nreport {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength,
+                           g_params.chroma, g_params.rim, g_params.frost, g_params.depth, g_params.clear, g_params.colored, g_params.tint, g_params.ink, g_params.contrast, g_params.inkBlur, g_params.report, pidList(), sc<int>(g_timing.mode));
 
     if (key == "stats")
         return timingStats() + std::format("reports read {}, posted {}, pending {}\n", g_report.read, g_report.posted, g_report.fence != nullptr);
@@ -1175,6 +1217,8 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
             g_params.ink = value == "off" ? 0 : value == "invert" ? 1 : value == "readable" ? 2 : std::stoi(value);
         else if (key == "contrast")
             g_params.contrast = std::stof(value);
+        else if (key == "ink-blur")
+            g_params.inkBlur = std::stof(value);
         else if (key == "report") {
             setBool(g_params.report);
             if (!g_params.report) {
