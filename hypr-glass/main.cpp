@@ -48,7 +48,7 @@ static struct {
     float frost    = 1.5F;  // spread of each blur step (0 = clear glass)
     float clear    = 0.7F;  // how much of the backdrop shows through the island's color
     bool  light    = false; // white islands: multiply the glass in, instead of screening it
-    int   pid      = 0;     // only this eave's layers (0 = every eave)
+    std::vector<int> pids;  // only these eaves' layers (none = every eave)
     int   skip     = 0;     // for measuring: 1 skips the copy, 2 the refraction
 } g_params;
 
@@ -457,7 +457,7 @@ static SProgram* ensureProgram(bool external) {
 }
 
 static bool isGlass(const PHLLS& ls) {
-    return ls && ls->m_mapped && ls->visible() && ls->m_namespace.starts_with("eave") && (!g_params.pid || ls->getPID() == g_params.pid);
+    return ls && ls->m_mapped && ls->visible() && ls->m_namespace.starts_with("eave") && (g_params.pids.empty() || std::ranges::contains(g_params.pids, ls->getPID()));
 }
 
 static std::vector<PHLLS> glassLayers(const PHLMONITOR& mon) {
@@ -768,6 +768,13 @@ static void wrapLayers() {
     g_fbs[mon.get()].drawn = drawn;
 }
 
+static std::string pidList() {
+    std::string out;
+    for (const int pid : g_params.pids)
+        out += std::format("{}{}", out.empty() ? "" : ",", pid);
+    return out.empty() ? "0" : out;
+}
+
 static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
     std::istringstream in(args);
     std::string        cmd, key, value;
@@ -789,7 +796,7 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
 
     if (key.empty() || key == "show")
         return std::format("enabled {}\nband {}\nstrength {}\nchroma {}\nrim {}\nfrost {}\nclear {}\nlight {}\npid {}\ntiming {}\n", g_params.enabled, g_params.band, g_params.strength,
-                           g_params.chroma, g_params.rim, g_params.frost, g_params.clear, g_params.light, g_params.pid, sc<int>(g_timing.mode));
+                           g_params.chroma, g_params.rim, g_params.frost, g_params.clear, g_params.light, pidList(), sc<int>(g_timing.mode));
 
     if (key == "stats")
         return timingStats();
@@ -819,8 +826,14 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string args) {
             setBool(g_params.light);
         else if (key == "skip")
             g_params.skip = std::stoi(value);
-        else if (key == "pid")
-            g_params.pid = std::stoi(value);
+        else if (key == "pid") {
+            g_params.pids.clear();
+            std::istringstream list(value);
+            for (std::string pid; std::getline(list, pid, ',');) {
+                if (const int n = std::stoi(pid))
+                    g_params.pids.push_back(n);
+            }
+        }
         else
             return "unknown key\n";
     } catch (...) { return "bad value\n"; }
