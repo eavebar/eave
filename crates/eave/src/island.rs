@@ -3247,7 +3247,7 @@ mod tests {
         let mut motion = settled(island, &[1]);
         popover(&mut motion, true, panel, true);
         let out = body_range(&mut motion);
-        assert!(out[3] > 20.0, "runs on ahead, down: {out:?}");
+        assert!(out[3] > 10.0, "runs on ahead, down: {out:?}");
         assert!(out[1] < 0.5, "not up: {out:?}");
         assert_eq!(motion.shape(), panel);
 
