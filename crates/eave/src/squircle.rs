@@ -437,19 +437,85 @@ impl Sink for Polygons {
 /// How close `inner` comes to `outer`: the shortest distance from any point of one outline, as
 /// flattened, to the other's edges. Exact to [`TOLERANCE`], plus how finely `inner` is cut.
 pub fn clearance(outer: &Polygons, inner: &Polygons) -> f32 {
+    // Flattened finely, each outline has hundreds of pieces, and the walls ask this hundreds of
+    // times as they feel their way (D-119). So both go in runs with a box round each, the pairs of
+    // runs nearest first, and a pair whose boxes are further apart than the closest found so far
+    // can't come closer: it's skipped, and so is every pair after it.
+    let edges: Vec<(Point, Point)> = outer
+        .0
+        .iter()
+        .flat_map(|polygon| polygon.iter().zip(polygon.iter().cycle().skip(1)))
+        .map(|(a, b)| (*a, *b))
+        .collect();
+    let edges: Vec<_> = edges
+        .chunks(RUN)
+        .map(|edges| Run::new(edges, |(a, b)| [*a, *b]))
+        .collect();
+    let points: Vec<Point> = inner.0.iter().flatten().copied().collect();
+    let points: Vec<_> = points
+        .chunks(RUN)
+        .map(|points| Run::new(points, |at| [*at; 2]))
+        .collect();
+    let mut pairs: Vec<_> = points
+        .iter()
+        .flat_map(|points| {
+            edges
+                .iter()
+                .map(move |edges| (points.gap(edges), points, edges))
+        })
+        .collect();
+    pairs.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+    // Squared, as the gaps are, until the end.
     let mut closest = f32::INFINITY;
-    for point in inner.0.iter().flatten() {
-        for polygon in &outer.0 {
-            let closed = polygon.iter().zip(polygon.iter().cycle().skip(1));
-            for (a, b) in closed {
+    for (gap, points, edges) in pairs {
+        if gap >= closest {
+            break;
+        }
+        for point in points.items {
+            for (a, b) in edges.items {
                 closest = closest.min(to_segment(*point, *a, *b));
             }
         }
     }
-    closest
+    closest.sqrt()
 }
 
-/// The distance from `point` to the segment from `a` to `b`.
+/// How many pieces of an outline [`clearance`] boxes together.
+const RUN: usize = 16;
+
+/// Some pieces of an outline, in order, and the box round them.
+struct Run<'a, T> {
+    items: &'a [T],
+    low: Point,
+    high: Point,
+}
+
+impl<'a, T> Run<'a, T> {
+    fn new(items: &'a [T], ends: impl Fn(&T) -> [Point; 2]) -> Self {
+        let (mut low, mut high) = (
+            Point::new(f32::INFINITY, f32::INFINITY),
+            Point::new(f32::NEG_INFINITY, f32::NEG_INFINITY),
+        );
+        for at in items.iter().flat_map(ends) {
+            low = Point::new(low.x.min(at.x), low.y.min(at.y));
+            high = Point::new(high.x.max(at.x), high.y.max(at.y));
+        }
+        Self { items, low, high }
+    }
+
+    /// The square of how far apart its box and `other`'s are: 0 where they overlap.
+    fn gap<U>(&self, other: &Run<U>) -> f32 {
+        let dx = (other.low.x - self.high.x)
+            .max(self.low.x - other.high.x)
+            .max(0.0);
+        let dy = (other.low.y - self.high.y)
+            .max(self.low.y - other.high.y)
+            .max(0.0);
+        dx * dx + dy * dy
+    }
+}
+
+/// The square of the distance from `point` to the segment from `a` to `b`.
 fn to_segment(point: Point, a: Point, b: Point) -> f32 {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
     let length = dx * dx + dy * dy;
@@ -458,13 +524,47 @@ fn to_segment(point: Point, a: Point, b: Point) -> f32 {
     } else {
         (((point.x - a.x) * dx + (point.y - a.y) * dy) / length).clamp(0.0, 1.0)
     };
-    point.distance(Point::new(a.x + t * dx, a.y + t * dy))
+    let (x, y) = (point.x - (a.x + t * dx), point.y - (a.y + t * dy));
+    x * x + y * y
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use iced::Size;
+
+    #[test]
+    fn skipping_far_runs_finds_what_every_pair_finds() {
+        // The screen's top corners and an island near each, and one far from both.
+        let mut screen = Polygons::default();
+        rectangle(
+            &mut screen,
+            Rectangle::new(Point::ORIGIN, Size::new(1512.0, 1.0e4)),
+            [
+                CornerShape::new(39.0, 0.65),
+                CornerShape::new(39.0, 0.65),
+                CornerShape::SQUARE,
+                CornerShape::SQUARE,
+            ],
+        );
+        for x in [4.0, 600.0, 1331.336] {
+            let mut island = Polygons::default();
+            rectangle(
+                &mut island,
+                Rectangle::new(Point::new(x, 4.0), Size::new(174.664, 29.0)),
+                [CornerShape::new(14.0, 0.6); 4],
+            );
+            let mut every = f32::INFINITY;
+            for point in island.0.iter().flatten() {
+                for polygon in &screen.0 {
+                    for (a, b) in polygon.iter().zip(polygon.iter().cycle().skip(1)) {
+                        every = every.min(to_segment(*point, *a, *b));
+                    }
+                }
+            }
+            assert_eq!(clearance(&screen, &island), every.sqrt(), "{x}");
+        }
+    }
 
     #[test]
     fn concentric_circles_are_their_difference_apart() {
