@@ -17,3 +17,6 @@ pub mod __interfaces {
 use self::__interfaces::*;
 
 wayland_scanner::generate_client_code!("../../protocol/eave-glass-v1.xml");
+
+// The scanner reads the file without telling cargo: this does, so a change to it rebuilds.
+const _: &[u8] = include_bytes!("../../../../protocol/eave-glass-v1.xml");

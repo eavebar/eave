@@ -50,6 +50,10 @@ namespace Glass {
     };
 
     constexpr size_t MAX_REGIONS = 64;
+    // Controls cut into the glass or standing out of it (set_reliefs, version 4, D-126).
+    constexpr size_t MAX_RELIEFS = 64;
+    // Each relief goes to the shader as this many RGBA texels of its data texture.
+    constexpr size_t RELIEF_TEXELS = 4;
     // libwayland drops a connection that gets a message over 4096 bytes: and eave's is the bar's
     // own. A backdrop event is 24 bytes and its cells, padded to 4.
     constexpr size_t MAX_REPORT_CELLS = 4096 - 24 - 4;
@@ -64,11 +68,24 @@ namespace Glass {
         bool     operator==(const SRegion&) const = default;
     };
 
+    // A record of eave_glass_surface_v1.set_reliefs: a control on an island, surface-local
+    // logical px.
+    struct SRelief {
+        float    x = 0, y = 0, w = 0, h = 0, radius = 0;
+        uint32_t kind  = 0; // 0 a well, 1 a bead
+        float    depth = 0; // at rest, logical px
+        float    press = 0, milk = 0, lit = 0; // 0 to 1
+        float    fillX = 0, lightX = 0, lightY = 0;
+
+        bool     operator==(const SRelief&) const = default;
+    };
+
     // What eave said, double-buffered: requests set the pending one, the surface's commit makes it
     // current.
     struct SState {
         std::vector<SRegion> regions; // glass and solid
         std::vector<SRegion> bezel;   // the notch and the grown edge: the pointer goes under them
+        std::vector<SRelief> reliefs; // controls cut into the glass, or standing out of it
         SLook                look;
         uint32_t             reportCell = 0;
 
@@ -156,6 +173,9 @@ namespace Glass {
         std::array<float, MAX_REGIONS * 4> boxes{}, fills{};
         std::array<int, MAX_REGIONS>       chans{};
         std::array<float, MAX_REGIONS>     bevels{}; // each island's bevel, s px: the band, or less on a narrow one
+        // And the reliefs (`reliefs`), in s px, as the rows of the data texture the glass reads.
+        int                                                  reliefCount = 0;
+        std::array<float, MAX_RELIEFS * RELIEF_TEXELS * 4>   reliefData{};
 
         // Filled by the backdrop step:
         CBox                     copy; // the part of the framebuffer the backdrop holds

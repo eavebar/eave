@@ -151,6 +151,21 @@
       <arg name="gap" type="fixed"/>
     </request>
 
+    <enum name="ink">
+      <entry name="own" value="0" summary="as the client drew it"/>
+      <entry name="invert" value="1" summary="the opposite of the glass behind"/>
+      <entry name="readable" value="2"
+             summary="the opposite of the glass behind, as light or dark as it takes to reach contrast"/>
+    </enum>
+
+    <request name="set_report">
+      <description summary="ask for backdrop reports">
+        0 stops them. Otherwise backdrop events come with cells of this many
+        logical pixels. The initial value is 0.
+      </description>
+      <arg name="cell" type="uint"/>
+    </request>
+
     <request name="set_reliefs" since="4">
       <description summary="what is cut into the glass, or stands out of it">
         An array of records, each thirteen native-endian 32-bit integers.
@@ -172,26 +187,12 @@
         light: 0 to 255, how bright a soft light around it is.
 
         A relief changes the glass of the island it's in only: outside
-        every glass record it's ignored. The initial value is empty. At
+        every glass record it's ignored. New requests go last, here: a
+        request's number is its place in the interface. The initial value is empty. At
         most 64 records: the compositor ignores the rest, and 64 keeps the
         request inside one Wayland message (4096 bytes).
       </description>
       <arg name="reliefs" type="array"/>
-    </request>
-
-    <enum name="ink">
-      <entry name="own" value="0" summary="as the client drew it"/>
-      <entry name="invert" value="1" summary="the opposite of the glass behind"/>
-      <entry name="readable" value="2"
-             summary="the opposite of the glass behind, as light or dark as it takes to reach contrast"/>
-    </enum>
-
-    <request name="set_report">
-      <description summary="ask for backdrop reports">
-        0 stops them. Otherwise backdrop events come with cells of this many
-        logical pixels. The initial value is 0.
-      </description>
-      <arg name="cell" type="uint"/>
     </request>
 
     <event name="backdrop">
