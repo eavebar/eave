@@ -66,6 +66,9 @@ unload() { ctl plugin unload "$dir/hypr-eave-$n.so" > /dev/null || fail "unload 
 load
 glass "loading"
 echo "ok: eave has glass"
+sleep 1 # a few frames: the shaders compile, and the buffers are drawn, as the glass first draws
+ctl hypreave | grep -q "glass on" || { ctl hypreave; fail "the glass turned itself off"; }
+echo "ok: the glass draws"
 
 i=0
 while [ $i -lt "$reloads" ]; do

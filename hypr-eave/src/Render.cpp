@@ -23,6 +23,7 @@ namespace Glass {
     struct SMonitorGlass {
         SP<IFramebuffer>              backdrop;
         std::vector<SP<IFramebuffer>> levels; // a half, a quarter...
+        SP<IFramebuffer>              field, across; // the bend's field, and its blur's halfway
         CRegion                       drawn;  // where the glass was drawn last, monitor px
     };
     static auto& g_monitors = *new std::unordered_map<void*, SMonitorGlass>; // never destroyed: see Protocol.cpp
@@ -31,8 +32,8 @@ namespace Glass {
     // which needs its own sampler type.
     struct SGlassProgram {
         GLuint id = 0;
-        GLint  mask, surfSize, fbOrigin, toFb, toSurf, backdrop, bdOrigin, bdScale, bdLimit, wide, wideScale, wideLimit, wideSize, fade, band, strength, chroma, rim, tint,
-            ink, contrast, margin, count, boxes, fills, fbSize, rect;
+        GLint  mask, surfSize, fbOrigin, toFb, toSurf, backdrop, bdOrigin, bdScale, bdLimit, wide, wideScale, wideLimit, wideSize, field, fieldScale, fieldLimit, fieldStep, sigma, band,
+            fade, strength, chroma, rim, tint, ink, contrast, margin, count, boxes, fills, fbSize, rect;
     };
     static SGlassProgram g_glass[2];
 
@@ -40,7 +41,7 @@ namespace Glass {
         GLuint id = 0;
         GLint  src, srcScale, texel, offset;
     };
-    static SPassProgram g_down, g_up;
+    static SPassProgram g_down, g_up, g_blur, g_shape[2]; // shape: per kind of surface texture
     static GLuint       g_vao = 0, g_vbo = 0;
 
     static GLuint       compile(GLenum type, const std::string& src) {
@@ -93,6 +94,12 @@ namespace Glass {
         return s;
     }
 
+    // A shader that samples the surface's texture, for the kind it is.
+    static std::string forTexture(const char* frag, bool external) {
+        return replaced(replaced(frag, "EXTENSION", external ? "#extension GL_OES_EGL_image_external_essl3 : require" : ""), "SAMPLER",
+                        external ? "samplerExternalOES" : "sampler2D");
+    }
+
     void ensureQuad() {
         if (g_vao)
             return;
@@ -120,9 +127,7 @@ namespace Glass {
         auto& p = g_glass[external];
         if (p.id)
             return &p;
-        const auto frag = replaced(replaced(SHADER_glass_frag, "EXTENSION", external ? "#extension GL_OES_EGL_image_external_essl3 : require" : ""), "SAMPLER",
-                                   external ? "samplerExternalOES" : "sampler2D");
-        p.id = link(SHADER_quad_vert, frag);
+        p.id = link(SHADER_quad_vert, forTexture(SHADER_glass_frag, external));
         if (!p.id)
             return nullptr;
         auto at     = [&](const char* name) { return glGetUniformLocation(p.id, name); };
@@ -139,8 +144,13 @@ namespace Glass {
         p.wideScale = at("wideScale");
         p.wideLimit = at("wideLimit");
         p.wideSize  = at("wideSize");
+        p.field      = at("field");
+        p.fieldScale = at("fieldScale");
+        p.fieldLimit = at("fieldLimit");
+        p.fieldStep  = at("fieldStep");
+        p.sigma      = at("sigma");
+        p.band       = at("band");
         p.fade      = at("fade");
-        p.band      = at("band");
         p.strength  = at("strength");
         p.chroma    = at("chroma");
         p.rim       = at("rim");
@@ -157,7 +167,7 @@ namespace Glass {
         return &p;
     }
 
-    static bool ensurePass(SPassProgram& p, const char* frag) {
+    static bool ensurePass(SPassProgram& p, const std::string& frag) {
         if (p.id)
             return true;
         p.id = link(SHADER_pass_vert, frag);
@@ -172,15 +182,19 @@ namespace Glass {
     }
 
     // Grows `fb` to hold at least `need`, in the format of `like`, the framebuffer it's blitted
-    // from or drawn back into.
-    bool ensureFB(SP<IFramebuffer>& fb, const SP<IFramebuffer>& like, const Vector2D& need) {
+    // from or drawn back into, or in `format`. Only a buffer in `like`'s format failing turns the
+    // glass off: another format can fall back to it.
+    bool ensureFB(SP<IFramebuffer>& fb, const SP<IFramebuffer>& like, const Vector2D& need, DRMFormat format = 0) {
+        if (!format)
+            format = like->m_drmFormat;
         if (!fb)
             fb = g_pHyprRenderer->createFB("hypr-eave");
-        if (!fb->isAllocated() || fb->m_size.x < need.x || fb->m_size.y < need.y || fb->m_drmFormat != like->m_drmFormat) {
+        if (!fb->isAllocated() || fb->m_size.x < need.x || fb->m_size.y < need.y || fb->m_drmFormat != format) {
             const Vector2D size = {std::max(need.x, fb->isAllocated() ? fb->m_size.x : 0.0), std::max(need.y, fb->isAllocated() ? fb->m_size.y : 0.0)};
             fb->release();
-            if (!fb->alloc(size.x, size.y, like->m_drmFormat)) {
-                fail("couldn't allocate a buffer");
+            if (!fb->alloc(size.x, size.y, format)) {
+                if (format == like->m_drmFormat)
+                    fail("couldn't allocate a buffer");
                 return false;
             }
         }
@@ -307,6 +321,82 @@ namespace Glass {
         Internals::thisFrameDamage(mon->m_damage).add(extra);
     }
 
+    // The field's format: half floats, so its slope is smooth even a band in. Some GPUs can't
+    // draw into them, and then it's the framebuffer's, 8 bits.
+    static bool g_halfFloat = true;
+
+    static bool ensureField(SP<IFramebuffer>& fb, const SP<IFramebuffer>& like, const Vector2D& need) {
+        if (g_halfFloat) {
+            if (ensureFB(fb, like, need, DRM_FORMAT_ABGR16161616F)) {
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLFB(fb)->getFBID());
+                if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+                    return true;
+            }
+            g_halfFloat = false;
+            log("no half-float buffers: the bend's field is 8-bit");
+        }
+        return ensureFB(fb, like, need);
+    }
+
+    // The bend's field: the surface's coverage, blurred by a gaussian a band wide. Its value says
+    // how deep into the glass a pixel is and its slope which way is out, both smooth from pixel to
+    // pixel, which rings of samples around each pixel weren't: they changed in steps as the edge
+    // crossed them. The gaussian's sigma is two fifths of the band: it has all but settled a band
+    // in, and goes there as the rings did.
+    //
+    // It's drawn small, at most 4 texels to the sigma: a blur that wide has nothing finer. Each
+    // texel averages the coverage under it first, so the edge can't fall between samples.
+    static bool drawField(SJob& job, SMonitorGlass& fbs, const SP<IFramebuffer>& target, float scale) {
+        const bool external = job.tex->m_type == Render::TEXTURE_EXTERNAL;
+        if (!ensurePass(g_shape[external], forTexture(SHADER_shape_frag, external)) || !ensurePass(g_blur, SHADER_blur_frag))
+            return false;
+
+        const float    sigma = std::max(job.state.look.band * scale / 2.5F, 0.5F); // s px
+        const float    step  = std::max(sigma / 4.F, 1.F);                         // s px per texel
+        const Vector2D size  = {std::ceil(job.box.w / step), std::ceil(job.box.h / step)};
+        if (!ensureField(fbs.field, target, size) || !ensureField(fbs.across, target, size))
+            return false;
+
+        glBindVertexArray(g_vao);
+        g_pHyprOpenGL->blend(false);
+        glActiveTexture(GL_TEXTURE0);
+        g_pHyprOpenGL->setViewport(0, 0, size.x, size.y);
+
+        // 1. The coverage, a texel's worth at a time, into the field.
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLFB(fbs.field)->getFBID());
+        auto& shape = g_shape[external];
+        glUseProgram(shape.id);
+        job.tex->bind();
+        job.tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        job.tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glUniform1i(shape.src, 0);
+        glUniform2f(shape.srcScale, size.x * step / job.box.w, size.y * step / job.box.h);
+        glUniform2f(shape.texel, step / job.box.w, step / job.box.h);
+        glUniform1f(shape.offset, std::clamp(std::ceil(step), 1.F, 4.F));
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        job.tex->unbind();
+
+        // 2. Blurred across into `across`, and down back into the field.
+        glUseProgram(g_blur.id);
+        glUniform1i(g_blur.src, 0);
+        glUniform1f(g_blur.offset, sigma / step);
+        auto blur = [&](const SP<IFramebuffer>& src, const SP<IFramebuffer>& dst, Vector2D dir) {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLFB(dst)->getFBID());
+            glBindTexture(GL_TEXTURE_2D, src->getTexture()->m_texID);
+            glUniform2f(g_blur.srcScale, size.x / src->m_size.x, size.y / src->m_size.y);
+            glUniform2f(g_blur.texel, dir.x / src->m_size.x, dir.y / src->m_size.y);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        };
+        blur(fbs.field, fbs.across, {1, 0});
+        blur(fbs.across, fbs.field, {0, 1});
+
+        job.field     = fbs.field;
+        job.fieldSize = size;
+        job.fieldStep  = step;
+        job.fieldSigma = sigma;
+        return true;
+    }
+
     // Before the surface: copy what's under and around it, and frost it.
     static void takeBackdrop(SJob& job, CGlassSurface* glass) {
         auto& rd  = g_pHyprRenderer->m_renderData;
@@ -374,6 +464,8 @@ namespace Glass {
                 job.wideLevel = {sizes[depth - 1].x / c.w, sizes[depth - 1].y / c.h};
             }
         }
+        if (ok)
+            ok = drawField(job, fbs, target, mon->m_scale);
         if (ok && glass && job.state.reportCell)
             reportBackdrop(*glass, job);
 
@@ -421,6 +513,8 @@ namespace Glass {
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, job.sampled->getTexture()->m_texID);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, job.field->getTexture()->m_texID);
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, job.wide->getTexture()->m_texID);
         g_pHyprOpenGL->blend(true);
@@ -432,6 +526,7 @@ namespace Glass {
         glUseProgram(prog->id);
         glUniform1i(prog->backdrop, 0);
         glUniform1i(prog->mask, 1);
+        glUniform1i(prog->field, 2);
         glUniform1i(prog->wide, 3);
         glUniform2f(prog->surfSize, job.box.w, job.box.h);
         glUniform2f(prog->fbOrigin, job.fbOrigin.x, job.fbOrigin.y);
@@ -443,8 +538,13 @@ namespace Glass {
         glUniform2f(prog->wideScale, job.wideLevel.x / job.wide->m_size.x, job.wideLevel.y / job.wide->m_size.y);
         glUniform2f(prog->wideLimit, job.wideLevel.x * job.copy.w / job.wide->m_size.x, job.wideLevel.y * job.copy.h / job.wide->m_size.y);
         glUniform1f(prog->wideSize, lk.inkBlur * S);
+        const auto fs = job.field->m_size;
+        glUniform2f(prog->fieldScale, 1.0 / (job.fieldStep * fs.x), 1.0 / (job.fieldStep * fs.y));
+        glUniform4f(prog->fieldLimit, 0.5 / fs.x, 0.5 / fs.y, (job.fieldSize.x - 0.5) / fs.x, (job.fieldSize.y - 0.5) / fs.y);
+        glUniform1f(prog->fieldStep, job.fieldStep);
+        glUniform1f(prog->sigma, job.fieldSigma);
+        glUniform1f(prog->band, std::max(lk.band * S, 1e-3F));
         glUniform1f(prog->fade, job.fade);
-        glUniform1f(prog->band, lk.band * S);
         glUniform1f(prog->strength, lk.strength * S);
         glUniform1f(prog->chroma, lk.chroma);
         glUniform1f(prog->rim, lk.rim);
@@ -572,6 +672,8 @@ namespace Glass {
         for (auto const& [mon, fbs] : g_monitors) {
             std::vector<SP<IFramebuffer>> all = {fbs.backdrop};
             all.insert(all.end(), fbs.levels.begin(), fbs.levels.end());
+            all.push_back(fbs.field);
+            all.push_back(fbs.across);
             for (auto const& fb : all) {
                 if (!fb || !fb->isAllocated())
                     continue;
@@ -590,7 +692,7 @@ namespace Glass {
                 glDeleteProgram(p.id);
             p = {};
         }
-        for (auto* p : {&g_down, &g_up}) {
+        for (auto* p : {&g_down, &g_up, &g_blur, &g_shape[0], &g_shape[1]}) {
             if (p->id)
                 glDeleteProgram(p->id);
             *p = {};
