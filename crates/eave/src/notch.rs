@@ -83,6 +83,9 @@ pub struct Screen {
     pub shift: [f32; 2],
     /// The screen's scale: physical pixels to logical.
     pub scale: f32,
+    /// How tall the screen is, or 0 while that isn't known. The surface grows to this while
+    /// anything is out of the bar, so it's resized once, not at every step of a morph (D-128).
+    pub height: f32,
 }
 
 impl Default for Screen {
@@ -96,6 +99,7 @@ impl Default for Screen {
             measured: false,
             shift: [0.0; 2],
             scale: 1.0,
+            height: 0.0,
         }
     }
 }
@@ -348,11 +352,22 @@ pub async fn resolve(screens: config::Screens, output: Option<String>) -> (Optio
             .corners
             .map(|radius| CornerShape::new(radius / scale, screen.smoothing)),
         scale,
+        height: monitor.as_ref().map_or(0.0, logical_height),
         ..Screen::default()
     };
     resolved.resolve_islands(islands, scale);
     resolved.shift = [Side::Left, Side::Right].map(|side| resolved.corner_shift(side));
     (output.or(monitor.map(|monitor| monitor.name)), resolved)
+}
+
+/// How tall `monitor` is in logical pixels. Turned a quarter, its height is the mode's width.
+pub fn logical_height(monitor: &eave_hyprland::types::Monitor) -> f32 {
+    let height = if monitor.transform % 2 == 1 {
+        monitor.width
+    } else {
+        monitor.height
+    };
+    height as f32 / monitor.scale
 }
 
 /// The notch config.toml gives, in logical pixels at `scale`, as big as the bar draws it: grown.

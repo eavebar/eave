@@ -1270,7 +1270,8 @@ impl Bar {
         edge.into_iter().chain(notch).collect()
     }
 
-    fn fit(&self, window: window::Id) -> Task<Message> {
+    /// What's out of the bar on `window`, placed: popovers, notices, the dormer and a dialog.
+    fn placed(&self, window: window::Id) -> Vec<Rectangle> {
         let notices = self
             .notices
             .as_ref()
@@ -1286,19 +1287,34 @@ impl Bar {
             .as_ref()
             .filter(|_| self.toast_window() == Some(window))
             .and_then(|dialog| dialog.rect);
-        let rects: Vec<Rectangle> = self
-            .popovers
+        self.popovers
             .iter()
             .filter(|popover| popover.window == window)
             .filter_map(|popover| popover.rect)
             .chain(notices)
             .chain(dormer)
             .chain(dialog)
-            .collect();
-        let height = rects
+            .collect()
+    }
+
+    /// How tall a surface is with `placed` out of it.
+    fn fitted_height(&self, placed: &[Rectangle]) -> u32 {
+        // While anything is out, the surface is as tall as the screen: a resize waits on the
+        // compositor and drops frames, so it's done once, not at every step of a morph (D-128).
+        let out = if placed.is_empty() {
+            0
+        } else {
+            self.screen.height.ceil() as u32
+        };
+        placed
             .iter()
             .map(|rect| (rect.y + rect.height).ceil() as u32 + u32::from(style::EDGE_GAP))
-            .fold(self.surface_height(), u32::max);
+            .fold(self.surface_height().max(out), u32::max)
+    }
+
+    fn fit(&self, window: window::Id) -> Task<Message> {
+        let rects = self.placed(window);
+        let height = self.fitted_height(&rects);
         // A hidden bar takes the pointer only at the top edge, if hovering brings it out (D-88),
         // and on the notch and the grown edge, which stay (D-106).
         let strip = if self.out() {
@@ -2481,15 +2497,7 @@ fn handle_dialog(bar: &mut Bar, event: dialog::Event) -> Task<Message> {
 /// `inset` is how far down the surface starts.
 async fn center(inset: f32) -> (f32, f32) {
     let height = match notch::focused().await {
-        // Turned a quarter, the screen's height is the mode's width.
-        Some(monitor) => {
-            let height = if monitor.transform % 2 == 1 {
-                monitor.width
-            } else {
-                monitor.height
-            };
-            height as f32 / monitor.scale
-        }
+        Some(monitor) => notch::logical_height(&monitor),
         None => CENTER_ROOM + inset,
     };
     ((height / 5.0 - inset).round(), (height - inset).round())
@@ -3626,6 +3634,38 @@ mod tests {
 
     fn placed() -> Rectangle {
         Rectangle::new(iced::Point::new(6.0, 6.0), iced::Size::new(200.0, 100.0))
+    }
+
+    #[test]
+    fn the_surface_grows_to_the_screen_once_while_anything_is_out() {
+        let mut bar = open_bar();
+        let window = bar.popovers[0].window;
+        let rest = bar.surface_height();
+        // The screen's height not known yet: down to the popover, as before.
+        let popover = bar.fitted_height(&bar.placed(window));
+        assert_eq!(popover, 106 + u32::from(style::EDGE_GAP));
+
+        bar.screen.height = 900.0;
+        assert_eq!(bar.fitted_height(&bar.placed(window)), 900);
+        // Taller content, placed again, needs no resize.
+        let _ = update(
+            &mut bar,
+            Message::PopoverPlaced(
+                0,
+                Rectangle::new(iced::Point::new(6.0, 6.0), iced::Size::new(200.0, 400.0)),
+            ),
+        );
+        assert_eq!(bar.fitted_height(&bar.placed(window)), 900);
+
+        // Back once it has folded away.
+        let _ = update(&mut bar, Message::BarPressed);
+        assert_eq!(
+            bar.fitted_height(&bar.placed(window)),
+            900,
+            "still folding back"
+        );
+        let _ = update(&mut bar, Message::PopoverClosed(0));
+        assert_eq!(bar.fitted_height(&bar.placed(window)), rest);
     }
 
     #[test]

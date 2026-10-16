@@ -474,6 +474,7 @@ impl<T> WindowStateUnitBuilder<T> {
                 scale: 120,
                 request_flag: Default::default(),
                 present_available_state: Default::default(),
+                in_flight: 0,
             },
         }
     }
@@ -566,6 +567,8 @@ pub struct WindowStateUnit<T> {
     scale: u32,
     request_flag: WindowStateUnitRequestFlag,
     present_available_state: PresentAvailableState,
+    /// eave patch: frames committed whose frame callback hasn't come back yet.
+    in_flight: u8,
 }
 
 impl<T> WindowStateUnit<T> {
@@ -855,7 +858,14 @@ impl<T: 'static> WindowStateUnit<T> {
     pub fn request_next_present(&mut self) {
         match self.present_available_state {
             PresentAvailableState::Taken => {
-                self.present_available_state = PresentAvailableState::Requested;
+                // eave patch: up to `FRAMES_AHEAD` frames may wait on the compositor at once, so
+                // the next frame's CPU work overlaps the last one's GPU work and compositing.
+                self.in_flight += 1;
+                self.present_available_state = if self.in_flight < FRAMES_AHEAD {
+                    PresentAvailableState::Available
+                } else {
+                    PresentAvailableState::Requested
+                };
                 self.wl_surface
                     .frame(&self.qh, (self.id, PresentAvailableState::Available));
             }
@@ -2119,7 +2129,11 @@ impl<T> Dispatch<WlCallback, (id::Id, PresentAvailableState)> for WindowState<T>
         if let WlCallbackEvent::Done { callback_data: _ } = event
             && let Some(unit) = state.get_mut_unit_with_id(data.0)
         {
-            unit.present_available_state = data.1;
+            // eave patch: a frame being drawn keeps its slot; it asks for its own callback.
+            unit.in_flight = unit.in_flight.saturating_sub(1);
+            if unit.present_available_state == PresentAvailableState::Requested {
+                unit.present_available_state = data.1;
+            }
         }
     }
 }
@@ -3320,3 +3334,7 @@ fn set_cursor_shape<T: 'static>(
         cursor_surface.commit();
     }
 }
+
+/// eave patch: how many frames may wait on the compositor at once. Upstream waits for each
+/// frame's callback before starting the next (1), so drawing and compositing never overlap.
+const FRAMES_AHEAD: u8 = 2;
