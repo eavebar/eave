@@ -16,6 +16,7 @@ use iced::{
     alignment, window,
 };
 
+use crate::glass::frame::{self, Relief, Shape};
 use crate::handover::Handover;
 use crate::island;
 use crate::switcher::Motion;
@@ -178,19 +179,45 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
         let current = self.current(tree);
         let count = self.names.len();
         let pill = |height: f32| Border::default().rounded(height / 2.0);
-
-        renderer.fill_quad(
-            renderer::Quad {
-                bounds: Rectangle::new(
-                    bounds.position(),
-                    Size::new(bounds.width, theme::TAB_HEIGHT),
-                ),
-                border: pill(theme::TAB_HEIGHT),
-                ..renderer::Quad::default()
-            },
-            p.tab_track(),
+        let track = Rectangle::new(
+            bounds.position(),
+            Size::new(bounds.width, theme::TAB_HEIGHT),
         );
-        if let Some(hovered) = state.hovered.filter(|&hovered| hovered != current) {
+
+        // On glass, the track is a well in it and the mark a bead in that (D-126).
+        if crate::press::on_glass() {
+            let relief = |rect: Rectangle, shape: Shape, depth: f32| Relief {
+                rect,
+                radius: rect.height / 2.0,
+                shape,
+                depth,
+                press: 0.0,
+                milk: 0.0,
+                fill_x: rect.x + rect.width,
+                light: rect.center(),
+                lit: 0.0,
+            };
+            frame::relief(relief(track, Shape::Well, theme::RELIEF_WELL), viewport);
+            if let Some(shown) = state.motion.shown {
+                frame::relief(
+                    relief(shown + origin, Shape::Bead, theme::RELIEF_BEAD),
+                    viewport,
+                );
+            }
+        } else {
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: track,
+                    border: pill(theme::TAB_HEIGHT),
+                    ..renderer::Quad::default()
+                },
+                p.tab_track(),
+            );
+        }
+        if let Some(hovered) = state
+            .hovered
+            .filter(|&hovered| hovered != current && !crate::press::on_glass())
+        {
             let hover = segment(bounds.width, count, hovered) + origin;
             renderer.fill_quad(
                 renderer::Quad {
@@ -201,7 +228,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Tabs<'_, M> {
                 p.hover_bg,
             );
         }
-        if let Some(shown) = state.motion.shown {
+        if let Some(shown) = state.motion.shown.filter(|_| !crate::press::on_glass()) {
             renderer.fill_quad(
                 renderer::Quad {
                     bounds: shown + origin,

@@ -208,7 +208,7 @@ A key press closes it too, since 2026-10-12 ([D-36](#d-36-popovers-take-the-keyb
 
 ## D-16: `switcher` primitive and item scroll; the host animates the mark
 
-**Status:** accepted (2026-10-12)
+**Status:** accepted (2026-10-12). The mark's slide is superseded by [D-127](#d-127-controls-answer-the-hand): each edge springs on its own, the leading one first. `SWITCHER_SLIDE` is gone.
 
 **What:** two additions to the vocabulary ([D-13](#d-13-plugins-describe-ui-with-a-closed-vocabulary)). `ui::switcher(options, current)` is a row of `(node, message)` choices, one of them current. `Item::on_scroll(up, down)` sends one message per scroll step. The host draws the switcher's mark (`theme::SWITCHER_MARK`) behind the current option. When `current` changes, the mark eases (cubic out, `theme::SWITCHER_SLIDE` = 180 ms) from wherever it is to the new option. Each step runs on `RedrawRequested`, which iced_layershell sends when the compositor's frame callback fires, and asks for another frame only until the mark arrives. The target is kept relative to the switcher, so a neighbour changing width moves the mark with the row instead of making it slide. `Slot` sums touchpad pixels (`theme::SCROLL_STEP` = 30 px per step) and caps one wheel event at 5 steps.
 
@@ -2530,7 +2530,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 
 ## D-112: Glass, drawn by a Hyprland plugin that eave tells what's glass
 
-**Status:** accepted (2026-10-15), experimental until the user signs off the look. It amends [D-23](#d-23-core-plugins-depend-only-on-hyprland-and-the-kernel): an optional compositor plugin, built from this repository, is allowed, and [D-92](#d-92-light-and-dark-the-palette-mirrors): glass is a third theme. Without the plugin, nothing changes. Amended by [D-113](#d-113-the-pointer-slides-under-the-notch): the plugin also puts the pointer under the notch, so `eave-build` builds it in every theme, and eave talks to it in every theme. Amended (2026-10-16): the bend at the edges comes from a blurred field of the island's shape, no longer from rings of samples around each pixel (*The bend*, below). Amended again (2026-10-16): the edge is a glass bevel the backdrop refracts through, by Snell's law, floating a gap over it so its edge turns what's behind over, its rim lit by Fresnel reflection, and the frost is light (*The refraction*, below). Amended (2026-10-16): colored content on a dark island keeps its colors; only grey ink is screened onto the glass (*Ink*, below).
+**Status:** accepted (2026-10-15), experimental until the user signs off the look. Amended by [D-126](#d-126-controls-are-etched-into-the-glass): controls shape the glass too (protocol version 4). It amends [D-23](#d-23-core-plugins-depend-only-on-hyprland-and-the-kernel): an optional compositor plugin, built from this repository, is allowed, and [D-92](#d-92-light-and-dark-the-palette-mirrors): glass is a third theme. Without the plugin, nothing changes. Amended by [D-113](#d-113-the-pointer-slides-under-the-notch): the plugin also puts the pointer under the notch, so `eave-build` builds it in every theme, and eave talks to it in every theme. Amended (2026-10-16): the bend at the edges comes from a blurred field of the island's shape, no longer from rings of samples around each pixel (*The bend*, below). Amended again (2026-10-16): the edge is a glass bevel the backdrop refracts through, by Snell's law, floating a gap over it so its edge turns what's behind over, its rim lit by Fresnel reflection, and the frost is light (*The refraction*, below). Amended (2026-10-16): colored content on a dark island keeps its colors; only grey ink is screened onto the glass (*Ink*, below).
 
 **What:** `theme = "glass"` in config.toml, next to dark, light and system. With the `hypr-eave` plugin loaded in Hyprland, the islands are liquid glass. What's behind them shows through, frosted, and is bent at their edges with a lit rim. eave still draws every island opaque, in its own fill, exactly as without the plugin. The plugin keys the glass in where an island is that fill, so fades, which cover content with the island's color, fade to glass for free.
 - **The plugin** (`hypr-eave/`, C++, Hyprland 0.56):
@@ -2981,3 +2981,65 @@ The cause underneath: the dialog is a second solid shape, drawn by the island in
 - **Stretching each picture to the shape:** an island 120 px wide turning into a 360 px panel would draw its words three times as big, and the panel's squeezed flat at the start.
 
 **Cost:** no dependencies. Nothing at rest: pictures are let go of once at the panel and when the popover is gone. Each way of a morph takes two pictures on the UI thread: ~2 ms for a 220×290 panel at scale 2, release, measured with the ignored `snapshot::timing` test, against ~5 ms with the blurs on the same thread. It then draws two to four images a frame while it crosses. *Measured* (Asahi, release, the user's config, wgpu): binary +20 KB of text; RSS idle ~83.5 MB against ~82.9 on main in the same session (the headless renderer is only made on the first morph); idle CPU unchanged.
+
+---
+
+## D-125: Corners are concentric
+
+**Status:** proposed (2026-10-16), waiting for the user to try it.
+
+**Problem:** a popover took its island's corners (14 px), its padding was 12, and the controls in it had 6 px corners. Concentric, a control at the padding would have needed 2. So each corner of a control sat round a different center than the popover's, and the controls looked dropped in rather than made for it.
+
+**Decision:** run the rule the other way, from the island.
+- A popover's corners are its island's and `PANEL_PADDING`: 26 by default (`theme::panel_corner`). They grow from the island's as the shape leaves it, by how far it's come from home toward the panel, and only the way out counts, so a panel that grows or shrinks keeps them (`Motion::grown`). A drop rounds off into them too.
+- The controls in it take the island's corner, which reaches kit through `Ctx::radius` (`Bar::radius`, the screen's `islands` corner), so a configured `islands.radius` carries through. Text buttons, rows, fields and icon buttons are 14, clamped to half their height, so most read as capsules.
+- What's nested subtracts its inset (`theme::nested`), never under `MIN_ISLAND_RADIUS`: a choice's check box 7 in, a bar button 3 in its island (`BAR_BUTTON_INSET`).
+- `BUTTON_RADIUS` stays only for a code block, which nothing sets a corner for.
+
+**Alternatives:**
+- **Keep the popover at 14 and give controls 2:** square controls in a round panel.
+- **A fixed 26 for popovers:** a configured or screen-following island radius would break it again.
+
+**Cost:** none measurable: a few multiplies when the shape changes.
+
+---
+
+## D-126: Controls are etched into the glass
+
+**Status:** proposed (2026-10-16), waiting for the user to try it. Amends [D-112](#d-112-glass-drawn-by-a-hyprland-plugin-that-eave-tells-whats-glass).
+
+**Problem:** on glass, controls were still flat fills painted on it: 8 % at rest, 14 % pressed, a white pill when on. Over glass those are grey ink, which the plugin turns into the readable opposite of what's behind, so a button read as a smudge. And they took no part in the material: only the island's rim bent the light.
+
+**Decision:** compared in a lab of the plugin's optics (four looks: flat, etched, embossed, droplet), the user chose etched. Controls are shaped in the glass.
+- **What eave says.** `eave_glass_surface_v1.set_reliefs`, since version 4: thirteen int32 a relief, lengths in 24.8 fixed point. A rounded rect and its corner; a well or a bead; its depth; how far it's pressed; how milky it is, up to where; and where the finger's light is and how bright. At most 64 (52 bytes each: 3.3 KB, inside one message). New requests go last in the interface, since a request's number is its place: put in the middle, the first try renumbered `set_report` and killed the bar's connection against the older plugin.
+- **Who records.** `Press` (buttons, rows, options, answer buttons, toggles), the slider's groove, tabs' track and mark, and the switcher's mark, while `glass::frame::on()`. Their own fills give way then, so the plugin sees glass where they were. Rows are level (a well of depth 0) until pressed, so a list isn't a stack of wells; what's current is a bead. `frame::relief` places them as pictures are placed (moved, scrolled, cut to what shows) and follows the island's squeeze (`frame::squeezed`). `fit_reliefs` drops those off every island.
+- **What the plugin does.** The reliefs go to the glass shader as a small float texture on unit 4 (4 texels each), not uniforms: the records' arrays already sit near GLES 3.0's minimum. For each pixel inside a control, `relief()` adds an exact rounded-rect term to the slab's height: the slab's squircle quarter over a 5 px bevel, negative in a well, and its analytic slope. That goes into the same normal, `refract`, chroma and Fresnel as the island's own bevel, so the walls bend what's behind and catch a line of light. Deep inside the island, where the slab is flat, a control shapes it alone. A press deepens a well by up to 4 px, most around the finger.
+- **Milk.** Where a relief is on, the colour key is taken against the accent, not the island's fill: what eave drew white is milky glass (the glass mixed 80 % to white), and what it drew dark on it stays as drawn. So a toggle that's on is milky with a black knob, the main button milky with a black icon, a slider milky up to its value, on any backdrop. A fill in the content's color isn't milk: it keeps its color, as colored content does.
+- **Tone.** A control is a shade lighter than the glass round it, so it reads where the backdrop is plain: a well 11 % toward white (`WELL_TONE`), a bead 14 % (`BEAD_TONE`), a row level with the glass none. It lightens the glass behind, not a grey laid on it, and the ink's contrast is kept as before. Added after the user's first look: with the shape alone, controls were the glass's own color.
+- **Light.** A soft light (30 px) where the pointer is, faint while it's only over (`HOVER_LIGHT`), bright while pressed, fading after. It replaces the hover and pressed fills on glass. Only `Press` tracks the pointer for it, and only on glass, so other themes ask for no frames for it.
+- **Without the plugin, or before version 4,** nothing's sent and the fills are as before.
+
+**Alternatives** (all in the lab):
+- **Embossed:** keys standing proud with a shadow. Heavier, and a shadow on glass is a new kind of dark.
+- **Droplet:** domes that magnify. The loudest; a row of them reads as bubbles.
+- **Ripple** (a wave through the slab from each press) and **make way** (neighbours leaning off a press): the user left them out.
+- **Uniform arrays for the reliefs:** 192 more vectors on top of the records' 256 would pass GLES's floor on some GPUs.
+
+**Cost:** eave: the reliefs are gathered while drawing, a few dozen bytes each, and sent only when they change. The plugin: per pixel inside the slab, one loop over the reliefs with a box test, and three texel reads for each it's inside; nothing new outside them. Binary and idle unchanged (below).
+
+---
+
+## D-127: Controls answer the hand
+
+**Status:** proposed (2026-10-16), waiting for the user to try it.
+
+**Problem:** controls only changed fill under the pointer. The island squeezed and stretched under the hand (D-26), what was in it didn't.
+
+**Decision:** from the lab, the user kept squish, light and stretch.
+- **Squish** (`press.rs`). `Press` wraps a popover's buttons, rows, options and toggles, and hears the press without taking it (iced's button keeps whether it's pressed, not where). It squeezes in `CONTROL_PRESS_INSET` on `HAND`, a few pixels whatever the size and never past a tenth, about a point across from the finger (`CONTROL_PRESS_LEAN`), so the side under it gives most. Let go, it springs back past rest. The renderer only scales the same both ways, so it's a uniform scale. In the bar it doesn't squeeze: its island does.
+- **Stretch.** A slider dragged past an end stretches that end by `hand::rubber_band` toward `SLIDER_STRETCH` (16 px), and springs back on `HAND`. The switcher's and tabs' mark springs each edge on `MORPH`, the leading one in `BODY_LEAD` of its time and the trailing one in `BODY_LAG`, the body's tempos (D-118), so it stretches across and draws in after itself. That supersedes D-16's eased slide.
+- **The groove.** In a popover a slider is a 28 px capsule (`SLIDER_GROOVE`), filled up to its value, brighter under the pointer, instead of a 2 px line. In the bar it's the line. An icon inside the groove would need `ui::slider(..).icon()` in eave-api: left for a release.
+
+**Alternatives:** squeezing from the button's style (it has no pointer position); a new spring for the press (`HAND` is what the hand moves); stretching the mark with a separate width spring (two edges say it with what's there).
+
+**Cost:** no dependencies. Nothing at rest: each spring settles and stops asking for frames. *Measured* (Asahi, release, the user's config, tiny-skia, same session, both together with D-125 and D-126): binary 21,065,744 → 21,065,768 bytes; RSS ~23.6 → ~23.7 MB; idle CPU unchanged.

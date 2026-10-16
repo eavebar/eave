@@ -1395,6 +1395,11 @@ impl Bar {
         self.scheme().palette()
     }
 
+    /// The islands' corner, which what's in an island or its popover nests in (D-125).
+    fn radius(&self) -> f32 {
+        self.screen.islands.radius
+    }
+
     /// Whether islands may turn to glass: the glass theme, with hypr-eave drawing it. Glass draws
     /// with the dark palette, and looks dark without the plugin.
     fn glass_on(&self) -> bool {
@@ -2522,129 +2527,130 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
     let band = (bar.config.bar.style == Style::Solid).then(|| band_bottom(&bar.screen));
     // Each island is as wide as its items. One with nothing to show draws nothing, unless it has
     // collapsed items to bring back.
-    let island =
-        |island: IslandId, align: Horizontal| -> Option<(Island<'_, Message>, config::Edges)> {
-            // Parts show in their owner's bays, not in the bar (D-109).
-            let instances = || {
-                bar.instances
-                    .iter()
-                    .filter(move |instance| instance.island() == island && instance.owner.is_none())
-            };
-            let collapsible = instances().any(|instance| instance.entry.collapsible);
-            // The open one wins over one still closing in the same island.
-            let popover = bar
-                .popovers
+    let island = |island: IslandId,
+                  align: Horizontal|
+     -> Option<(Island<'_, Message>, config::Edges)> {
+        // Parts show in their owner's bays, not in the bar (D-109).
+        let instances = || {
+            bar.instances
                 .iter()
-                .filter(|popover| popover.window == window)
-                .filter(|popover| instances().any(|instance| instance.id == popover.instance))
-                .max_by_key(|popover| popover.open);
-            // A popover wins: the notifications wait for it.
-            let popover = match popover {
-                Some(popover) => Some(popover_view(bar, popover)),
-                None => notices
-                    .filter(|_| island == notice_island)
-                    .map(|panel| notices_view(bar, panel)),
-            };
-            let attach = instances()
-                .next()
-                .map(|instance| instance.entry.attach)
-                .unwrap_or_default();
-            // Glass, with the plugin, but where it stands for the hardware: attached to an edge,
-            // or in a solid bar.
-            let glass = glass_on && band.is_none() && !(attach.top || attach.left || attach.right);
-            let expanded = bar.expanded.contains(&island);
-            let collapsing = bar.collapsing.contains(&island);
-            let mut items = Vec::new();
-            let mut groups = Vec::new();
-            let mut leaving = Vec::new();
-            for instance in instances() {
-                let hidden = instance.entry.collapsible && !expanded && instance.revealed.is_none();
-                if hidden && !collapsing {
-                    continue;
-                }
-                let Some(item) = item_view(instance, window, &bar.icons, palette) else {
-                    continue;
-                };
-                if hidden {
-                    leaving.push(instance.id);
-                }
-                // Only between two items that show: one next to a hidden item goes with it.
-                if instance.entry.divider && !items.is_empty() {
-                    items.push((instance.id | DIVIDER_KEY, kit::divider(palette)));
-                    groups.push(None);
-                    if hidden {
-                        leaving.push(instance.id | DIVIDER_KEY);
-                    }
-                }
-                items.push((instance.id, item));
-                groups.push(instance.entry.width_group.as_deref());
-            }
-            let nudges = instances()
-                .filter_map(|instance| Some((instance.id, instance.nudge?)))
-                .collect();
-
-            if items.is_empty() && popover.is_none() && !collapsible {
-                // Not drawn: nothing can come out of it.
-                bar.shape(island).set(Rectangle::default());
-                return None;
-            }
-            // On the side facing the middle of the screen; a center island's on its right.
-            let side = match island.zone {
-                Zone::Right => Horizontal::Left,
-                Zone::Left | Zone::Center | Zone::Dormer => Horizontal::Right,
-            };
-            // Hovering shows it; while the items are out, it stays to put them back.
-            let toggle = collapsible.then(|| Toggle {
-                element: toggle_view(island, side, expanded, palette),
-                side,
-                expanded,
-                leaving,
-                on_gone: collapsing.then_some(Message::Collapsed(island)),
-            });
-            Some((
-                Island::new(items)
-                    .glass(glass)
-                    .ink(bar.darker_ink.contains(&island))
-                    .align(align)
-                    .popover(popover)
-                    .nudges(nudges)
-                    .width_groups(groups)
-                    .toggle(toggle)
-                    .live(instances().any(|instance| instance.entry.live))
-                    .bleed(match band {
-                        // Up into the bar, so nothing moving ever comes apart from it.
-                        Some(_) => Padding {
-                            top: band_bottom(&bar.screen),
-                            ..bleed(attach)
-                        },
-                        None => bleed(attach),
-                    })
-                    .shows(shows(attach))
-                    .notch(bar.screen.notch.map(|notch| notch.width))
-                    // Flowing out of a solid bar, as round where it leaves as the island is.
-                    .shoulders(match band {
-                        Some(_) => Some(bar.screen.islands),
-                        None => shoulders,
-                    })
-                    .band(band)
-                    .corners(bar.screen.island_corners(Place::default()))
-                    .height(bar.screen.island_height())
-                    .shape(bar.shape(island))
-                    // What comes out of it on the surface it's drawn on joins it (D-122).
-                    .joined(
-                        (bar.toast_window() == Some(window) && bar.joined_island() == Some(island))
-                            .then(|| bar.join.clone()),
-                    )
-                    // The screen's edges are walls, but where it's attached (D-104).
-                    .walls(Walls {
-                        top: (!attach.top && band.is_none()).then_some(bar.screen.grow),
-                        left: !attach.left,
-                        right: !attach.right,
-                        corners: [bar.screen.corners[0], bar.screen.corners[1]],
-                    }),
-                attach,
-            ))
+                .filter(move |instance| instance.island() == island && instance.owner.is_none())
         };
+        let collapsible = instances().any(|instance| instance.entry.collapsible);
+        // The open one wins over one still closing in the same island.
+        let popover = bar
+            .popovers
+            .iter()
+            .filter(|popover| popover.window == window)
+            .filter(|popover| instances().any(|instance| instance.id == popover.instance))
+            .max_by_key(|popover| popover.open);
+        // A popover wins: the notifications wait for it.
+        let popover = match popover {
+            Some(popover) => Some(popover_view(bar, popover)),
+            None => notices
+                .filter(|_| island == notice_island)
+                .map(|panel| notices_view(bar, panel)),
+        };
+        let attach = instances()
+            .next()
+            .map(|instance| instance.entry.attach)
+            .unwrap_or_default();
+        // Glass, with the plugin, but where it stands for the hardware: attached to an edge,
+        // or in a solid bar.
+        let glass = glass_on && band.is_none() && !(attach.top || attach.left || attach.right);
+        let expanded = bar.expanded.contains(&island);
+        let collapsing = bar.collapsing.contains(&island);
+        let mut items = Vec::new();
+        let mut groups = Vec::new();
+        let mut leaving = Vec::new();
+        for instance in instances() {
+            let hidden = instance.entry.collapsible && !expanded && instance.revealed.is_none();
+            if hidden && !collapsing {
+                continue;
+            }
+            let Some(item) = item_view(instance, window, &bar.icons, palette, bar.radius()) else {
+                continue;
+            };
+            if hidden {
+                leaving.push(instance.id);
+            }
+            // Only between two items that show: one next to a hidden item goes with it.
+            if instance.entry.divider && !items.is_empty() {
+                items.push((instance.id | DIVIDER_KEY, kit::divider(palette)));
+                groups.push(None);
+                if hidden {
+                    leaving.push(instance.id | DIVIDER_KEY);
+                }
+            }
+            items.push((instance.id, item));
+            groups.push(instance.entry.width_group.as_deref());
+        }
+        let nudges = instances()
+            .filter_map(|instance| Some((instance.id, instance.nudge?)))
+            .collect();
+
+        if items.is_empty() && popover.is_none() && !collapsible {
+            // Not drawn: nothing can come out of it.
+            bar.shape(island).set(Rectangle::default());
+            return None;
+        }
+        // On the side facing the middle of the screen; a center island's on its right.
+        let side = match island.zone {
+            Zone::Right => Horizontal::Left,
+            Zone::Left | Zone::Center | Zone::Dormer => Horizontal::Right,
+        };
+        // Hovering shows it; while the items are out, it stays to put them back.
+        let toggle = collapsible.then(|| Toggle {
+            element: toggle_view(island, side, expanded, palette),
+            side,
+            expanded,
+            leaving,
+            on_gone: collapsing.then_some(Message::Collapsed(island)),
+        });
+        Some((
+            Island::new(items)
+                .glass(glass)
+                .ink(bar.darker_ink.contains(&island))
+                .align(align)
+                .popover(popover)
+                .nudges(nudges)
+                .width_groups(groups)
+                .toggle(toggle)
+                .live(instances().any(|instance| instance.entry.live))
+                .bleed(match band {
+                    // Up into the bar, so nothing moving ever comes apart from it.
+                    Some(_) => Padding {
+                        top: band_bottom(&bar.screen),
+                        ..bleed(attach)
+                    },
+                    None => bleed(attach),
+                })
+                .shows(shows(attach))
+                .notch(bar.screen.notch.map(|notch| notch.width))
+                // Flowing out of a solid bar, as round where it leaves as the island is.
+                .shoulders(match band {
+                    Some(_) => Some(bar.screen.islands),
+                    None => shoulders,
+                })
+                .band(band)
+                .corners(bar.screen.island_corners(Place::default()))
+                .height(bar.screen.island_height())
+                .shape(bar.shape(island))
+                // What comes out of it on the surface it's drawn on joins it (D-122).
+                .joined(
+                    (bar.toast_window() == Some(window) && bar.joined_island() == Some(island))
+                        .then(|| bar.join.clone()),
+                )
+                // The screen's edges are walls, but where it's attached (D-104).
+                .walls(Walls {
+                    top: (!attach.top && band.is_none()).then_some(bar.screen.grow),
+                    left: !attach.left,
+                    right: !attach.right,
+                    corners: [bar.screen.corners[0], bar.screen.corners[1]],
+                }),
+            attach,
+        ))
+    };
     // A zone's islands sit side by side, and the zones across the bar: the center ones stay
     // centered on screen unless a side's islands reach them, and then they're pushed aside.
     let islands = |zone: Zone, align: Horizontal| -> Vec<(Island<'_, Message>, config::Edges)> {
@@ -2820,6 +2826,7 @@ fn dialog_popover<'a>(bar: &'a Bar, dialog: &Dialog) -> island::Popover<'a, Mess
                 panel_keys(node, &|message| bar.keys_of(id, message), &mut keys),
                 &bar.icons,
                 bar.palette(),
+                bar.radius(),
                 scroll,
             )
         }
@@ -2958,7 +2965,7 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
         ui::column([field, ui::label("Nothing found").tone(Tone::Dim)])
     };
     // Its rows hold pictures only, so every message in it is the dormer's own.
-    let content = kit::panel(node, &bar.icons, bar.palette())
+    let content = kit::panel(node, &bar.icons, bar.palette(), bar.radius())
         .map(|message: AnyMessage| Message::Dormer(message.downcast().unwrap_or(Event::Move(0))));
     // Out of the notch, or the top edge, as a drop; or without a notch, out of the island in the
     // middle, the way a dialog comes out of what opened it (D-106).
@@ -3112,14 +3119,16 @@ fn item_view<'a>(
     window: window::Id,
     icons: &Icons,
     palette: &'static Palette,
+    radius: f32,
 ) -> Option<Element<'a, Message>> {
     let id = instance.id;
     let parts = instance.widget.item().into_parts();
     let on_press = parts.on_press;
-    let content: Element<'_, AnyMessage> = container(kit::node(parts.content?, icons, palette))
-        .padding([0, style::ITEM_PADDING])
-        .center_y(Length::Fill)
-        .into();
+    let content: Element<'_, AnyMessage> =
+        container(kit::node(parts.content?, icons, palette, radius))
+            .padding([0, style::ITEM_PADDING])
+            .center_y(Length::Fill)
+            .into();
 
     let wrap = move |message| Message::Widget(id, message);
     let mut slot = Slot::new(content.map(wrap))
@@ -3186,6 +3195,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
                     panel_keys(node, &|message| bar.keys_of(id, message), &mut keys),
                     &bar.icons,
                     bar.palette(),
+                    bar.radius(),
                 )
             }
             None => Space::new().into(),
@@ -3263,6 +3273,7 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
             },
             &bar.icons,
             bar.palette(),
+            bar.radius(),
             now,
             move |message| Message::Acted(notice_island, instance, message),
             move |focused| Message::ReplyFocused(instance, key, focused),

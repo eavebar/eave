@@ -34,9 +34,13 @@ namespace Glass {
     struct SGlassProgram {
         GLuint id = 0;
         GLint  mask, surfSize, fbOrigin, toFb, toSurf, backdrop, bdOrigin, bdScale, bdLimit, wide, wideScale, wideLimit, wideSize, field, fieldScale, fieldLimit, fieldStep, sigma, band,
-            fade, thickness, gap, chroma, rim, tint, ink, contrast, margin, count, boxes, fills, chans, bevels, fbSize, rect;
+            fade, thickness, gap, chroma, rim, tint, ink, contrast, margin, count, boxes, fills, chans, bevels, fbSize, rect, reliefs, reliefCount, unit;
     };
     static SGlassProgram g_glass[2];
+    // The reliefs' data texture: RELIEF_TEXELS float texels a relief, a row each (D-126).
+    static GLuint g_reliefs = 0;
+    // How much deeper a well goes, pressed all the way, around the finger, logical px.
+    constexpr float RELIEF_PRESS = 4.F;
 
     struct SPassProgram {
         GLuint id = 0;
@@ -168,6 +172,9 @@ namespace Glass {
         p.bevels    = at("bevels");
         p.fbSize    = at("fbSize");
         p.rect      = at("rect");
+        p.reliefs     = at("reliefs");
+        p.reliefCount = at("reliefCount");
+        p.unit        = at("unit");
         ensureQuad();
         return &p;
     }
@@ -215,13 +222,18 @@ namespace Glass {
     // GL state we touch, put back as Hyprland left it. Viewports go through Hyprland's cache
     // (setViewport), and the target's bind() restores its own.
     struct SGLState {
-        GLint prog = 0, vao = 0, active = 0, tex[4] = {}, read = 0, draw = 0, pack = 0;
+        GLint prog = 0, vao = 0, active = 0, tex[5] = {}, read = 0, draw = 0, pack = 0, unpack = 0, alignment = 4, rowLength = 0, skipRows = 0, skipPixels = 0;
         bool  scissor = false;
         void  save() {
             glGetIntegerv(GL_CURRENT_PROGRAM, &prog);
             glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
             glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
-            for (int i = 0; i < 4; i++) {
+            glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpack);
+            glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
+            glGetIntegerv(GL_UNPACK_ROW_LENGTH, &rowLength);
+            glGetIntegerv(GL_UNPACK_SKIP_ROWS, &skipRows);
+            glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &skipPixels);
+            for (int i = 0; i < 5; i++) {
                 glActiveTexture(GL_TEXTURE0 + i);
                 glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex[i]);
             }
@@ -235,7 +247,12 @@ namespace Glass {
         void restore() {
             glBindVertexArray(vao);
             glUseProgram(prog);
-            for (int i = 0; i < 4; i++) {
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, unpack);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, rowLength);
+            glPixelStorei(GL_UNPACK_SKIP_ROWS, skipRows);
+            glPixelStorei(GL_UNPACK_SKIP_PIXELS, skipPixels);
+            for (int i = 0; i < 5; i++) {
                 glActiveTexture(GL_TEXTURE0 + i);
                 glBindTexture(GL_TEXTURE_2D, tex[i]);
             }
@@ -424,6 +441,53 @@ namespace Glass {
             }
             job.chans[i] = best;
         }
+
+        // The reliefs, as the glass reads them: the box (x0, y0, x1, y1); the corner, the kind,
+        // the depth (a well's below the glass, negative) and how much deeper the press takes it;
+        // the milk, where it ends across, and the light's place; how bright the light is.
+        job.reliefCount = 0;
+        for (auto const& r : job.state.reliefs) {
+            if (job.reliefCount >= sc<int>(MAX_RELIEFS))
+                break;
+            float* t = &job.reliefData[job.reliefCount++ * RELIEF_TEXELS * 4];
+            t[0]     = r.x * k;
+            t[1]     = r.y * k;
+            t[2]     = (r.x + r.w) * k;
+            t[3]     = (r.y + r.h) * k;
+            t[4]     = r.radius * k;
+            t[5]     = sc<float>(r.kind);
+            t[6]     = (r.kind == 0 ? -1.F : 1.F) * r.depth * k;
+            t[7]     = r.kind == 0 ? r.press * RELIEF_PRESS * k : 0.F;
+            t[8]     = r.milk;
+            t[9]     = r.fillX * k;
+            t[10]    = r.lightX * k;
+            t[11]    = r.lightY * k;
+            t[12]    = r.lit;
+            t[13] = t[14] = t[15] = 0.F;
+        }
+    }
+
+    // The reliefs' rows, on texture unit 4.
+    static void uploadReliefs(const SJob& job) {
+        glActiveTexture(GL_TEXTURE4);
+        if (!g_reliefs) {
+            glGenTextures(1, &g_reliefs);
+            glBindTexture(GL_TEXTURE_2D, g_reliefs);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, RELIEF_TEXELS, MAX_RELIEFS, 0, GL_RGBA, GL_FLOAT, nullptr);
+        } else
+            glBindTexture(GL_TEXTURE_2D, g_reliefs);
+        if (job.reliefCount > 0) {
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+            glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+            glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, RELIEF_TEXELS, job.reliefCount, GL_RGBA, GL_FLOAT, job.reliefData.data());
+        }
     }
 
     // The bend's field: the surface's coverage, blurred by a gaussian a band wide. Its value says
@@ -596,6 +660,7 @@ namespace Glass {
         glBindTexture(GL_TEXTURE_2D, job.field->getTexture()->m_texID);
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, job.wide->getTexture()->m_texID);
+        uploadReliefs(job);
         g_pHyprOpenGL->blend(true);
         glBindVertexArray(g_vao);
 
@@ -607,6 +672,9 @@ namespace Glass {
         glUniform1i(prog->mask, 1);
         glUniform1i(prog->field, 2);
         glUniform1i(prog->wide, 3);
+        glUniform1i(prog->reliefs, 4);
+        glUniform1i(prog->reliefCount, job.reliefCount);
+        glUniform1f(prog->unit, S);
         glUniform2f(prog->surfSize, job.box.w, job.box.h);
         glUniform2f(prog->fbOrigin, job.fbOrigin.x, job.fbOrigin.y);
         glUniformMatrix2fv(prog->toFb, 1, GL_FALSE, toFb);
@@ -784,5 +852,8 @@ namespace Glass {
         if (g_vbo)
             glDeleteBuffers(1, &g_vbo);
         g_vao = g_vbo = 0;
+        if (g_reliefs)
+            glDeleteTextures(1, &g_reliefs);
+        g_reliefs = 0;
     }
 }

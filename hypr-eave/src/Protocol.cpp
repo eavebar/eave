@@ -38,7 +38,7 @@ namespace Glass {
 
     class CProtocol : public IWaylandProtocol {
       public:
-        CProtocol() : IWaylandProtocol(&eave_glass_manager_v1_interface, 3, "EaveGlass") {}
+        CProtocol() : IWaylandProtocol(&eave_glass_manager_v1_interface, 4, "EaveGlass") {}
 
         void bindManager(wl_client* client, void*, uint32_t ver, uint32_t id) override {
             guarded("bind", [&] {
@@ -196,6 +196,38 @@ namespace Glass {
                 .gap      = glass->m_pending.look.gap, // set_gap's
             };
         });
+        m_resource->setSetReliefs([key, generation](CEaveGlassSurfaceV1*, wl_array* array) {
+            if (generation != g_generation)
+                return;
+            auto* glass = Glass::glassOf(key);
+            if (!glass)
+                return;
+            constexpr size_t FIELDS = 13;
+            const size_t     n      = std::min(array->size / (FIELDS * sizeof(int32_t)), MAX_RELIEFS);
+            const auto*      data   = sc<const int32_t*>(array->data);
+            auto&            out    = glass->m_pending.reliefs;
+            out.clear();
+            const auto fixed = [](int32_t v) { return sc<float>(v) / 256.F; };
+            const auto unit  = [](int32_t v) { return std::clamp(v, 0, 255) / 255.F; };
+            for (size_t i = 0; i < n; i++) {
+                const int32_t* r = data + i * FIELDS;
+                if (r[2] <= 0 || r[3] <= 0 || sc<uint32_t>(r[5]) > 1)
+                    continue;
+                out.push_back({.x      = fixed(r[0]),
+                               .y      = fixed(r[1]),
+                               .w      = fixed(r[2]),
+                               .h      = fixed(r[3]),
+                               .radius = std::max(fixed(r[4]), 0.F),
+                               .kind   = sc<uint32_t>(r[5]),
+                               .depth  = std::clamp(fixed(r[6]), 0.F, 16.F),
+                               .press  = unit(r[7]),
+                               .milk   = unit(r[8]),
+                               .lit    = unit(r[12]),
+                               .fillX  = fixed(r[9]),
+                               .lightX = fixed(r[10]),
+                               .lightY = fixed(r[11])});
+            }
+        });
         m_resource->setSetGap([key, generation](CEaveGlassSurfaceV1*, wl_fixed_t gap) {
             if (generation != g_generation)
                 return;
@@ -296,6 +328,7 @@ namespace Glass {
             m_resource->setSetLook([](CEaveGlassSurfaceV1*, wl_fixed_t, wl_fixed_t, wl_fixed_t, wl_fixed_t, wl_fixed_t, uint32_t, wl_fixed_t, eaveGlassSurfaceV1Ink, wl_fixed_t,
                                       wl_fixed_t) {});
             m_resource->setSetGap([](CEaveGlassSurfaceV1*, wl_fixed_t) {});
+            m_resource->setSetReliefs([](CEaveGlassSurfaceV1*, wl_array*) {});
             m_resource->setSetReport([](CEaveGlassSurfaceV1*, uint32_t) {});
             new SP<CEaveGlassSurfaceV1>(m_resource); // leaked with it
             m_resource.reset();

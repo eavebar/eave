@@ -662,24 +662,23 @@ impl Edges {
 
     /// How far, from 0 to 1, the shape has come from `from` toward `to`.
     fn progress(&self, from: Rectangle, to: Rectangle) -> f32 {
-        let distance = |a: Rectangle, b: [f32; 4]| {
-            (a.x - b[0]).abs()
-                + (a.y - b[1]).abs()
-                + (a.x + a.width - b[2]).abs()
-                + (a.y + a.height - b[3]).abs()
-        };
-        let total = distance(from, edges_of(to));
-        if total < 1.0 {
-            return 1.0;
-        }
-        let now = [
-            self.left.value,
-            self.top.value,
-            self.right.value,
-            self.bottom.value,
-        ];
-        (1.0 - distance(to, now) / total).clamp(0.0, 1.0)
+        share(self.rect(), from, to)
     }
+}
+
+/// How far, from 0 to 1, `at` has come from `from` toward `to`, by its edges.
+fn share(at: Rectangle, from: Rectangle, to: Rectangle) -> f32 {
+    let distance = |a: Rectangle, b: [f32; 4]| {
+        (a.x - b[0]).abs()
+            + (a.y - b[1]).abs()
+            + (a.x + a.width - b[2]).abs()
+            + (a.y + a.height - b[3]).abs()
+    };
+    let total = distance(from, edges_of(to));
+    if total < 1.0 {
+        return 1.0;
+    }
+    (1.0 - distance(to, edges_of(at)) / total).clamp(0.0, 1.0)
 }
 
 fn edges_of(rect: Rectangle) -> [f32; 4] {
@@ -1404,12 +1403,30 @@ impl Motion {
         self.body.aim(goal, self.corners_at(goal));
     }
 
-    /// The corners the shape has at `rect`: a drop's, or its own.
+    /// The corners the shape has at `rect`: a drop's, or its own, grown toward the panel's.
     fn corners_at(&self, rect: Rectangle) -> [CornerShape; 4] {
         match self.drop {
             Some(_) => [self.drop_corner(rect); 4],
-            None => self.corners,
+            None => self.grown(self.corners, rect),
         }
+    }
+
+    /// `corners`, grown into the panel's as `rect` gets away from where the shape rests toward
+    /// its popover's panel: a panel's corners are the island's and its padding, so what's in it
+    /// is concentric with it (D-125). Only the way out of the island counts, so a panel that
+    /// grows or shrinks keeps its corners.
+    fn grown(&self, corners: [CornerShape; 4], rect: Rectangle) -> [CornerShape; 4] {
+        let (Some(island), Some(panel)) = (self.island, self.popover.fitted.or(self.popover.rect))
+        else {
+            return corners;
+        };
+        if !self.popover.present {
+            return corners;
+        }
+        let home = self.home(island);
+        let away = 1.0 - share(rect, panel, home);
+        let grown = away * f32::from(theme::PANEL_PADDING);
+        corners.map(|corner| CornerShape::new(corner.radius + grown, corner.smoothing))
     }
 
     /// Where the shape rests: the island, or for a drop, a dot where it comes out, or the other
@@ -1486,7 +1503,11 @@ impl Motion {
     /// A drop's corners, drawn `shape`: a ball's, rounding off into the island's as it unfolds
     /// into the panel.
     fn drop_corner(&self, shape: Rectangle) -> CornerShape {
-        let (round, corner) = (self.roundness(), self.corner);
+        let round = self.roundness();
+        let corner = CornerShape::new(
+            theme::panel_corner(self.corner.radius),
+            self.corner.smoothing,
+        );
         let half = shape.width.min(shape.height) / 2.0;
         CornerShape::new(
             corner.radius + (half - corner.radius).max(0.0) * round,
@@ -2250,7 +2271,7 @@ fn draw_island<M>(
     // A drop is a ball, and rounds off into the panel's corners as it unfolds (D-86).
     let corners = match motion.drop {
         Some(_) => [motion.drop_corner(shape); 4],
-        None => own_corners,
+        None => motion.grown(own_corners, shape),
     };
     if state.shape_corners.replace(corners) != corners {
         state.shape.clear();
@@ -2321,215 +2342,233 @@ fn draw_island<M>(
     let offset = motion.offset();
     renderer.with_translation(offset, |renderer| {
         glass::frame::translated(offset, || {
-            renderer.with_transformation(transformation, |renderer| {
-                let frame_size = Size::new(area.width + 2.0 * room.x, area.height + 2.0 * room.y);
-                let geometry = state.shape.draw(renderer, frame_size, |frame| {
-                    let origin = Point::ORIGIN + room;
-                    let outline =
-                        Rectangle::new(origin + (body.position() - area.position()), body.size());
-                    // The jelly bends the shape itself: its sides are where they'd be without the
-                    // reach, and what reaches past one moves with it.
-                    let jellied =
-                        Rectangle::new(origin + (shape.position() - area.position()), shape.size());
-                    // Bent by the jelly and stretched by the drag while they move, both paths the
-                    // same way.
-                    let bend = |path: Path| {
-                        if bent {
-                            warp(&path, |at| {
-                                let at = motion.jelly.displace(jellied, at);
-                                if pulled {
-                                    at + motion.pull(jellied, at)
-                                } else {
-                                    at
-                                }
-                            })
-                        } else {
-                            path
-                        }
-                    };
-                    // Hanging from the top edge, where the surface starts, if it's attached there and
-                    // has shoulders: on the sides that don't reach on, and no further than the frame.
-                    // In a solid bar, flowing out of its bottom instead (D-89).
-                    let hanging = shoulders.filter(|_| bleed.top > 0.0).map(|shoulder| {
-                        let most = room.x / (1.0 + shoulder.smoothing);
-                        let shoulder =
-                            CornerShape::new(shoulder.radius.min(most), shoulder.smoothing);
-                        let sides = [bleed.left <= 0.0, bleed.right <= 0.0];
-                        (room.y + band.unwrap_or(0.0) - area.y, shoulder, sides)
-                    });
-                    // Black on black, with no border: what touches the notch or the bezel reads as
-                    // one shape with it (D-74).
-                    let outline = match hanging {
-                        Some((edge, shoulder, sides)) => Path::new(|builder| {
-                            if band.is_some() {
-                                squircle::flowing(builder, outline, corners, edge, shoulder, sides);
-                            } else {
-                                squircle::hanging(builder, outline, corners, edge, shoulder, sides);
-                            }
-                        }),
-                        None if flowing => Path::new(|builder| {
-                            motion.body.outline(builder, origin - area.position());
-                        }),
-                        None => squircle_corners(outline, corners),
-                    };
-                    let outline = bend(outline);
-                    match joined {
-                        // One shape: this one, what joins it, and the fillet between (D-122).
-                        Some(joined) => {
-                            let other: Vec<Vec<Point>> = joined
-                                .outline
-                                .iter()
-                                .map(|polygon| {
-                                    polygon
-                                        .iter()
-                                        .map(|&at| origin + (unsqueeze(at) - area.position()))
-                                        .collect()
+            glass::frame::squeezed(center, scale, || {
+                renderer.with_transformation(transformation, |renderer| {
+                    let frame_size =
+                        Size::new(area.width + 2.0 * room.x, area.height + 2.0 * room.y);
+                    let geometry = state.shape.draw(renderer, frame_size, |frame| {
+                        let origin = Point::ORIGIN + room;
+                        let outline = Rectangle::new(
+                            origin + (body.position() - area.position()),
+                            body.size(),
+                        );
+                        // The jelly bends the shape itself: its sides are where they'd be without the
+                        // reach, and what reaches past one moves with it.
+                        let jellied = Rectangle::new(
+                            origin + (shape.position() - area.position()),
+                            shape.size(),
+                        );
+                        // Bent by the jelly and stretched by the drag while they move, both paths the
+                        // same way.
+                        let bend = |path: Path| {
+                            if bent {
+                                warp(&path, |at| {
+                                    let at = motion.jelly.displace(jellied, at);
+                                    if pulled {
+                                        at + motion.pull(jellied, at)
+                                    } else {
+                                        at
+                                    }
                                 })
-                                .collect();
-                            frame.fill(&join::path(&outline, &other, joined.blend), fill);
+                            } else {
+                                path
+                            }
+                        };
+                        // Hanging from the top edge, where the surface starts, if it's attached there and
+                        // has shoulders: on the sides that don't reach on, and no further than the frame.
+                        // In a solid bar, flowing out of its bottom instead (D-89).
+                        let hanging = shoulders.filter(|_| bleed.top > 0.0).map(|shoulder| {
+                            let most = room.x / (1.0 + shoulder.smoothing);
+                            let shoulder =
+                                CornerShape::new(shoulder.radius.min(most), shoulder.smoothing);
+                            let sides = [bleed.left <= 0.0, bleed.right <= 0.0];
+                            (room.y + band.unwrap_or(0.0) - area.y, shoulder, sides)
+                        });
+                        // Black on black, with no border: what touches the notch or the bezel reads as
+                        // one shape with it (D-74).
+                        let outline = match hanging {
+                            Some((edge, shoulder, sides)) => Path::new(|builder| {
+                                if band.is_some() {
+                                    squircle::flowing(
+                                        builder, outline, corners, edge, shoulder, sides,
+                                    );
+                                } else {
+                                    squircle::hanging(
+                                        builder, outline, corners, edge, shoulder, sides,
+                                    );
+                                }
+                            }),
+                            None if flowing => Path::new(|builder| {
+                                motion.body.outline(builder, origin - area.position());
+                            }),
+                            None => squircle_corners(outline, corners),
+                        };
+                        let outline = bend(outline);
+                        match joined {
+                            // One shape: this one, what joins it, and the fillet between (D-122).
+                            Some(joined) => {
+                                let other: Vec<Vec<Point>> = joined
+                                    .outline
+                                    .iter()
+                                    .map(|polygon| {
+                                        polygon
+                                            .iter()
+                                            .map(|&at| origin + (unsqueeze(at) - area.position()))
+                                            .collect()
+                                    })
+                                    .collect();
+                                frame.fill(&join::path(&outline, &other, joined.blend), fill);
+                            }
+                            None if joins => {}
+                            None => frame.fill(&outline, fill),
                         }
-                        None if joins => {}
-                        None => frame.fill(&outline, fill),
-                    }
-                });
-                renderer.with_translation(Vector::new(area.x, area.y) - room, |renderer| {
-                    renderer.draw_geometry(geometry);
-                });
+                    });
+                    renderer.with_translation(Vector::new(area.x, area.y) - room, |renderer| {
+                        renderer.draw_geometry(geometry);
+                    });
 
-                // Nothing pokes out of the shape while it changes, but where the drag stretched it.
-                let grab = shape.position() + motion.grab.unwrap_or_default();
-                let clip = stretched(shape, motion.pull(shape, grab));
-                // And not out of the body while it's out on its own.
-                let clip = poured
-                    .and_then(|poured| clip.intersection(&poured))
-                    .unwrap_or(clip);
-                // Nor over the island it joins: that one's own is there.
-                let (clip, shown_shape) = match away {
-                    Some(away) => (clear_of(clip, away), clear_of(shape, away)),
-                    None => (clip, shape),
-                };
-                // While it turns into its popover and back, pictures of both sides cross (D-124).
-                let crossing_p = panel.filter(|_| !joins && joined.is_none()).and_then(
-                    |(content, tree, content_layout)| {
-                        cross_at(
-                            state,
-                            keys,
-                            items,
-                            trees,
-                            layout,
-                            (content, tree, content_layout),
-                            theme,
-                            style,
-                            cursor,
-                            viewport,
-                        )
-                    },
-                );
-                let crossing = state.crossing.borrow();
-                let crossing = crossing.as_ref().zip(crossing_p);
-                renderer.with_layer(clip, |renderer| {
-                    for ((key, item), (tree, child)) in keys
-                        .iter()
-                        .zip(items)
-                        .zip(trees.iter().zip(layout.children()))
-                    {
-                        let bounds = child.bounds();
-                        let (dx, shown) = motion.item(*key, bounds.x);
-                        // Crossing, they're there whole under their picture near the island, and
-                        // not at all further out.
-                        let shown = match crossing {
-                            Some((_, p)) if live(p)[0] > 0.0 => motion.own(*key),
-                            Some(_) => 0.0,
-                            None => shown,
-                        };
-                        if shown < REST_DISTANCE {
-                            continue;
-                        }
-                        let (squished, down) = motion.squish_at(shape, bounds.center_x() + dx);
-                        let kicked = motion.kicked(*key);
-                        let squished = Squish {
-                            x: squished.x * kicked.x,
-                            y: squished.y * kicked.y,
-                        };
-                        let moved = Vector::new(dx, down);
-                        // It rides along with the skin where it is, and squishes with it.
-                        // And it goes with the stretch where it ends up.
-                        let moved = moved + motion.pull(shape, bounds.center() + moved);
-                        renderer.with_translation(moved, |renderer| {
-                            with_clip(clip - moved, || {
-                                squish::with(squished, || {
-                                    glass::frame::translated(moved, || {
-                                        item.as_widget().draw(
-                                            tree, renderer, theme, style, child, cursor, viewport,
-                                        );
+                    // Nothing pokes out of the shape while it changes, but where the drag stretched it.
+                    let grab = shape.position() + motion.grab.unwrap_or_default();
+                    let clip = stretched(shape, motion.pull(shape, grab));
+                    // And not out of the body while it's out on its own.
+                    let clip = poured
+                        .and_then(|poured| clip.intersection(&poured))
+                        .unwrap_or(clip);
+                    // Nor over the island it joins: that one's own is there.
+                    let (clip, shown_shape) = match away {
+                        Some(away) => (clear_of(clip, away), clear_of(shape, away)),
+                        None => (clip, shape),
+                    };
+                    // While it turns into its popover and back, pictures of both sides cross (D-124).
+                    let crossing_p = panel.filter(|_| !joins && joined.is_none()).and_then(
+                        |(content, tree, content_layout)| {
+                            cross_at(
+                                state,
+                                keys,
+                                items,
+                                trees,
+                                layout,
+                                (content, tree, content_layout),
+                                theme,
+                                style,
+                                cursor,
+                                viewport,
+                            )
+                        },
+                    );
+                    let crossing = state.crossing.borrow();
+                    let crossing = crossing.as_ref().zip(crossing_p);
+                    renderer.with_layer(clip, |renderer| {
+                        for ((key, item), (tree, child)) in keys
+                            .iter()
+                            .zip(items)
+                            .zip(trees.iter().zip(layout.children()))
+                        {
+                            let bounds = child.bounds();
+                            let (dx, shown) = motion.item(*key, bounds.x);
+                            // Crossing, they're there whole under their picture near the island, and
+                            // not at all further out.
+                            let shown = match crossing {
+                                Some((_, p)) if live(p)[0] > 0.0 => motion.own(*key),
+                                Some(_) => 0.0,
+                                None => shown,
+                            };
+                            if shown < REST_DISTANCE {
+                                continue;
+                            }
+                            let (squished, down) = motion.squish_at(shape, bounds.center_x() + dx);
+                            let kicked = motion.kicked(*key);
+                            let squished = Squish {
+                                x: squished.x * kicked.x,
+                                y: squished.y * kicked.y,
+                            };
+                            let moved = Vector::new(dx, down);
+                            // It rides along with the skin where it is, and squishes with it.
+                            // And it goes with the stretch where it ends up.
+                            let moved = moved + motion.pull(shape, bounds.center() + moved);
+                            renderer.with_translation(moved, |renderer| {
+                                with_clip(clip - moved, || {
+                                    squish::with(squished, || {
+                                        glass::frame::translated(moved, || {
+                                            item.as_widget().draw(
+                                                tree, renderer, theme, style, child, cursor,
+                                                viewport,
+                                            );
+                                        });
                                     });
                                 });
+                                // In the item's moved coordinates, the shape is the other way. Not
+                                // joining another island: under it is that one's, not this one's
+                                // fill, and a fade would cover what's on it.
+                                if !joins {
+                                    fade(renderer, theme, bounds, shape - moved, shown);
+                                }
                             });
-                            // In the item's moved coordinates, the shape is the other way. Not
-                            // joining another island: under it is that one's, not this one's
-                            // fill, and a fade would cover what's on it.
-                            if !joins {
-                                fade(renderer, theme, bounds, shape - moved, shown);
+                        }
+                        if let Some((panel, tree, layout)) = panel {
+                            let shown = match crossing {
+                                Some((_, p)) if live(p)[1] > 0.0 => 1.0,
+                                Some(_) => 0.0,
+                                None => motion.popover.panel.value.clamp(0.0, 1.0),
+                            };
+                            // The panel's viewport is what of it the shape shows, so a scrolling list or a
+                            // text field clips to the shape while it grows.
+                            if shown >= REST_DISTANCE
+                                && let Some(visible) = layout.bounds().intersection(&shown_shape)
+                            {
+                                // It drops into place as it shows, and lifts as it goes (D-121).
+                                let drop = Vector::new(0.0, -(1.0 - shown) * theme::CONTENT_DROP);
+                                let moved = motion.pull(shape, layout.bounds().center()) + drop;
+                                renderer.with_translation(moved, |renderer| {
+                                    glass::frame::translated(moved, || {
+                                        panel.as_widget().draw(
+                                            tree,
+                                            renderer,
+                                            theme,
+                                            style,
+                                            layout,
+                                            cursor,
+                                            &(visible - moved),
+                                        );
+                                    });
+                                    fade(
+                                        renderer,
+                                        theme,
+                                        layout.bounds(),
+                                        shown_shape - moved,
+                                        shown,
+                                    );
+                                });
+                            }
+                        }
+                    });
+                    // The pictures, over what's live of either side: a layer of their own, so they're
+                    // over its text too.
+                    if let Some((crossing, p)) = crossing {
+                        let [(items, items_blur), (content, content_blur)] = cross(p);
+                        let [items_live, content_live] = live(p);
+                        let along = along(crossing.island, crossing.panel);
+                        renderer.with_layer(clip, |renderer| {
+                            if let Some(picture) = &crossing.items {
+                                picture.draw(
+                                    renderer,
+                                    crossed(picture.rect, crossing.island, shape, along),
+                                    items_blur,
+                                    items * (1.0 - items_live),
+                                );
+                            }
+                            if let Some(picture) = &crossing.content {
+                                picture.draw(
+                                    renderer,
+                                    crossed(picture.rect, crossing.panel, shape, along),
+                                    content_blur,
+                                    content * (1.0 - content_live),
+                                );
                             }
                         });
                     }
-                    if let Some((panel, tree, layout)) = panel {
-                        let shown = match crossing {
-                            Some((_, p)) if live(p)[1] > 0.0 => 1.0,
-                            Some(_) => 0.0,
-                            None => motion.popover.panel.value.clamp(0.0, 1.0),
-                        };
-                        // The panel's viewport is what of it the shape shows, so a scrolling list or a
-                        // text field clips to the shape while it grows.
-                        if shown >= REST_DISTANCE
-                            && let Some(visible) = layout.bounds().intersection(&shown_shape)
-                        {
-                            // It drops into place as it shows, and lifts as it goes (D-121).
-                            let drop = Vector::new(0.0, -(1.0 - shown) * theme::CONTENT_DROP);
-                            let moved = motion.pull(shape, layout.bounds().center()) + drop;
-                            renderer.with_translation(moved, |renderer| {
-                                glass::frame::translated(moved, || {
-                                    panel.as_widget().draw(
-                                        tree,
-                                        renderer,
-                                        theme,
-                                        style,
-                                        layout,
-                                        cursor,
-                                        &(visible - moved),
-                                    );
-                                });
-                                fade(renderer, theme, layout.bounds(), shown_shape - moved, shown);
-                            });
-                        }
-                    }
                 });
-                // The pictures, over what's live of either side: a layer of their own, so they're
-                // over its text too.
-                if let Some((crossing, p)) = crossing {
-                    let [(items, items_blur), (content, content_blur)] = cross(p);
-                    let [items_live, content_live] = live(p);
-                    let along = along(crossing.island, crossing.panel);
-                    renderer.with_layer(clip, |renderer| {
-                        if let Some(picture) = &crossing.items {
-                            picture.draw(
-                                renderer,
-                                crossed(picture.rect, crossing.island, shape, along),
-                                items_blur,
-                                items * (1.0 - items_live),
-                            );
-                        }
-                        if let Some(picture) = &crossing.content {
-                            picture.draw(
-                                renderer,
-                                crossed(picture.rect, crossing.panel, shape, along),
-                                content_blur,
-                                content * (1.0 - content_live),
-                            );
-                        }
-                    });
-                }
-            });
+            })
         })
     });
 }
@@ -3662,6 +3701,64 @@ mod tests {
         assert_eq!(rect.x, ((1000.0 - 600.0 - padding) / 2.0).round());
         assert_eq!(rect.y, ((1000.0 - 400.0 - padding) / 2.0).round());
         assert_eq!(middle(panel, 1000.0, 300.0, 40.0).y, 40.0);
+    }
+
+    #[test]
+    fn a_panels_corners_are_the_islands_grown_by_its_padding_and_morph_there() {
+        let island = rect(100.0, 120.0);
+        let corner = CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING);
+        let mut motion = Motion {
+            corners: [corner; 4],
+            ..Motion::default()
+        };
+        motion.arrange(island, [(1, 110.0)].into_iter(), None);
+        run(&mut motion, Instant::now(), |_| {});
+        let radius = |motion: &Motion| motion.corners_at(motion.edges.rect())[0].radius;
+        assert_eq!(
+            radius(&motion),
+            theme::ISLAND_RADIUS,
+            "an island has its own"
+        );
+
+        let panel = Rectangle::new(Point::new(10.0, 60.0), Size::new(300.0, 200.0));
+        popover(&mut motion, true, panel, true);
+        let grown = theme::panel_corner(theme::ISLAND_RADIUS);
+        let mut between = false;
+        run(&mut motion, Instant::now(), |motion| {
+            let now = radius(motion);
+            between |= now > theme::ISLAND_RADIUS + 1.0 && now < grown - 1.0;
+        });
+        assert!(between, "the corners grow as the shape does");
+        assert_eq!(
+            radius(&motion),
+            grown,
+            "a panel's are the island's and its padding"
+        );
+        assert_eq!(
+            motion.corners_at(panel)[0].radius,
+            grown,
+            "and the body aims there"
+        );
+        assert_eq!(
+            motion.corners_at(panel)[0].smoothing,
+            theme::ISLAND_SMOOTHING
+        );
+
+        popover(&mut motion, false, panel, true);
+        run(&mut motion, Instant::now(), |_| {});
+        assert_eq!(
+            radius(&motion),
+            theme::ISLAND_RADIUS,
+            "back home, its own again"
+        );
+    }
+
+    #[test]
+    fn nested_corners_share_a_center_until_the_least() {
+        assert_eq!(theme::panel_corner(14.0), 26.0);
+        assert_eq!(theme::nested(26.0, f32::from(theme::PANEL_PADDING)), 14.0);
+        assert_eq!(theme::nested(14.0, 3.0), 11.0);
+        assert_eq!(theme::nested(6.0, 8.0), theme::MIN_ISLAND_RADIUS);
     }
 
     #[test]

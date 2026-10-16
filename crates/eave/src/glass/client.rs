@@ -38,6 +38,14 @@ pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
+/// Whether the plugin shapes the glass with the controls on it (version 4, D-126), as of the
+/// last frame told: before that, a control keeps its own fills, or it would be nothing on glass.
+static RELIEFS: AtomicBool = AtomicBool::new(false);
+
+pub fn reliefs() -> bool {
+    RELIEFS.load(Ordering::Relaxed)
+}
+
 struct Shared {
     queue: QueueHandle<State>,
     manager: Option<EaveGlassManagerV1>,
@@ -49,6 +57,8 @@ struct Attached {
     surface: WlSurface,
     object: EaveGlassSurfaceV1,
     regions: Option<Vec<u8>>,
+    /// The reliefs last sent (D-126).
+    reliefs: Option<Vec<u8>>,
     look: Option<config::Glass>,
     report: Option<u32>,
 }
@@ -99,7 +109,11 @@ pub fn events() -> impl iced::futures::Stream<Item = Event> {
 /// Tells the glass about the frame being drawn: called as it's drawn, after everything else in it.
 /// `look` is `None` without the glass theme: then only the notch and the grown edge are told, so
 /// the pointer goes under them (D-113).
-pub fn present(look: Option<&config::Glass>, records: Vec<super::frame::Record>) {
+pub fn present(
+    look: Option<&config::Glass>,
+    records: Vec<super::frame::Record>,
+    reliefs: Vec<super::frame::Relief>,
+) {
     let Some(surface) = layershellev::layer_surfaces()
         .into_iter()
         .next()
@@ -133,13 +147,16 @@ pub fn present(look: Option<&config::Glass>, records: Vec<super::frame::Record>)
             surface,
             object,
             regions: None,
+            reliefs: None,
             look: None,
             report: None,
         });
     }
     let Some(glass) = shared.glass.as_mut() else {
+        RELIEFS.store(false, Ordering::Relaxed);
         return;
     };
+    RELIEFS.store(glass.object.version() >= 4, Ordering::Relaxed);
     if let Some(look) = look
         && glass.look.as_ref() != Some(look)
     {
@@ -185,6 +202,17 @@ pub fn present(look: Option<&config::Glass>, records: Vec<super::frame::Record>)
         glass.object.set_regions(regions.clone());
         glass.regions = Some(regions);
     }
+    // Controls shape the glass from version 4 (D-126); before it, they're drawn as they are.
+    if glass.object.version() >= 4 {
+        debug_assert!(reliefs.len() <= crate::theme::GLASS_MAX_RELIEFS);
+        let reliefs = super::frame::encode_reliefs(
+            &reliefs[..reliefs.len().min(crate::theme::GLASS_MAX_RELIEFS)],
+        );
+        if glass.reliefs.as_ref() != Some(&reliefs) {
+            glass.object.set_reliefs(reliefs.clone());
+            glass.reliefs = Some(reliefs);
+        }
+    }
 }
 
 /// Binds the glass, if the compositor has it, and dispatches its events from now on.
@@ -212,7 +240,7 @@ fn run(connection: Connection) -> Result<(), String> {
         registry_queue_init::<State>(&connection).map_err(|error| error.to_string())?;
     let handle = queue.handle();
     let manager = globals
-        .bind::<EaveGlassManagerV1, _, _>(&handle, 1..=3, ())
+        .bind::<EaveGlassManagerV1, _, _>(&handle, 1..=4, ())
         .ok();
     let mut state = State {
         name: globals.contents().with_list(|list| {
@@ -259,7 +287,7 @@ impl Dispatch<WlRegistry, GlobalListContents> for State {
                 version,
             } if interface == EaveGlassManagerV1::interface().name && state.name.is_none() => {
                 let manager =
-                    registry.bind::<EaveGlassManagerV1, _, _>(name, version.min(3), handle, ());
+                    registry.bind::<EaveGlassManagerV1, _, _>(name, version.min(4), handle, ());
                 state.name = Some(name);
                 if let Some(shared) = shared().as_mut() {
                     shared.glass = None;

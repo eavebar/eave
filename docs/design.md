@@ -45,19 +45,23 @@ How eave looks and moves, and why. The values live in [`crates/eave/src/theme.rs
 
 **Glass.** With the hypr-eave plugin, an island's fill turns to glass: what's behind it, frosted and tinted by its own color ([D-112](decisions.md)). Grey ink over it takes the opposite of the glass's color, as light or dark as it takes to read. Colored content, like sprites and signals, keeps its own colors. Glass is a theme of its own, drawn with the dark palette: over something bright, the island's ink turns dark instead, by the plugin, and springs there rather than snapping. Popovers, the dormer and dialogs do the same. A drop is black while it hangs from the notch, and glass once it lets go. These colors come from what's behind, like content color does, never from a new token. The notch, the grown edge, attached islands and a solid bar stay black.
 
+**Etched** ([D-126](decisions.md)). On glass, a control is shaped in the glass instead of painted on it. A button, a toggle, a groove or a tab track is a well cut `RELIEF_WELL` into it; what's current (the row in use, the tab, the switcher's mark) is a bead standing `RELIEF_BEAD` on it. A list row is level until pressed. A well is a shade lighter than the glass round it (11 %), a bead more (14 %), so a control reads on a plain backdrop. Each has its own small bevel, so the glass bends at its walls and a line of light runs round them. A press deepens the well, most under the finger. What's on (a toggle, the main button, a slider's fill) turns the glass milky, with its ink dark on it. A light sits under the pointer, faint while over, bright while pressed (`HOVER_LIGHT`). The fills for hover, press and at rest give way to all this: they'd be grey ink on glass.
+
 **Content color.** When a popover shows a large cover, the host finds the cover's strongest hue: the hue with the most saturated, bright pixels. It then lifts that hue to a lightness that reads on black (or deepens it, on white), and uses it for that popover's slider fill and main button. A cover with little color in it (black and white, grey) gives none, and they stay white. Plugins never pick this color: the host takes it from the content ([D-11](decisions.md)).
 
 ## Components
 
 | Component | At rest | Current or on | Under the pointer |
 |---|---|---|---|
-| Slider | a 2 px line, white up to the value, 14 % after | | eases to 4 px; a click eases the fill there, a drag follows exactly |
+| Slider | in the bar, a 2 px line, white up to the value, 14 % after; in a popover, a 28 px groove, 14 % with white up to the value ([D-127](decisions.md)) | | the line eases to 4 px, the groove brightens; a click eases the fill there, a drag follows exactly, and past an end stretches it, less and less, springing back when let go |
 | List row | plain | soft white fill, semibold title, white icons | 8 % fill |
-| Switcher (workspaces) | dim text | a 14 % white pill slides behind it | |
-| Tabs | dim labels on an 8 % track | a 16 % pill slides behind; the label is white and semibold | |
+| Switcher (workspaces) | dim text | a 14 % white pill slides behind it, its leading edge first | |
+| Tabs | dim labels on an 8 % track | a 16 % pill slides behind, its leading edge first; the label is white and semibold | |
 | Toggle | 14 % pill, dim knob | white pill, black knob; the knob slides over | |
 | Prominent button | white disc, black icon (or the content color) | | a little dimmer |
 | Text button | 8 % fill | | 14 % fill |
+| Corners | a popover's are its island's and `PANEL_PADDING`; what's in it nests, each corner its container's less the inset, never under `MIN_ISLAND_RADIUS`: 26, then 14 for a control, then 11 for a mark in it ([D-125](decisions.md)) | | |
+| Under the hand | | | a popover's controls squeeze a few pixels toward the finger and spring back past rest ([D-127](decisions.md)) |
 | Mark (today) | a 1.5 px white ring, semibold | | |
 | Count badge (`counted`) | a `Tone::Critical` circle (a pill from two digits) with a white semibold number, on the top right corner of what it counts, overlapping it a little ([D-82](decisions.md)) | | |
 | Meter | a 6 px bar in its tone (white unless it's a signal) | eases to a new value | |
@@ -87,7 +91,9 @@ All motion is driven by the compositor's frame callbacks, and stops asking for f
 | Press, drag | an island, the notch or the grown edge under the hand | `HAND`: overshoots a little when let go. An island never gets nearer the screen's sides and top than `WALL_GAP`, round its corners too ([D-104](decisions.md)) |
 | Skin | every island's outline at rest: a ring of springs on `REACT` over the shape's frame ([D-111](decisions.md)) | what pokes it (nudges, shelves, walls, a drop's bounce) spreads round it, and the ring keeps its area (`SKIN_AREA`), so a side pushed in bulges the others. The top hangs from the bar. A morph's own motion is the body's |
 | Nudge, push, jelly | a volume change, a workspace switch, a pushed neighbor | `REACT`: `NUDGE_*`, `PUSH_*`, `JELLY_*`, pokes into the skin, which smooths them out. Up or down, a flat shelf over the item, its ends easing into the edge, held out while nudges keep coming and let go `NUDGE_HOLD` after the last ([D-105](decisions.md)). A push into the screen's edge bounces off it, `WALL_GAP` short, and the side that hit squashes (`WALL_*`, [D-104](decisions.md)) |
-| Mark slide | switcher, tabs | `SWITCHER_SLIDE`, eased |
+| Mark slide | switcher, tabs | each edge on `MORPH`, the leading one in `BODY_LEAD` of its time and the trailing one in `BODY_LAG`: it stretches across and draws in after itself ([D-127](decisions.md)) |
+| Press | a popover's buttons, rows, options, toggles | `HAND`: in by `CONTROL_PRESS_INSET`, scaled about a point across from the finger, so the side under it gives most; over a little when let go ([D-127](decisions.md)) |
+| Stretch | a slider dragged past an end | `hand::rubber_band` toward `SLIDER_STRETCH`, back on `HAND` |
 | Hand-over | tabs' pages, alternates, a popover's pages (a list to a row's details), a calendar's months (`page`) | `TAB_FADE` / `ALTERNATE_FADE`, sliding out the old way and in the new; a `page` with a higher order comes in from the right ([D-107](decisions.md)) |
 | Count | counters, a count badge's number | `COUNTER_COUNT`, through every value in between |
 | Grow | a count badge coming and going, and its width | `MORPH_*`, about its own middle |

@@ -80,7 +80,16 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Toggle<M> {
                 border: Border::default().rounded(bounds.height / 2.0),
                 ..renderer::Quad::default()
             },
-            mix(p.track, p.accent_fill, t),
+            // On glass the track is the well it's in (D-126).
+            mix(
+                if crate::press::on_glass() {
+                    p.island_bg
+                } else {
+                    p.track
+                },
+                p.accent_fill,
+                t,
+            ),
         );
         let inset = (bounds.height - theme::TOGGLE_KNOB) / 2.0;
         let travel = bounds.width - 2.0 * inset - theme::TOGGLE_KNOB;

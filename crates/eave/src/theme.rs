@@ -50,6 +50,9 @@ pub const GLASS_TO_LIGHT_INK: f32 = 0.5;
 /// The most records a frame tells the glass: as many as hypr-eave reads (`MAX_REGIONS`), well
 /// inside one Wayland message.
 pub const GLASS_MAX_REGIONS: usize = 64;
+/// The most controls told to hypr-eave as reliefs in a frame (D-126): 52 bytes each, so they fit
+/// in one message with room to spare, like the records.
+pub const GLASS_MAX_RELIEFS: usize = 64;
 /// How far past an island's shape its pixels may reach while it moves, for hypr-eave
 /// (`ISLAND_MARGIN`): what's further from every island changes nothing.
 pub const GLASS_MARGIN: f32 = 12.0;
@@ -79,6 +82,19 @@ pub const MIN_ISLAND_RADIUS: f32 = 4.0;
 pub const LIVE_ISLAND_PADDING: u16 = 4;
 /// How far each side of a pressed island moves in, in logical pixels.
 pub const PRESS_INSET: f32 = 1.5;
+/// How far each side of a pressed control moves in, at a size between its width and height, on
+/// `HAND` (D-127): a few pixels whatever its size, and never more than a tenth.
+pub const CONTROL_PRESS_INSET: f32 = 2.0;
+/// How far across from the finger a pressed control squeezes about, as a share of the way from
+/// its center to its edge: the side the finger is on gives most.
+pub const CONTROL_PRESS_LEAN: f32 = 0.6;
+/// With glass, a control is a well this deep in it, and what's current a bead this high on it,
+/// in logical px (D-126). A press deepens a well, most around the finger.
+pub const RELIEF_WELL: f32 = 2.5;
+pub const RELIEF_BEAD: f32 = 3.0;
+/// How bright the light under the pointer is on a control it's only over: a press lights it
+/// fully.
+pub const HOVER_LIGHT: f32 = 0.35;
 /// The most the part of a dragged island under the pointer moves, sideways and up or down. It only
 /// approaches these: the further the pointer goes, the harder it pulls back.
 pub const DRAG_LIMIT_X: f32 = 10.0;
@@ -293,7 +309,21 @@ pub const ISLAND_SPACING: u32 = EDGE_GAP as u32;
 pub const PANEL_PADDING: u16 = 12;
 pub const SPACING: u32 = 8;
 pub const GRID_CELL: f32 = 28.0;
+/// A small rounded box's corner, where nothing it sits in sets one: a code block on a card.
 pub const BUTTON_RADIUS: f32 = 6.0;
+
+/// A corner inside another, `inset` in from it, sharing its center (D-125): the outer one's
+/// radius less the inset, and never squarer than `MIN_ISLAND_RADIUS`. A popover's corner is the
+/// island's grown by `PANEL_PADDING`, so a control at the padding has the island's corner, a
+/// mark inset in a control the control's less the inset, and so on down.
+pub fn nested(radius: f32, inset: f32) -> f32 {
+    (radius - inset).max(MIN_ISLAND_RADIUS)
+}
+
+/// A popover's corner, grown out of the island's by the padding between them (D-125).
+pub fn panel_corner(island: f32) -> f32 {
+    island + f32::from(PANEL_PADDING)
+}
 
 /// Every popover is this wide, padding included, so rows can push things to their far end and
 /// moving between a popover's pages only changes its height (D-40).
@@ -375,6 +405,9 @@ pub const ICON_BUTTON: f32 = 28.0;
 /// A prominent icon button (play and pause): a disc this wide, in the accent fill.
 pub const PROMINENT_BUTTON: f32 = 36.0;
 pub const BUTTON_HEIGHT: f32 = 30.0;
+/// About how far a button in the bar sits in from its island's top and bottom: its corner is the
+/// island's less this, so it nests in it (D-125).
+pub const BAR_BUTTON_INSET: f32 = 3.0;
 /// A slider is a line with no knob: this thick at rest, `SLIDER_RAIL_HOVER` under the pointer or
 /// while dragged, easing between the two over `SLIDER_GROW`. `SLIDER_HEIGHT` is the room it takes,
 /// and what the pointer can grab. A click eases the fill over `SLIDER_EASE`.
@@ -383,6 +416,12 @@ pub const SLIDER_RAIL_HOVER: f32 = 4.0;
 pub const SLIDER_HEIGHT: f32 = 16.0;
 pub const SLIDER_GROW: Duration = Duration::from_millis(180);
 pub const SLIDER_EASE: Duration = Duration::from_millis(220);
+/// In a popover a slider is a groove instead (D-127): a capsule this tall, filled up to the
+/// value, a little brighter under the pointer.
+pub const SLIDER_GROOVE: f32 = 28.0;
+/// How far a slider's end stretches, at most, under a drag past it. It gives less and less on
+/// the way there, and springs back on `HAND` when let go.
+pub const SLIDER_STRETCH: f32 = 16.0;
 pub const METER_HEIGHT: f32 = 6.0;
 /// How long a meter takes to ease to a new value.
 pub const METER_EASE: Duration = Duration::from_millis(400);
@@ -437,8 +476,6 @@ pub const ALTERNATE_SLIDE_Y: f32 = 4.0;
 pub const HOVER_REST: Duration = Duration::from_millis(200);
 /// How long a counter takes to count to a new number, through every one in between.
 pub const COUNTER_COUNT: Duration = Duration::from_millis(320);
-/// How long a switcher's mark takes to reach a newly current option.
-pub const SWITCHER_SLIDE: Duration = Duration::from_millis(180);
 /// While charging, the battery gulps like a bottle being poured: a few gulps, then a long rest
 /// with no frames at all. One gulp, and the time from one burst of gulps to the next.
 pub const BATTERY_GULP: Duration = Duration::from_millis(380);

@@ -1,7 +1,9 @@
 //! What a frame says about glass, gathered while it's drawn: the islands that may turn to glass,
 //! with their fill and which way their ink goes, and the pictures over them that never do; and in
 //! every theme, where the notch and the grown edge are, which the pointer goes under (D-113). Sent
-//! when the frame is ([`super::Present`]), so it lands with that frame's buffer.
+//! when the frame is ([`super::Present`]), so it lands with that frame's buffer. With glass, the
+//! controls drawn on islands are gathered too, as reliefs cut into the glass or standing out of
+//! it (D-126).
 
 use std::cell::{Cell, RefCell};
 
@@ -28,14 +30,46 @@ pub struct Record {
     pub kind: Kind,
 }
 
+/// How a control shapes the glass it's on (D-126).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Shape {
+    /// Cut into it.
+    Well,
+    /// Standing out of it.
+    Bead,
+}
+
+/// A control on an island, as the glass sees it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Relief {
+    /// Surface coordinates, logical px.
+    pub rect: Rectangle,
+    pub radius: f32,
+    pub shape: Shape,
+    /// How deep the well, or how high the bead, at rest, in logical px.
+    pub depth: f32,
+    /// How far it's pressed in, 0 to 1.
+    pub press: f32,
+    /// How milky the glass turns inside it, up to `fill_x` (surface x): where it's on.
+    pub milk: f32,
+    pub fill_x: f32,
+    /// Where the finger is, and how bright the light around it is.
+    pub light: Point,
+    pub lit: f32,
+}
+
 thread_local! {
     static RECORDS: RefCell<Vec<Record>> = const { RefCell::new(Vec::new()) };
+    static RELIEFS: RefCell<Vec<Relief>> = const { RefCell::new(Vec::new()) };
     static ON: Cell<bool> = const { Cell::new(false) };
     /// How far what's being drawn is moved from its layout, as far as the islands say.
     static OFFSET: Cell<Vector> = const { Cell::new(Vector::new(0.0, 0.0)) };
     /// The top left of the scrollable being drawn, if any: what's in it is moved by how far it's
     /// scrolled, which only its viewport tells.
     static SCROLL: Cell<Option<Point>> = const { Cell::new(None) };
+    /// How what's being drawn is squeezed, if it is: about a point, by a factor, inside how far
+    /// it was moved when the squeeze began.
+    static SQUEEZE: Cell<Option<(Point, f32, Vector)>> = const { Cell::new(None) };
 }
 
 /// Whether to gather records this frame: only while there's glass to tell.
@@ -43,7 +77,13 @@ pub fn gather(on: bool) {
     ON.with(|cell| cell.set(on));
     if !on {
         RECORDS.with(|records| records.borrow_mut().clear());
+        RELIEFS.with(|reliefs| reliefs.borrow_mut().clear());
     }
+}
+
+/// Whether there's glass this frame: what's drawn on it may shape it.
+pub fn on() -> bool {
+    ON.with(Cell::get)
 }
 
 /// Draws without gathering: what's drawn isn't on screen, like a picture being taken of it.
@@ -108,6 +148,49 @@ pub fn solid(bounds: Rectangle, viewport: &Rectangle) {
     });
 }
 
+/// A control drawn at `relief.rect` in its layout, with the `viewport` it was given: only what
+/// shows of it, moved and scrolled as a picture is.
+pub fn relief(relief: Relief, viewport: &Rectangle) {
+    if !on() {
+        return;
+    }
+    let Some(shown) = relief.rect.intersection(viewport) else {
+        return;
+    };
+    let scrolled = SCROLL
+        .with(Cell::get)
+        .map_or(Vector::ZERO, |origin| origin - viewport.position());
+    let by = OFFSET.with(Cell::get) + scrolled;
+    // Squeezed with its island: about the island's center, inside the island's own move.
+    let squeeze = SQUEEZE.with(Cell::get);
+    let place = |at: Point| match squeeze {
+        Some((center, scale, outer)) => {
+            let inner = at + (by - outer);
+            center + (inner - center) * scale + outer
+        }
+        None => at + by,
+    };
+    let scale = squeeze.map_or(1.0, |(_, scale, _)| scale);
+    RELIEFS.with(|reliefs| {
+        reliefs.borrow_mut().push(Relief {
+            rect: Rectangle::new(place(shown.position()), shown.size() * scale),
+            radius: relief.radius * scale,
+            fill_x: place(Point::new(relief.fill_x, 0.0)).x,
+            light: place(relief.light),
+            ..relief
+        })
+    });
+}
+
+/// Draws with what's drawn squeezed by `scale` about `center`, as an island squeezes its items.
+pub fn squeezed<R>(center: Point, scale: f32, draw: impl FnOnce() -> R) -> R {
+    let outer = OFFSET.with(Cell::get);
+    let before = SQUEEZE.with(|cell| cell.replace(Some((center, scale, outer))));
+    let out = draw();
+    SQUEEZE.with(|cell| cell.set(before));
+    out
+}
+
 /// Draws with `by` added to how far what's drawn is moved.
 pub fn translated<R>(by: Vector, draw: impl FnOnce() -> R) -> R {
     let before = OFFSET.with(|cell| cell.replace(cell.get() + by));
@@ -127,6 +210,61 @@ pub fn scrolled<R>(origin: Point, draw: impl FnOnce() -> R) -> R {
 /// This frame's records so far, leaving none.
 pub fn take() -> Vec<Record> {
     RECORDS.with(|records| std::mem::take(&mut *records.borrow_mut()))
+}
+
+/// This frame's reliefs so far, leaving none.
+pub fn take_reliefs() -> Vec<Relief> {
+    RELIEFS.with(|reliefs| std::mem::take(&mut *reliefs.borrow_mut()))
+}
+
+/// What of `reliefs` the compositor hears: those on an island of `records`, at most
+/// [`theme::GLASS_MAX_RELIEFS`], in the order they were drawn.
+pub fn fit_reliefs(mut reliefs: Vec<Relief>, records: &[Record]) -> Vec<Relief> {
+    reliefs.retain(|relief| {
+        relief.rect.width >= 1.0
+            && relief.rect.height >= 1.0
+            && records.iter().any(|record| {
+                matches!(record.kind, Kind::Glass { .. })
+                    && record.rect.intersection(&relief.rect).is_some()
+            })
+    });
+    reliefs.truncate(theme::GLASS_MAX_RELIEFS);
+    reliefs
+}
+
+/// The reliefs as `set_reliefs` takes them: thirteen native-endian i32 each, lengths in 24.8
+/// fixed point.
+pub fn encode_reliefs(reliefs: &[Relief]) -> Vec<u8> {
+    let fixed = |value: f32| {
+        (value * 256.0)
+            .round()
+            .clamp(i32::MIN as f32, i32::MAX as f32) as i32
+    };
+    let byte = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as i32;
+    let mut out = Vec::with_capacity(reliefs.len() * 52);
+    for relief in reliefs {
+        for value in [
+            fixed(relief.rect.x),
+            fixed(relief.rect.y),
+            fixed(relief.rect.width),
+            fixed(relief.rect.height),
+            fixed(relief.radius),
+            match relief.shape {
+                Shape::Well => 0,
+                Shape::Bead => 1,
+            },
+            fixed(relief.depth),
+            byte(relief.press),
+            byte(relief.milk),
+            fixed(relief.fill_x),
+            fixed(relief.light.x),
+            fixed(relief.light.y),
+            byte(relief.lit),
+        ] {
+            out.extend_from_slice(&value.to_ne_bytes());
+        }
+    }
+    out
 }
 
 /// What of `records` the compositor hears: at most [`theme::GLASS_MAX_REGIONS`], so a frame full
@@ -289,6 +427,86 @@ mod tests {
         );
         assert!(take().is_empty());
         gather(false);
+    }
+
+    fn well(x: f32) -> Relief {
+        Relief {
+            rect: Rectangle::new(Point::new(x, 10.0), Size::new(40.0, 20.0)),
+            radius: 10.0,
+            shape: Shape::Well,
+            depth: 2.5,
+            press: 0.5,
+            milk: 1.0,
+            fill_x: x + 20.0,
+            light: Point::new(x + 5.0, 15.0),
+            lit: 0.25,
+        }
+    }
+
+    #[test]
+    fn reliefs_go_out_in_fixed_point() {
+        assert_eq!(
+            words(&encode_reliefs(&[well(1.5)])),
+            vec![
+                384, 2560, 10240, 5120, 2560, 0, 640, 128, 255, 5504, 1664, 3840, 64
+            ]
+        );
+    }
+
+    #[test]
+    fn reliefs_are_where_they_are_drawn_and_only_with_glass() {
+        gather(false);
+        relief(well(0.0), &Rectangle::INFINITE);
+        assert!(take_reliefs().is_empty(), "nothing without glass");
+        gather(true);
+        assert!(on());
+        let viewport = Rectangle::new(Point::new(0.0, 0.0), Size::new(30.0, 100.0));
+        translated(Vector::new(5.0, 2.0), || relief(well(0.0), &viewport));
+        let reliefs = take_reliefs();
+        assert_eq!(
+            reliefs[0].rect,
+            Rectangle::new(Point::new(5.0, 12.0), Size::new(30.0, 20.0)),
+            "moved, and cut to what shows"
+        );
+        assert_eq!(reliefs[0].fill_x, 25.0);
+        assert_eq!(reliefs[0].light, Point::new(10.0, 17.0));
+        relief(
+            well(0.0),
+            &Rectangle::new(Point::new(100.0, 0.0), Size::new(9.0, 9.0)),
+        );
+        assert!(take_reliefs().is_empty(), "out of view, none");
+
+        // Squeezed to half about (0, 0) inside an island moved 10 across, then an item moved 4.
+        translated(Vector::new(10.0, 0.0), || {
+            squeezed(Point::ORIGIN, 0.5, || {
+                translated(Vector::new(4.0, 0.0), || {
+                    relief(well(0.0), &Rectangle::INFINITE)
+                })
+            })
+        });
+        let squeezed = take_reliefs()[0];
+        assert_eq!(squeezed.rect.position(), Point::new(12.0, 5.0));
+        assert_eq!(squeezed.rect.size(), Size::new(20.0, 10.0));
+        assert_eq!(squeezed.radius, 5.0);
+        gather(false);
+    }
+
+    #[test]
+    fn reliefs_off_every_island_are_left_out_and_the_rest_fit_in_a_message() {
+        let island = Record {
+            rect: Rectangle::new(Point::new(0.0, 0.0), Size::new(320.0, 400.0)),
+            kind: Kind::Glass {
+                fill: Color::BLACK,
+                darker: 0.0,
+            },
+        };
+        let mut reliefs: Vec<Relief> = (0..200).map(|i| well(i as f32)).collect();
+        reliefs.push(well(1000.0));
+        let fitted = fit_reliefs(reliefs, &[island]);
+        assert_eq!(fitted.len(), theme::GLASS_MAX_RELIEFS);
+        assert_eq!(fitted[0], well(0.0), "in the order drawn");
+        assert!(fit_reliefs(vec![well(1000.0)], &[island]).is_empty());
+        assert!(8 + 4 + encode_reliefs(&fitted).len() <= 4096);
     }
 
     #[test]

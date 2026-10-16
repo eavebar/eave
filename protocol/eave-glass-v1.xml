@@ -40,11 +40,14 @@
     Since version 3 the client can also say how high the glass floats over
     what's behind it (set_gap).
 
+    Since version 4 it can say where its controls are cut into the glass or
+    stand out of it, so the glass bends at their walls too (set_reliefs).
+
     When the global is absent the client draws as it would anyway: nothing
     depends on it.
   </description>
 
-  <interface name="eave_glass_manager_v1" version="3">
+  <interface name="eave_glass_manager_v1" version="4">
     <description summary="glass for eave's surfaces"/>
 
     <request name="destroy" type="destructor">
@@ -67,7 +70,7 @@
     </request>
   </interface>
 
-  <interface name="eave_glass_surface_v1" version="3">
+  <interface name="eave_glass_surface_v1" version="4">
     <description summary="the glass of one surface">
       All requests set double-buffered state, applied on the surface's next
       wl_surface.commit, so what they say lands with the frame it describes.
@@ -161,6 +164,35 @@
         logical pixels. The initial value is 0.
       </description>
       <arg name="cell" type="uint"/>
+    </request>
+
+    <request name="set_reliefs" since="4">
+      <description summary="what is cut into the glass, or stands out of it">
+        An array of records, each thirteen native-endian 32-bit integers.
+        Lengths and positions are 24.8 fixed point, in surface-local
+        logical pixels:
+
+        x, y, width, height and radius: a rounded rectangle, a control;
+        kind: 0 a well, cut into the glass, 1 a bead, standing out of it;
+        depth: how deep the well, or how high the bead, at rest;
+        press: 0 to 255, how far it's pressed in: a well deepens, most
+        around the light;
+        milk: 0 to 255, how milky the glass turns inside it, up to fill_x:
+        where it's on. There the client's drawn accent (white) is the milky
+        glass, and the rest of what it drew there stays as drawn, dark ink
+        on it;
+        fill_x: where the milk ends, across; past the right edge for all
+        of it;
+        light_x, light_y: where the finger is;
+        light: 0 to 255, how bright a soft light around it is.
+
+        A relief changes the glass of the island it's in only: outside
+        every glass record it's ignored. New requests go last, here: a
+        request's number is its place in the interface. The initial value is empty. At
+        most 64 records: the compositor ignores the rest, and 64 keeps the
+        request inside one Wayland message (4096 bytes).
+      </description>
+      <arg name="reliefs" type="array"/>
     </request>
 
     <event name="backdrop">

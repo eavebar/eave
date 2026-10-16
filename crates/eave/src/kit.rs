@@ -35,6 +35,7 @@ use crate::markdown;
 use crate::meter::Meter;
 use crate::page::Page;
 use crate::pip::Pip;
+use crate::press::{Press, on_glass};
 use crate::shortcut;
 use crate::slider::Slider;
 use crate::slot::Slot;
@@ -48,23 +49,35 @@ use crate::timeline;
 use crate::toggle::Toggle;
 
 /// A node in the bar.
+///
+/// `radius` is the island's corner, which what's in it nests in (D-125).
 pub fn node<'a>(
     node: Node<AnyMessage>,
     icons: &Icons,
     palette: &'static Palette,
+    radius: f32,
 ) -> Element<'a, AnyMessage> {
-    render(node, Ctx::new(Place::Bar, palette), icons)
+    render(node, Ctx::new(Place::Bar, palette, radius), icons)
 }
 
 /// A popover's content, laid out at the panel's width. When it shows a large cover with color in
 /// it, its sliders and main button take that color: the content's, never one a plugin picked
-/// (D-61).
+/// (D-61). Its controls have the island's corner, `radius`: the panel's is that grown by its
+/// padding, so they're concentric with it (D-125).
 pub fn panel<'a>(
     node: Node<AnyMessage>,
     icons: &Icons,
     palette: &'static Palette,
+    radius: f32,
 ) -> Element<'a, AnyMessage> {
-    in_panel(node, icons, palette, Place::Panel, theme::SCROLL_MAX_HEIGHT)
+    in_panel(
+        node,
+        icons,
+        palette,
+        radius,
+        Place::Panel,
+        theme::SCROLL_MAX_HEIGHT,
+    )
 }
 
 /// A dialog's content: a panel's, with more room to scroll in (D-90): up to `scroll` tall.
@@ -72,15 +85,17 @@ pub fn dialog<'a>(
     node: Node<AnyMessage>,
     icons: &Icons,
     palette: &'static Palette,
+    radius: f32,
     scroll: f32,
 ) -> Element<'a, AnyMessage> {
-    in_panel(node, icons, palette, Place::Dialog, scroll)
+    in_panel(node, icons, palette, radius, Place::Dialog, scroll)
 }
 
 fn in_panel<'a>(
     node: Node<AnyMessage>,
     icons: &Icons,
     palette: &'static Palette,
+    radius: f32,
     place: Place,
     scroll: f32,
 ) -> Element<'a, AnyMessage> {
@@ -90,7 +105,7 @@ fn in_panel<'a>(
     let ctx = Ctx {
         content,
         scroll,
-        ..Ctx::new(place, palette)
+        ..Ctx::new(place, palette, radius)
     };
     render(node, ctx, icons)
 }
@@ -232,6 +247,7 @@ pub fn notice<'a, M: Clone + 'a>(
     card: Card,
     icons: &Icons,
     p: &'static Palette,
+    radius: f32,
     now: SystemTime,
     wrap: impl Fn(AnyMessage) -> M + Clone + 'a,
     engaged: impl Fn(bool) -> M + Clone + 'a,
@@ -246,7 +262,7 @@ pub fn notice<'a, M: Clone + 'a>(
         previous,
     } = card;
     let on_press = notice.on_press.clone();
-    let source = source(&notice, icons, p, now, wrap.clone(), dismiss);
+    let source = source(&notice, icons, p, radius, now, wrap.clone(), dismiss);
     let step = notice.step.as_ref().map(|step| step.index);
     let content = |notice: NoticeParts<AnyMessage>, earlier, unfolded| {
         content(
@@ -255,6 +271,7 @@ pub fn notice<'a, M: Clone + 'a>(
             unfolded,
             icons,
             p,
+            radius,
             now,
             wrap.clone(),
             engaged.clone(),
@@ -291,6 +308,7 @@ fn source<'a, M: Clone + 'a>(
     notice: &NoticeParts<AnyMessage>,
     icons: &Icons,
     p: &'static Palette,
+    radius: f32,
     now: SystemTime,
     wrap: impl Fn(AnyMessage) -> M + 'a,
     dismiss: Option<M>,
@@ -395,7 +413,7 @@ fn source<'a, M: Clone + 'a>(
         )
         .on_press(message)
         .padding(0)
-        .style(icon_button_style)
+        .style(move |theme: &Theme, status| icon_button_style(theme, status, radius))
         .into()
     });
     let time = notice.time.map(|time| -> Element<'a, M> {
@@ -453,12 +471,13 @@ fn content<'a, M: Clone + 'a>(
     unfolded: bool,
     icons: &Icons,
     p: &'static Palette,
+    radius: f32,
     now: SystemTime,
     wrap: impl Fn(AnyMessage) -> M + Clone + 'a,
     engaged: impl Fn(bool) -> M + 'a,
     unfold: M,
 ) -> Element<'a, M> {
-    let ctx = Ctx::new(Place::Panel, p);
+    let ctx = Ctx::new(Place::Panel, p, radius);
     // Its own picture: wide ones whole, under the text; the rest beside it.
     let cover = cover::key(&notice)
         .and_then(|key| icons.covers.get(&key))
@@ -619,7 +638,7 @@ fn answers<'a, M: Clone + 'a>(
         let rows: Vec<Element<'a, M>> = choices
             .options
             .into_iter()
-            .map(|option| choice(option, multiple, ctx.palette).map(wrap.clone()))
+            .map(|option| choice(option, multiple, ctx).map(wrap.clone()))
             .collect();
         options = Some(column(rows).spacing(2));
     }
@@ -673,6 +692,7 @@ fn answers<'a, M: Clone + 'a>(
             .into();
         // It waits for a click before it takes the focus, and the bar the keyboard (D-62).
         Field::new(content.map(wrap.clone()), None)
+            .radius(ctx.radius)
             .grows()
             .on_focus(engaged)
             .into()
@@ -736,13 +756,14 @@ fn answer_button<'a>(
         .wrapping(text::Wrapping::None);
     let fill = prominent.then(|| ctx.fill());
     let enabled = message.is_some();
-    button(container(content).center_x(width).center_y(Length::Fill))
+    let radius = ctx.radius;
+    let button = button(container(content).center_x(width).center_y(Length::Fill))
         .on_press_maybe(message)
         .width(width)
         .height(theme::BUTTON_HEIGHT)
         .padding([0, 12])
         .style(move |theme: &Theme, status| {
-            let style = text_button_style(theme, status, fill);
+            let style = text_button_style(theme, status, fill, radius);
             if enabled {
                 style
             } else {
@@ -754,9 +775,21 @@ fn answer_button<'a>(
                     ..style
                 }
             }
-        })
+        });
+    Press::new(button)
+        .well(
+            radius,
+            if fill.is_some() && ctx.content.is_none() {
+                1.0
+            } else {
+                0.0
+            },
+        )
         .into()
 }
+
+/// How far a choice's check box sits in from its row's top: its corner nests in the row's.
+const CHOICE_INSET: f32 = 7.0;
 
 /// One option to pick: its label, with "Recommended" beside it if it is, and what it means
 /// under it. A picked one is lit like the list row in use; with several to pick, a check box says
@@ -764,8 +797,9 @@ fn answer_button<'a>(
 fn choice<'a>(
     option: ChoiceParts<AnyMessage>,
     multiple: bool,
-    p: &'static Palette,
+    ctx: Ctx,
 ) -> Element<'a, AnyMessage> {
+    let (p, radius) = (ctx.palette, ctx.radius);
     let picked = option.picked;
     let label = text(option.label)
         .size(theme::TEXT_SIZE)
@@ -815,7 +849,7 @@ fn choice<'a>(
                 border: Border {
                     color: if picked { p.accent_fill } else { p.check_ring },
                     width: if picked { 0.0 } else { 1.5 },
-                    radius: 5.0.into(),
+                    radius: theme::nested(radius, CHOICE_INSET).into(),
                 },
                 ..container::Style::default()
             })
@@ -826,12 +860,15 @@ fn choice<'a>(
         .push(words)
         .spacing(10)
         .align_y(alignment::Vertical::Top);
-    button(content)
-        .on_press(option.on_pick)
-        .width(Length::Fill)
-        .padding([7, 6])
-        .style(move |theme: &Theme, status| row_style(theme, status, picked))
-        .into()
+    Press::new(
+        button(content)
+            .on_press(option.on_pick)
+            .width(Length::Fill)
+            .padding([CHOICE_INSET as u16, 6])
+            .style(move |theme: &Theme, status| row_style(theme, status, picked, radius)),
+    )
+    .row(picked, radius)
+    .into()
 }
 
 /// A hash of what `node` says: its kinds and its text. Two nodes that read the same hash the
@@ -1043,10 +1080,13 @@ struct Ctx {
     /// How tall a scroll gets.
     scroll: f32,
     palette: &'static Palette,
+    /// The corner of what it's in: a control in a popover has the island's, the popover's less
+    /// its padding (D-125).
+    radius: f32,
 }
 
 impl Ctx {
-    fn new(place: Place, palette: &'static Palette) -> Self {
+    fn new(place: Place, palette: &'static Palette, radius: f32) -> Self {
         Self {
             tone: Tone::Normal,
             color: None,
@@ -1056,6 +1096,7 @@ impl Ctx {
             content: None,
             scroll: theme::SCROLL_MAX_HEIGHT,
             palette,
+            radius,
         }
     }
 
@@ -1235,11 +1276,27 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             shortcut,
         } => {
             let only_icon = matches!(content.kind(), Kind::Icon { .. } | Kind::Image { .. });
+            // With glass, a popover's button is a well in it, milky if it's filled with the ink
+            // (D-126); one filled with the content's color keeps it.
+            let milk = if prominent && ctx.content.is_none() {
+                1.0
+            } else {
+                0.0
+            };
+            let well = if only_icon && prominent {
+                theme::PROMINENT_BUTTON / 2.0
+            } else if only_icon {
+                theme::ICON_BUTTON / 2.0
+            } else {
+                ctx.radius
+            };
             let button = if !ctx.panel() {
                 button(render(*content, ctx, icons))
                     .on_press(on_press)
                     .padding([2, 8])
-                    .style(bar_button_style)
+                    .style(move |theme: &Theme, status| {
+                        bar_button_style(theme, status, bar_radius(ctx.radius))
+                    })
             } else if only_icon && prominent {
                 let inner = Ctx {
                     color: Some(p.on_accent),
@@ -1260,7 +1317,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 )
                 .on_press(on_press)
                 .padding(0)
-                .style(icon_button_style)
+                .style(move |theme: &Theme, status| icon_button_style(theme, status, ctx.radius))
             } else {
                 let inner = Ctx {
                     text: Text::Strong,
@@ -1282,7 +1339,15 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                     .on_press(on_press)
                     .height(theme::BUTTON_HEIGHT)
                     .padding([0, 14])
-                    .style(move |theme: &Theme, status| text_button_style(theme, status, fill))
+                    .style(move |theme: &Theme, status| {
+                        text_button_style(theme, status, fill, ctx.radius)
+                    })
+            };
+            let button = Press::new(button).squeezes(ctx.panel());
+            let button = if ctx.panel() {
+                button.well(well, milk)
+            } else {
+                button
             };
             match on_secondary {
                 Some(message) => mouse_area(button).on_right_press(message).into(),
@@ -1294,10 +1359,19 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 button(render(content, ctx, icons))
                     .on_press(on_press)
                     .padding([2, 8])
-                    .style(bar_button_style)
+                    .style(move |theme: &Theme, status| {
+                        bar_button_style(theme, status, bar_radius(ctx.radius))
+                    })
                     .into()
             });
-            Switcher::new(row(options).spacing(theme::SPACING / 2), current).into()
+            {
+                let radius = if ctx.panel() {
+                    ctx.radius
+                } else {
+                    bar_radius(ctx.radius)
+                };
+                Switcher::new(row(options).spacing(theme::SPACING / 2), current, radius).into()
+            }
         }
         Kind::Separator => separator(p),
         Kind::Divider { text: caption } => {
@@ -1428,7 +1502,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 )
                 .on_press(message)
                 .padding(0)
-                .style(icon_button_style)
+                .style(move |theme: &Theme, status| icon_button_style(theme, status, ctx.radius))
             });
             let title = Clip::new(
                 text(title)
@@ -1484,14 +1558,27 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             step,
             on_change,
             on_release,
-        } => Slider::new(value, range, step, on_change, on_release, ctx.fill())
-            .width(if ctx.panel() {
-                Length::Fill
+        } => {
+            let slider = Slider::new(value, range, step, on_change, on_release, ctx.fill());
+            if ctx.panel() {
+                slider
+                    .width(Length::Fill)
+                    .groove(ctx.radius, ctx.content.is_none())
+                    .into()
             } else {
-                Length::Fixed(80.0)
-            })
-            .into(),
-        Kind::Toggle { on, on_toggle } => Toggle::new(on, on_toggle).into(),
+                slider.width(Length::Fixed(80.0)).into()
+            }
+        }
+        Kind::Toggle { on, on_toggle } => {
+            let toggle = Press::new(Toggle::new(on, on_toggle)).squeezes(ctx.panel());
+            if ctx.panel() {
+                toggle
+                    .well(theme::TOGGLE_HEIGHT / 2.0, if on { 1.0 } else { 0.0 })
+                    .into()
+            } else {
+                toggle.into()
+            }
+        }
         Kind::Meter {
             fraction,
             limit,
@@ -1522,7 +1609,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 .align_y(alignment::Vertical::Center);
             let alert = matches!(tone, Some(Tone::Critical | Tone::Warning))
                 .then(|| p.tone(tone.unwrap_or_default()));
-            Field::new(content, alert).into()
+            Field::new(content, alert).radius(ctx.radius).into()
         }
         Kind::Display(content) => render(
             *content,
@@ -1578,7 +1665,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                 .spacing(4)
                 .padding(Padding::ZERO.right(3))
                 .align_y(alignment::Vertical::Bottom);
-            Field::new(content, None).grows().into()
+            Field::new(content, None).grows().radius(ctx.radius).into()
         }
         Kind::Scroll { content, bottom } => {
             let content = render(*content, ctx, icons);
@@ -1709,6 +1796,7 @@ struct ListItem {
 /// lit: a soft fill of ink behind, a heavier title, and its icons in the accent.
 fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMessage> {
     let p = ctx.palette;
+    let radius = ctx.radius;
     let background = if item.selected {
         // The selected fill over the island, which is what a fading title fades into.
         over(p.selected_bg, p.island_bg)
@@ -1788,23 +1876,32 @@ fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMess
         left: 8.0,
     };
     let row: Element<'a, AnyMessage> = match item.on_press {
-        Some(message) => button(container(content).center_y(Length::Fill))
-            .on_press(message)
-            .width(Length::Fill)
-            .height(height)
-            .padding(padding)
-            .style(move |theme: &Theme, status| row_style(theme, status, selected))
-            .into(),
-        None => container(content)
-            .center_y(Length::Fixed(height))
-            .width(Length::Fill)
-            .padding(padding)
-            .style(move |_| container::Style {
-                background: selected.then_some(Background::Color(p.selected_bg)),
-                border: Border::default().rounded(theme::BUTTON_RADIUS),
-                ..container::Style::default()
-            })
-            .into(),
+        Some(message) => Press::new(
+            button(container(content).center_y(Length::Fill))
+                .on_press(message)
+                .width(Length::Fill)
+                .height(height)
+                .padding(padding)
+                .style(move |theme: &Theme, status| row_style(theme, status, selected, radius)),
+        )
+        .squeezes(ctx.panel())
+        .row(selected, radius)
+        .into(),
+        None => Press::new(
+            container(content)
+                .center_y(Length::Fixed(height))
+                .width(Length::Fill)
+                .padding(padding)
+                .style(move |_| container::Style {
+                    background: (selected && !on_glass())
+                        .then_some(Background::Color(p.selected_bg)),
+                    border: Border::default().rounded(radius),
+                    ..container::Style::default()
+                }),
+        )
+        .squeezes(false)
+        .row(selected, radius)
+        .into(),
     };
     match item.on_secondary {
         Some(message) => mouse_area(row).on_right_press(message).into(),
@@ -1870,20 +1967,35 @@ fn state_background(p: &Palette, status: button::Status) -> Option<Background> {
     }
 }
 
-/// Buttons in the bar: plain until hovered.
-fn bar_button_style(theme: &Theme, status: button::Status) -> button::Style {
+/// A bar button's corner: the island's `radius`, less how far in from the island's top and
+/// bottom it sits (D-125).
+fn bar_radius(radius: f32) -> f32 {
+    theme::nested(radius, theme::BAR_BUTTON_INSET)
+}
+
+/// Buttons in the bar: plain until hovered, rounded `radius`.
+fn bar_button_style(theme: &Theme, status: button::Status, radius: f32) -> button::Style {
     let p = Palette::of(theme);
     button::Style {
         background: state_background(p, status),
         text_color: p.tone(Tone::Normal),
-        border: Border::default().rounded(theme::BUTTON_RADIUS),
+        border: Border::default().rounded(radius),
         ..button::Style::default()
     }
 }
 
-/// Icon buttons in a popover: plain until hovered, like the bar's.
-fn icon_button_style(theme: &Theme, status: button::Status) -> button::Style {
-    bar_button_style(theme, status)
+/// Icon buttons in a popover: plain until hovered, like the bar's. On glass, plain: the glass
+/// answers the hand (D-126).
+fn icon_button_style(theme: &Theme, status: button::Status, radius: f32) -> button::Style {
+    let style = bar_button_style(theme, status, radius);
+    if on_glass() {
+        button::Style {
+            background: None,
+            ..style
+        }
+    } else {
+        style
+    }
 }
 
 /// A button that's only its text, dim until hovered: a card's "Show all".
@@ -1915,28 +2027,33 @@ fn text_button_style(
     theme: &Theme,
     status: button::Status,
     prominent: Option<Color>,
+    radius: f32,
 ) -> button::Style {
     let p = Palette::of(theme);
     let background = match prominent {
-        Some(fill) => filled(fill, status),
-        None => match status {
+        Some(fill) => Some(filled(fill, status)),
+        // On glass, a well in it instead (D-126).
+        None if on_glass() => None,
+        None => Some(match status {
             button::Status::Hovered => p.pressed_bg,
             button::Status::Pressed => p.hover_bg,
             _ => p.button_bg,
-        },
+        }),
     };
     button::Style {
-        background: Some(Background::Color(background)),
+        background: background.map(Background::Color),
         text_color: p.tone(Tone::Normal),
-        border: Border::default().rounded(theme::BUTTON_RADIUS),
+        border: Border::default().rounded(radius),
         ..button::Style::default()
     }
 }
 
 /// List rows: the selected one tinted, the others plain until hovered.
-fn row_style(theme: &Theme, status: button::Status, selected: bool) -> button::Style {
+fn row_style(theme: &Theme, status: button::Status, selected: bool, radius: f32) -> button::Style {
     let p = Palette::of(theme);
     let background = match (selected, status) {
+        // On glass, the row in use is a bead and the hand's a light (D-126).
+        _ if on_glass() => None,
         (true, button::Status::Pressed) => Some(Background::Color(p.selected_bg.scale_alpha(1.4))),
         (true, _) => Some(Background::Color(p.selected_bg)),
         (false, status) => state_background(p, status),
@@ -1944,7 +2061,7 @@ fn row_style(theme: &Theme, status: button::Status, selected: bool) -> button::S
     button::Style {
         background,
         text_color: p.tone(Tone::Normal),
-        border: Border::default().rounded(theme::BUTTON_RADIUS),
+        border: Border::default().rounded(radius),
         ..button::Style::default()
     }
 }

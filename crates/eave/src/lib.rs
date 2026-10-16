@@ -36,6 +36,7 @@ mod notch;
 mod page;
 mod pip;
 mod pour;
+mod press;
 mod shortcut;
 mod slider;
 mod slot;
