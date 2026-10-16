@@ -154,6 +154,22 @@ systemctl --user enable --now eave-rebuild.path   # eave-build init put the unit
 - `eave-build init` writes the real path into `PathChanged=` when `XDG_CONFIG_HOME` isn't `~/.config`.
 - `eave-build init` writes its own full path into `ExecStart=`. systemd looks up a bare command name only in `/usr/bin` and `/usr/local/bin`, not in `~/.cargo/bin`.
 
+## Hyprland's layer animation
+
+Turn off Hyprland's `layersIn` animation, or the bar squeezes and stretches whenever a popover opens or closes ([D-122](decisions.md)):
+
+```lua
+-- hyprland.lua (Hyprland 0.56+)
+hl.animation({ leaf = "layersIn", enabled = false })
+```
+
+```ini
+# hyprland.conf (older Hyprland)
+animation = layersIn, 0
+```
+
+The bar's surface grows to make room for a popover and shrinks back when it closes. Besides opening layers, `layersIn` animates their box on every resize. Hyprland then draws the bar into a box still sliding to its new height, so opening a popover flattens the whole bar, notch included, for a moment, and closing one stretches it. It's on by default: `layersIn` inherits from `layers`, and that from `global`. Turning off `layers` isn't enough if your config sets `layersIn` itself. Layers still fade in, which is `fadeLayersIn`; only a `slide` or `popin` style on other layers, like a launcher's, goes. `eave doctor` warns while it's on.
+
 ## Calibrate the screen
 
 `eave calibrate` measures how your screen's corners are rounded, and its notch, if it has one, so the bar fits them exactly ([D-71](decisions.md)). It covers the focused output with a model of what the screen shows: a one-pixel red line just inside its edge, and blue over what it says is hidden. Change the model until you can see every red pixel and no blue one. Look closely at the corners and around the notch.
@@ -183,6 +199,7 @@ It checks what the bar depends on and says what's wrong, and what to do about it
 - No two actions in the dormer want the same key.
 - Hyprland answers. The monitor the bar opens on has its notch measured, if the kernel shows one.
 - Hyprland loads hypr-eave, and the one eave-build installed last, not an older copy ([D-113](decisions.md)). It's optional: a warning only when it's built and not loaded, or the glass theme needs it.
+- Hyprland doesn't animate the bar's size: its `layersIn` animation is off (see [Hyprland's layer animation](#hyprlands-layer-animation)).
 - `eave.service` and `eave-rebuild.path` are enabled, systemd knows `WAYLAND_DISPLAY` and `HYPRLAND_INSTANCE_SIGNATURE`, and the update units are installed. Asked over D-Bus, and skipped without a systemd user manager.
 
 It doesn't need the bar, so it helps most when the bar won't start. It exits with 1 when it found a problem. Run it with the binary the bar runs, `~/.local/bin/eave doctor`: it checks the widgets that binary has. `--report <path>` also writes what it found as TOML. The `essential` widget's Check health, in the dormer, runs it that way and shows the report in a dialog.
