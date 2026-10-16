@@ -156,7 +156,8 @@ namespace Glass {
         Vector2D                 wideLevel;
         SP<Render::IFramebuffer> field;          // the surface's coverage, blurred: the bend's shape
         Vector2D                 fieldSize;      // the part of it that holds content, texels
-        float                    fieldStep = 1.F; // s px per texel
+        float                    fieldStep  = 1.F; // s px per texel
+        float                    fieldSigma = 1.F; // its gaussian, s px
         bool                     ready     = false;
     };
 

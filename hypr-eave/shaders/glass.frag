@@ -26,6 +26,8 @@ uniform sampler2D field;     // the surface's coverage, blurred by a gaussian a 
 uniform vec2 fieldScale;     // s px -> uv in it
 uniform vec4 fieldLimit;     // its first and last texel centers with content, uv
 uniform float fieldStep;     // s px between its texels
+uniform float sigma;         // the field's gaussian, s px
+uniform float band;          // s px
 
 uniform float fade;          // the surface's fade-in or -out
 uniform float strength;      // s px
@@ -73,6 +75,34 @@ vec3 look(vec2 s) {
 // How much of the area around s is glass, weighted by a gaussian a band wide.
 float height(vec2 s) {
     return texture(field, clamp(s * fieldScale, fieldLimit.xy, fieldLimit.zw)).r;
+}
+
+// The inverse error function, single precision (Giles, 2010), for |x| up to 0.995.
+float erfinv(float x) {
+    float w = -log((1.0 - x) * (1.0 + x)) - 2.5;
+    float p = 2.81022636e-08;
+    p       = 3.43273939e-07 + p * w;
+    p       = -3.5233877e-06 + p * w;
+    p       = -4.39150654e-06 + p * w;
+    p       = 0.00021858087 + p * w;
+    p       = -0.00125372503 + p * w;
+    p       = -0.00417768164 + p * w;
+    p       = 0.246640727 + p * w;
+    p       = 1.50140941 + p * w;
+    return p * x;
+}
+
+// How deep into the glass a pixel `d` s px in from a straight edge is, as rings of samples a
+// band out would say: three rings, the nearer weighing more, each the share of it that's inside.
+// 0 at the edge, 1 a band in. It rises steeply near the edge, which keeps the rim crisp.
+float ringDepth(float d) {
+    float sum = 0.0, weight = 0.0;
+    for (int r = 1; r <= 3; r++) {
+        float w = 1.0 / float(r);
+        sum += w * (0.5 + asin(clamp(d * 3.0 / (band * float(r)), -1.0, 1.0)) / 3.14159265);
+        weight += w;
+    }
+    return clamp((sum / weight - 0.5) * 2.0, 0.0, 1.0);
 }
 
 // The glass behind s, much more blurred than the glass itself, and without its bend: what the
@@ -226,7 +256,8 @@ void main() {
 
     // How deep into the glass the pixel is, from the field: 0.5 on the edge, all but 1 a band
     // in. Its slope points out of the glass. The field is smooth, so both change smoothly from
-    // pixel to pixel, around corners too.
+    // pixel to pixel, around corners too. By a straight edge the field is the gaussian's
+    // integral, so it gives back the distance in, and from that the depth the rings had.
     float h = height(s);
     if (h >= 0.995) {
         put(s, look(s), a, fill, darker); // deep inside, nothing bends
@@ -234,7 +265,8 @@ void main() {
     }
     vec2 e     = vec2(fieldStep, 0.0);
     vec2 slope = vec2(height(s + e.xy) - height(s - e.xy), height(s + e.yx) - height(s - e.yx));
-    float depth = clamp((h - 0.5) * 2.0, 0.0, 1.0); // 0 at the edge, 1 inside
+    float d     = sigma * 1.41421356 * erfinv(clamp(h * 2.0 - 1.0, -0.995, 0.995)); // s px in
+    float depth = ringDepth(d); // 0 at the edge, 1 inside
     float edge  = 1.0 - depth;
     vec2  n     = length(slope) > 1e-6 ? -normalize(slope) : vec2(0.0);
 

@@ -32,7 +32,7 @@ namespace Glass {
     // which needs its own sampler type.
     struct SGlassProgram {
         GLuint id = 0;
-        GLint  mask, surfSize, fbOrigin, toFb, toSurf, backdrop, bdOrigin, bdScale, bdLimit, wide, wideScale, wideLimit, wideSize, field, fieldScale, fieldLimit, fieldStep,
+        GLint  mask, surfSize, fbOrigin, toFb, toSurf, backdrop, bdOrigin, bdScale, bdLimit, wide, wideScale, wideLimit, wideSize, field, fieldScale, fieldLimit, fieldStep, sigma, band,
             fade, strength, chroma, rim, tint, ink, contrast, margin, count, boxes, fills, fbSize, rect;
     };
     static SGlassProgram g_glass[2];
@@ -148,6 +148,8 @@ namespace Glass {
         p.fieldScale = at("fieldScale");
         p.fieldLimit = at("fieldLimit");
         p.fieldStep  = at("fieldStep");
+        p.sigma      = at("sigma");
+        p.band       = at("band");
         p.fade      = at("fade");
         p.strength  = at("strength");
         p.chroma    = at("chroma");
@@ -390,7 +392,8 @@ namespace Glass {
 
         job.field     = fbs.field;
         job.fieldSize = size;
-        job.fieldStep = step;
+        job.fieldStep  = step;
+        job.fieldSigma = sigma;
         return true;
     }
 
@@ -539,6 +542,8 @@ namespace Glass {
         glUniform2f(prog->fieldScale, 1.0 / (job.fieldStep * fs.x), 1.0 / (job.fieldStep * fs.y));
         glUniform4f(prog->fieldLimit, 0.5 / fs.x, 0.5 / fs.y, (job.fieldSize.x - 0.5) / fs.x, (job.fieldSize.y - 0.5) / fs.y);
         glUniform1f(prog->fieldStep, job.fieldStep);
+        glUniform1f(prog->sigma, job.fieldSigma);
+        glUniform1f(prog->band, std::max(lk.band * S, 1e-3F));
         glUniform1f(prog->fade, job.fade);
         glUniform1f(prog->strength, lk.strength * S);
         glUniform1f(prog->chroma, lk.chroma);
