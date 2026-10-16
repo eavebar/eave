@@ -43,6 +43,7 @@ namespace Glass {
         int   ink       = EAVE_GLASS_SURFACE_V1_INK_READABLE;
         float contrast  = 4.5F;  // ink readable: the contrast ratio it reaches
         float inkBlur   = 12.F;  // ink: how far apart the taps of the wider blur its color is chosen on are
+        float gap       = 24.F;  // how high the glass floats over what's behind it (set_gap, version 3)
 
         bool  operator==(const SLook&) const = default;
     };

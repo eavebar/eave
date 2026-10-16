@@ -31,6 +31,7 @@ uniform float band;          // s px
 
 uniform float fade;          // the surface's fade-in or -out
 uniform float thickness;     // s px
+uniform float gap;           // s px between the glass's underside and what's behind it
 uniform float chroma;
 uniform float rim;
 uniform float tint;
@@ -269,12 +270,13 @@ void main() {
     vec2  n     = length(slope) > 1e-6 ? -normalize(slope) : vec2(0.0);
 
     // The glass's surface there, facing up (+z, at the viewer) and, down the bevel, out. The view
-    // ray goes straight down into it, bends by Snell's law (glass, 1.5), and meets the backdrop
-    // under the slab: where it does is what the pixel shows. A convex edge bends it in, so what's
-    // under the bevel is magnified, and near a thick slab's rim turned over, as in a lens.
+    // ray goes straight down into it, bends by Snell's law (glass, 1.5), crosses the slab and the
+    // gap under it, and meets the backdrop: where it does is what the pixel shows. A convex edge
+    // bends it in, so what's under the bevel is magnified, and near the rim turned over, as in a
+    // lens. The wider the gap, the farther a bent ray drifts, and the more turns over.
     vec3 N      = normalize(vec3(n * steepness(d), 1.0));
     vec3 R      = refract(vec3(0.0, 0.0, -1.0), N, 1.0 / 1.5);
-    vec2 offset = R.xy / max(-R.z, 1e-3) * profile(d);
+    vec2 offset = R.xy / max(-R.z, 1e-3) * (profile(d) + gap);
     // Red bends a little less than blue.
     vec3 col;
     col.r = look(s + offset * (1.0 - chroma)).r;

@@ -456,6 +456,9 @@ pub struct Glass {
     pub contrast: f32,
     /// How wide an area the ink's color is chosen over, in logical pixels.
     pub ink_blur: f32,
+    /// How high the glass floats over what's behind it, in logical pixels: the wider, the more
+    /// of what's behind its edge turns over.
+    pub gap: f32,
 }
 
 impl Default for Glass {
@@ -471,6 +474,7 @@ impl Default for Glass {
             ink: Ink::Readable,
             contrast: 4.5,
             ink_blur: 12.0,
+            gap: 24.0,
         }
     }
 }
@@ -1126,6 +1130,7 @@ fn glass(value: toml::Value, warnings: &mut Vec<String>) -> Glass {
             "tint" => number(&mut glass.tint, 0.0, 1.0),
             "contrast" => number(&mut glass.contrast, 1.0, 21.0),
             "ink-blur" => number(&mut glass.ink_blur, 0.0, 64.0),
+            "gap" => number(&mut glass.gap, 0.0, 128.0),
             "depth" => match value.as_integer() {
                 Some(depth @ 1..=6) => glass.depth = depth as u32,
                 _ => warnings.push("`glass.depth` must be 1 to 6, using 3".into()),
@@ -1141,7 +1146,7 @@ fn glass(value: toml::Value, warnings: &mut Vec<String>) -> Glass {
             },
             _ => warnings.push(format!(
                 "`glass` takes band, thickness, chroma, rim, frost, depth, tint, ink, \
-                 contrast and ink-blur, ignoring `{key}`"
+                 contrast, ink-blur and gap, ignoring `{key}`"
             )),
         }
     }
