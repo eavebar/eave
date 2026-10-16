@@ -293,33 +293,8 @@ pub fn warp(path: &Path, map: impl Fn(Point) -> Point) -> Path {
     })
 }
 
-/// `path` with the convex shape `hole` cut out of it, when filled by the even-odd rule: what of
-/// `path` is inside `hole` is added to it as a second outline, which cancels it there. Where it
-/// isn't inside, nothing changes, so the edges of what's left are exactly `path`'s and `hole`'s.
-pub fn cut(path: &Path, hole: &Path) -> Path {
-    let hole = polygons(hole).into_iter().next().unwrap_or_default();
-    let subjects = polygons(path);
-    Path::new(|builder| {
-        for polygon in subjects
-            .iter()
-            .cloned()
-            .chain(subjects.iter().map(|subject| clip(subject, &hole)))
-        {
-            let mut points = polygon.into_iter();
-            let Some(first) = points.next() else {
-                continue;
-            };
-            builder.move_to(first);
-            for point in points {
-                builder.line_to(point);
-            }
-            builder.close();
-        }
-    })
-}
-
 /// The closed outlines of `path`, flattened.
-fn polygons(path: &Path) -> Vec<Vec<Point>> {
+pub(crate) fn polygons(path: &Path) -> Vec<Vec<Point>> {
     use path::lyon_path::Event;
     use path::lyon_path::iterator::PathIterator;
 
@@ -337,38 +312,6 @@ fn polygons(path: &Path) -> Vec<Vec<Point>> {
     }
     polygons.retain(|polygon| polygon.len() >= 3);
     polygons
-}
-
-/// What of `subject` is inside the convex `hole` (Sutherland–Hodgman). A concave subject can come
-/// out with edges doubled back on themselves, which enclose nothing.
-fn clip(subject: &[Point], hole: &[Point]) -> Vec<Point> {
-    // Which side of its edges is inside, whichever way it winds.
-    let area: f32 = hole
-        .iter()
-        .zip(hole.iter().cycle().skip(1))
-        .map(|(a, b)| a.x * b.y - b.x * a.y)
-        .sum();
-    let side = |a: Point, b: Point, p: Point| {
-        ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) * area.signum()
-    };
-    let mut out = subject.to_vec();
-    for (&a, &b) in hole.iter().zip(hole.iter().cycle().skip(1)) {
-        if out.is_empty() {
-            break;
-        }
-        let input = std::mem::take(&mut out);
-        for (&p, &q) in input.iter().zip(input.iter().cycle().skip(1)) {
-            let (sp, sq) = (side(a, b, p), side(a, b, q));
-            if sp >= 0.0 {
-                out.push(p);
-            }
-            if (sp >= 0.0) != (sq >= 0.0) {
-                let t = sp / (sp - sq);
-                out.push(Point::new(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t));
-            }
-        }
-    }
-    out
 }
 
 /// The shape of one corner, in coordinates relative to the corner point: `x` along the edge
@@ -611,7 +554,7 @@ impl<'a, T> Run<'a, T> {
 }
 
 /// The square of the distance from `point` to the segment from `a` to `b`.
-fn to_segment(point: Point, a: Point, b: Point) -> f32 {
+pub(crate) fn to_segment(point: Point, a: Point, b: Point) -> f32 {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
     let length = dx * dx + dy * dy;
     let t = if length == 0.0 {
@@ -627,48 +570,6 @@ fn to_segment(point: Point, a: Point, b: Point) -> f32 {
 mod tests {
     use super::*;
     use iced::Size;
-
-    fn area(polygon: &[Point]) -> f32 {
-        let twice: f32 = polygon
-            .iter()
-            .zip(polygon.iter().cycle().skip(1))
-            .map(|(a, b)| a.x * b.y - b.x * a.y)
-            .sum();
-        twice.abs() / 2.0
-    }
-
-    #[test]
-    fn a_cut_takes_out_what_of_the_shape_is_inside_the_hole_and_nothing_else() {
-        let shape = squircle_corners(
-            Rectangle::new(Point::new(0.0, 0.0), Size::new(100.0, 40.0)),
-            [CornerShape::SQUARE; 4],
-        );
-        // Half inside, half out, wound either way.
-        let hole = Rectangle::new(Point::new(80.0, 10.0), Size::new(40.0, 20.0));
-        let inside = clip(
-            &polygons(&shape)[0],
-            &polygons(&squircle(hole, 0.0, 0.0))[0],
-        );
-        assert!(
-            (area(&inside) - 20.0 * 20.0).abs() < 0.5,
-            "{}",
-            area(&inside)
-        );
-        let reversed: Vec<Point> = polygons(&squircle(hole, 0.0, 0.0))[0]
-            .iter()
-            .rev()
-            .copied()
-            .collect();
-        assert!((area(&clip(&polygons(&shape)[0], &reversed)) - 400.0).abs() < 0.5);
-        // Nowhere near: nothing.
-        let far = squircle(
-            Rectangle::new(Point::new(300.0, 0.0), Size::new(10.0, 10.0)),
-            0.0,
-            0.0,
-        );
-        assert!(area(&clip(&polygons(&shape)[0], &polygons(&far)[0])) < 0.01);
-        assert_eq!(polygons(&cut(&shape, &far)).len(), 1);
-    }
 
     #[test]
     fn skipping_far_runs_finds_what_every_pair_finds() {

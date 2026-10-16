@@ -28,8 +28,7 @@ use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::alignment::Horizontal;
 use iced::keyboard::{self, key};
-use iced::widget::canvas::fill::Rule;
-use iced::widget::canvas::{Cache, Fill, Frame, Path, Style};
+use iced::widget::canvas::{Cache, Frame, Path};
 use iced::{
     Color, Element, Event, Length, Padding, Point, Rectangle, Size, Transformation, Vector, window,
 };
@@ -40,9 +39,10 @@ use crate::field::AnyFocused;
 use crate::glass;
 use crate::hand::{self, rubber_band};
 use crate::jelly::{self, Jelly, Side};
+use crate::join::{self, Join, Joining};
 use crate::pour;
 use crate::spring::{FADE, HAND, MAKE_WAY, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
-use crate::squircle::{self, CornerShape, squircle_corners, warp};
+use crate::squircle::{self, CornerShape, Polygons, squircle_corners, warp};
 use crate::squish::{self, Squish};
 use crate::theme::{self, Palette};
 use crate::wall::{self, Walls};
@@ -92,6 +92,9 @@ pub struct Island<'a, M> {
     darker: bool,
     /// The screen's edges it keeps clear of, if any (D-104).
     walls: Option<Walls>,
+    /// Where a shape that joins it is, while it does ([`Popover::join`]): drawn with its own as
+    /// one.
+    joined: Option<Join>,
 }
 
 /// An island's shape as it was last drawn, in surface coordinates: a popover it's turning into
@@ -162,6 +165,9 @@ pub struct Popover<'a, M> {
     /// Comes out of another island's shape, and goes back into it, instead of its own, if given:
     /// wherever that is drawn right now (D-90).
     pub home: Option<Shape>,
+    /// Joins its home island while they're close, if given (D-122): that island, given the same
+    /// handle ([`Island::joined`]), draws them as one shape, under what's on either.
+    pub join: Option<Join>,
 }
 
 /// Turns a key, with the modifiers held, into a message, or leaves it alone. The flag says whether
@@ -213,6 +219,7 @@ impl<'a, M> Island<'a, M> {
             walls: None,
             glass: false,
             darker: false,
+            joined: None,
         }
     }
 
@@ -237,6 +244,13 @@ impl<'a, M> Island<'a, M> {
     /// Puts its shape here every time it's drawn.
     pub fn shape(mut self, shape: Shape) -> Self {
         self.shape = Some(shape);
+        self
+    }
+
+    /// Draws a shape that joins it ([`Popover::join`]) with its own, as one, while it does, if
+    /// given.
+    pub fn joined(mut self, join: Option<Join>) -> Self {
+        self.joined = join;
         self
     }
 
@@ -386,6 +400,15 @@ struct State {
     corners: [CornerShape; 4],
 }
 
+/// Gone, it's apart from the island it joined.
+impl Drop for State {
+    fn drop(&mut self) {
+        if let Some(join) = &self.motion.join {
+            join.replace(None);
+        }
+    }
+}
+
 /// Where everything is going and how it's moving there. Positions are in logical pixels, in
 /// surface coordinates; fades go from 0 (hidden) to 1 (shown).
 #[derive(Debug)]
@@ -432,6 +455,8 @@ struct Motion {
     drop_color: Option<Color>,
     /// Another island's shape it rests at instead of its own ([`Popover::home`]).
     home: Option<Shape>,
+    /// Where it tells that island it is, to be drawn with it as one ([`Popover::join`]).
+    join: Option<Join>,
     /// The island's corners, which a drop rounds off into.
     corner: CornerShape,
     /// All four of them: top left, top right, bottom right, bottom left.
@@ -482,6 +507,7 @@ impl Default for Motion {
             drop: None,
             drop_color: None,
             home: None,
+            join: None,
             corner: CornerShape::SQUARE,
             corners: [CornerShape::SQUARE; 4],
             sag: None,
@@ -609,16 +635,6 @@ impl Edges {
                 (self.bottom.value - top).max(0.0),
             ),
         )
-    }
-
-    /// The furthest any edge is from `to`'s, in px.
-    fn off(&self, to: Rectangle) -> f32 {
-        let [left, top, right, bottom] = edges_of(to);
-        (self.left.value - left)
-            .abs()
-            .max((self.top.value - top).abs())
-            .max((self.right.value - right).abs())
-            .max((self.bottom.value - bottom).abs())
     }
 
     /// How far, from 0 to 1, the shape has come from `from` toward `to`.
@@ -1337,15 +1353,9 @@ impl Motion {
                 self.edges.aim(heading);
                 popover.panel.target = 0.0;
                 popover.items.feel = FADE;
-                // Going back into another island, its "items" are what melts it into that one
-                // (`melted`): once it's landed, and for good, so a bounce can't bring it back.
-                let back = match self.home {
-                    Some(_) => {
-                        popover.items.target >= 1.0 || self.edges.off(home) < theme::MELT_REACH
-                    }
-                    None => self.edges.progress(panel, home) > 0.5,
-                };
-                popover.items.target = if popover.panel.value < REST_DISTANCE && back {
+                popover.items.target = if popover.panel.value < REST_DISTANCE
+                    && self.edges.progress(panel, home) > 0.5
+                {
                     1.0
                 } else {
                     0.0
@@ -1708,42 +1718,99 @@ impl Motion {
         }
     }
 
-    /// Whether it's a popover going back into another island ([`Popover::home`]).
-    fn going_home(&self) -> bool {
-        self.home.is_some() && self.popover.present && !self.popover.open
-    }
-
-    /// How far a popover going back into another island ([`Popover::home`]) has melted into it,
-    /// from 0 to 1: as far as the items, its or that island's, have come back.
-    fn melted(&self) -> f32 {
-        if self.going_home() {
-            self.popover.items.value.clamp(0.0, 1.0)
-        } else {
-            0.0
-        }
-    }
-
-    /// The other island a popover going back into it ([`Popover::home`]) is over, in the shape's
-    /// coordinates, if it reaches it (`drawn`): cut out of its fill, so that island, the same color
-    /// under it, shows through with what's on it, and the two merge, glass and all, instead of one
-    /// going over the other.
-    fn landing(&self, drawn: Rectangle) -> Option<Rectangle> {
-        let home = self.home.as_ref().filter(|_| self.going_home())?;
-        let home = home.get() - self.offset();
-        home.intersection(&drawn)?;
-        Some(home.shrink(theme::LAND_INSET))
-    }
-
     /// Whether a closing popover is all the way back to the island, and nobody's been told yet.
-    /// One that melted into another island is done once it's gone, wobbling or not.
+    /// One joining another island lets it go.
     fn closing_done(&mut self) -> bool {
         let done = self.popover.present && !self.popover.open && !self.popover.closed;
-        let melted = self.melted() >= 1.0 - REST_DISTANCE && self.popover.items.at_rest();
-        if done && (melted || self.at_rest()) {
+        if done && self.at_rest() {
             self.popover.closed = true;
+            self.publish();
             return true;
         }
         false
+    }
+
+    /// Tells the island it joins where it is now, or that it's apart ([`Popover::join`]).
+    fn publish(&self) {
+        if let Some(join) = &self.join {
+            join.replace(self.joining());
+        }
+    }
+
+    /// Where it is for the island it joins ([`Popover::join`]), while they're close enough to flow
+    /// together: its outline as it's drawn, in surface coordinates, and how far they blend, less
+    /// and less as it lands on it, so once it's there they're just that island.
+    fn joining(&self) -> Option<Joining> {
+        let home = self.home.as_ref().filter(|_| self.join.is_some())?.get();
+        let popover = &self.popover;
+        if !popover.present || popover.closed || self.drop.is_some() || self.island.is_none() {
+            return None;
+        }
+        if home.width < 1.0 || home.height < 1.0 {
+            return None;
+        }
+        let shape = self.shape();
+        // What's drawn: the body while it flows, which lags and bounces about the frame.
+        let flowing = !self.body.at_rest();
+        let drawn = if flowing { self.body.bounds() } else { shape };
+        let offset = self.offset();
+        let reach = join::REACH * theme::JOIN_BLEND + 2.0;
+        (drawn + offset).expand(reach).intersection(&home)?;
+
+        // Drawn as `draw_island` draws it: the body or the squircle, bent by the jelly and the
+        // drag, squeezed by a press, and moved.
+        let mut outline = Polygons::within(join::TOLERANCE);
+        if flowing {
+            self.body.outline(&mut outline, Vector::ZERO);
+        } else {
+            squircle::rectangle(&mut outline, shape, self.corners_at(shape));
+        }
+        let pulled = self.pulled();
+        let bent = !self.jelly.is_flat() || pulled;
+        let (center, scale) = (shape.center(), self.squeeze(shape));
+        let place = |at: Point| {
+            let at = if bent {
+                let at = self.jelly.displace(shape, at);
+                if pulled {
+                    at + self.pull(shape, at)
+                } else {
+                    at
+                }
+            } else {
+                at
+            };
+            center + (at - center) * scale + offset
+        };
+        let outline = outline
+            .0
+            .iter()
+            .map(|polygon| {
+                if bent {
+                    pieces(polygon).map(place).collect()
+                } else {
+                    polygon.iter().copied().map(place).collect()
+                }
+            })
+            .collect();
+        // How far it still is from landing: the furthest any side of what's drawn is from that
+        // island's. Inside it by as much, the two are that far apart all round, and don't swell.
+        let drawn = drawn + offset;
+        let off = (drawn.x - home.x)
+            .abs()
+            .max((drawn.y - home.y).abs())
+            .max((drawn.x + drawn.width - home.x - home.width).abs())
+            .max((drawn.y + drawn.height - home.y - home.height).abs());
+        Joining::new(outline, off.min(theme::JOIN_BLEND))
+    }
+
+    /// How much a press squeezes the drawn `shape`: by the same few pixels whatever its width,
+    /// about its center.
+    fn squeeze(&self, shape: Rectangle) -> f32 {
+        if shape.width < 1.0 {
+            1.0
+        } else {
+            (1.0 - 2.0 * self.inset.value / shape.width).max(0.5)
+        }
     }
 
     /// The shape's frame: its edges. The skin bends what's drawn of it ([`Jelly::displace`]).
@@ -1805,6 +1872,20 @@ impl Motion {
             None => (0.0, 0.0),
         }
     }
+}
+
+/// A closed outline's points, its sides cut into pieces a pixel long, so they can bend.
+fn pieces(polygon: &[Point]) -> impl Iterator<Item = Point> + '_ {
+    polygon
+        .iter()
+        .zip(polygon.iter().cycle().skip(1))
+        .flat_map(|(a, b)| {
+            let count = a.distance(*b).ceil().max(1.0) as usize;
+            (0..count).map(move |piece| {
+                let t = piece as f32 / count as f32;
+                Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+            })
+        })
 }
 
 /// The plain arrow, as something other than `None`, which would let the pointer through to
@@ -1979,6 +2060,7 @@ fn draw_island<M>(
     own_corners: [CornerShape; 4],
     shape_out: Option<&Shape>,
     glass: bool,
+    joined: Option<&Joining>,
     renderer: &mut iced::Renderer,
     theme: &iced::Theme,
     style: &renderer::Style,
@@ -1997,12 +2079,22 @@ fn draw_island<M>(
         out.set(shape + motion.offset());
     }
     let fill = motion.fill(Palette::of(theme).island_bg);
-    // Going back into another island, it melts into it as it lands: that island is under it,
-    // the same color, so what's on it shows through as its items would come back.
-    let fill = Color {
-        a: fill.a * (1.0 - motion.melted()),
-        ..fill
-    };
+    // Joining another island, that one drew it this frame, under what's on either (D-122): here
+    // only what's on it is drawn, and none of it over that island.
+    let joins = motion.join.as_ref().is_some_and(|join| {
+        join.borrow()
+            .as_ref()
+            .is_some_and(|joining| joining.drawn.get())
+    });
+    let away = motion
+        .home
+        .as_ref()
+        .filter(|_| joins)
+        .map(|home| home.get() - motion.offset());
+    // And the island it joins draws it with itself, as one.
+    if let Some(joined) = joined {
+        joined.drawn.set(true);
+    }
     // While it morphs, what's drawn is the body (D-118): it pours, bounces and lands on its own,
     // in and out of the frame. Not for a shape attached to an edge, which hangs from it.
     let flowing = motion.island.is_some() && bleed == Padding::ZERO && !motion.body.at_rest();
@@ -2012,12 +2104,10 @@ fn draw_island<M>(
         return;
     }
     // Squeezed by the same few pixels whatever the island's width, about its center.
-    let scale = if shape.width < 1.0 {
-        1.0
-    } else {
-        (1.0 - 2.0 * motion.inset.value / shape.width).max(0.5)
-    };
+    let scale = motion.squeeze(shape);
     let center = shape.center();
+    // Where a point of the surface is, unsqueezed and not moved: where the shape is drawn.
+    let unsqueeze = |at: Point| center + (at - motion.offset() - center) * (1.0 / scale);
     let transformation = Transformation::translate(center.x, center.y)
         * Transformation::scale(scale)
         * Transformation::translate(-center.x, -center.y);
@@ -2033,7 +2123,7 @@ fn draw_island<M>(
     );
     let pulled = motion.pulled();
     let bent = !motion.jelly.is_flat() || pulled;
-    let moving = bent || flowing;
+    let moving = bent || flowing || joins || joined.is_some();
     if state.shape_bent.replace(moving) || moving {
         state.shape.clear();
     }
@@ -2053,18 +2143,22 @@ fn draw_island<M>(
     if state.shape_fill.replace(fill) != fill {
         state.shape.clear();
     }
-    let landing = motion.landing(seen);
-    if landing.is_some() {
-        state.shape.clear();
-    }
     // What the glass plugin hears of it: where it's its fill, glass, or never. A drop still
     // hanging from the notch is the notch's, black, until it lets go.
     let moved = shape + motion.offset();
     let hanging = motion.neck(moved).is_some_and(|neck| neck.joined());
-    if glass && !hanging {
-        glass::frame::island(seen + motion.offset(), fill, motion.ink.value);
+    // With what joins it, and the fillet's swell past both.
+    let with_joined = |rect: Rectangle| {
+        joined.map_or(rect, |joined| {
+            rect.union(&joined.bounds.expand(joined.blend / 4.0 + 1.0))
+        })
+    };
+    if joins {
+        // The island it joins tells for both.
+    } else if glass && !hanging {
+        glass::frame::island(with_joined(seen + motion.offset()), fill, motion.ink.value);
     } else {
-        glass::frame::opaque(
+        glass::frame::opaque(with_joined(
             Rectangle::new(
                 Point::new(shape.x - bleed.left, shape.y - bleed.top),
                 Size::new(
@@ -2072,7 +2166,7 @@ fn draw_island<M>(
                     shape.height + bleed.top + bleed.bottom,
                 ),
             ) + motion.offset(),
-        );
+        ));
     }
 
     // What's drawn: the shape, reaching on to the edges it's attached to.
@@ -2083,8 +2177,17 @@ fn draw_island<M>(
             shape.height + bleed.top + bleed.bottom,
         ),
     );
-    // Where the frame the shape is drawn in goes: round the body too, while it's out.
+    // Where the frame the shape is drawn in goes: round the body too, while it's out, and round
+    // what joins it and the fillet between them.
     let area = poured.map_or(body, |poured| body.union(&poured));
+    let area = joined.map_or(area, |joined| {
+        let reach = joined.bounds.expand(join::REACH * joined.blend + 2.0);
+        let (a, b) = (
+            unsqueeze(reach.position()),
+            unsqueeze(reach.position() + Vector::new(reach.width, reach.height)),
+        );
+        area.union(&Rectangle::new(a, Size::new(b.x - a.x, b.y - a.y)))
+    });
     // The neck, under the drop, flowing from what's above while they're close. Where the drop is
     // drawn, moved, but not from where it flows: that stays put.
     if let Some(neck) = motion.neck(moved)
@@ -2149,23 +2252,24 @@ fn draw_island<M>(
                         }),
                         None => squircle_corners(outline, corners),
                     };
-                    match landing {
-                        Some(landing) => {
-                            let hole = Rectangle::new(
-                                origin + (landing.position() - area.position()),
-                                landing.size(),
-                            );
-                            let radius = theme::ISLAND_RADIUS - theme::LAND_INSET;
-                            let corners = [CornerShape::new(radius, theme::ISLAND_SMOOTHING); 4];
-                            frame.fill(
-                                &squircle::cut(&bend(outline), &squircle_corners(hole, corners)),
-                                Fill {
-                                    style: Style::Solid(fill),
-                                    rule: Rule::EvenOdd,
-                                },
-                            );
+                    let outline = bend(outline);
+                    match joined {
+                        // One shape: this one, what joins it, and the fillet between (D-122).
+                        Some(joined) => {
+                            let other: Vec<Vec<Point>> = joined
+                                .outline
+                                .iter()
+                                .map(|polygon| {
+                                    polygon
+                                        .iter()
+                                        .map(|&at| origin + (unsqueeze(at) - area.position()))
+                                        .collect()
+                                })
+                                .collect();
+                            frame.fill(&join::path(&outline, &other, joined.blend), fill);
                         }
-                        None => frame.fill(&bend(outline), fill),
+                        None if joins => {}
+                        None => frame.fill(&outline, fill),
                     }
                 });
                 renderer.with_translation(Vector::new(area.x, area.y) - room, |renderer| {
@@ -2179,6 +2283,11 @@ fn draw_island<M>(
                 let clip = poured
                     .and_then(|poured| clip.intersection(&poured))
                     .unwrap_or(clip);
+                // Nor over the island it joins: that one's own is there.
+                let (clip, shown_shape) = match away {
+                    Some(away) => (clear_of(clip, away), clear_of(shape, away)),
+                    None => (clip, shape),
+                };
                 renderer.with_layer(clip, |renderer| {
                     for ((key, item), (tree, child)) in keys
                         .iter()
@@ -2211,9 +2320,9 @@ fn draw_island<M>(
                                 });
                             });
                             // In the item's moved coordinates, the shape is the other way. Not
-                            // going back into another island: the items coming back are that
-                            // island's, already there, and a fade would cover them.
-                            if !motion.going_home() {
+                            // joining another island: under it is that one's, not this one's
+                            // fill, and a fade would cover what's on it.
+                            if !joins {
                                 fade(renderer, theme, bounds, shape - moved, shown);
                             }
                         });
@@ -2223,7 +2332,7 @@ fn draw_island<M>(
                         // The panel's viewport is what of it the shape shows, so a scrolling list or a
                         // text field clips to the shape while it grows.
                         if shown >= REST_DISTANCE
-                            && let Some(visible) = layout.bounds().intersection(&shape)
+                            && let Some(visible) = layout.bounds().intersection(&shown_shape)
                         {
                             // It drops into place as it shows, and lifts as it goes (D-121).
                             let drop = Vector::new(0.0, -(1.0 - shown) * theme::CONTENT_DROP);
@@ -2240,7 +2349,7 @@ fn draw_island<M>(
                                         &(visible - moved),
                                     );
                                 });
-                                fade(renderer, theme, layout.bounds(), shape - moved, shown);
+                                fade(renderer, theme, layout.bounds(), shown_shape - moved, shown);
                             });
                         }
                     }
@@ -2270,6 +2379,30 @@ fn with_clip<R>(clip: Rectangle, draw: impl FnOnce() -> R) -> R {
     }
     let _restore = Restore(CLIP.with(|current| current.replace(Some(clip))));
     draw()
+}
+
+/// The biggest part of `rect` clear of `away`, above, below or beside it.
+fn clear_of(rect: Rectangle, away: Rectangle) -> Rectangle {
+    let Some(overlap) = rect.intersection(&away) else {
+        return rect;
+    };
+    let (right, bottom) = (rect.x + rect.width, rect.y + rect.height);
+    let (over_right, over_bottom) = (overlap.x + overlap.width, overlap.y + overlap.height);
+    [
+        Rectangle::new(rect.position(), Size::new(rect.width, overlap.y - rect.y)),
+        Rectangle::new(
+            Point::new(rect.x, over_bottom),
+            Size::new(rect.width, bottom - over_bottom),
+        ),
+        Rectangle::new(rect.position(), Size::new(overlap.x - rect.x, rect.height)),
+        Rectangle::new(
+            Point::new(over_right, rect.y),
+            Size::new(right - over_right, rect.height),
+        ),
+    ]
+    .into_iter()
+    .max_by(|a, b| (a.width * a.height).total_cmp(&(b.width * b.height)))
+    .unwrap_or(rect)
 }
 
 /// `shape`, grown by `pull` the way it points, to take in what the drag stretched out of it.
@@ -2489,6 +2622,11 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             self.corners,
             self.shape.as_ref(),
             self.glass,
+            self.joined
+                .as_ref()
+                .map(|join| join.borrow())
+                .as_deref()
+                .and_then(Option::as_ref),
             renderer,
             theme,
             style,
@@ -2614,6 +2752,17 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             .popover
             .as_ref()
             .and_then(|popover| popover.home.clone());
+        // One it no longer joins hears it's apart.
+        let join = self
+            .popover
+            .as_ref()
+            .and_then(|popover| popover.join.clone());
+        if let Some(old) = &motion.join
+            && !join.as_ref().is_some_and(|join| Rc::ptr_eq(join, old))
+        {
+            old.replace(None);
+        }
+        motion.join = join;
         motion.corner = self.corners[0];
         motion.corners = self.corners;
         motion.sag = self
@@ -2675,6 +2824,8 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             // Every frame starts with this event.
             Event::Window(window::Event::RedrawRequested(now)) => {
                 motion.step(*now);
+                // Before anything is drawn: the island it joins draws it this frame.
+                motion.publish();
             }
             _ => {}
         }
@@ -2843,6 +2994,12 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             island.corners,
             island.shape.as_ref(),
             island.glass,
+            island
+                .joined
+                .as_ref()
+                .map(|join| join.borrow())
+                .as_deref()
+                .and_then(Option::as_ref),
             renderer,
             theme,
             style,
@@ -3289,54 +3446,77 @@ mod tests {
     }
 
     #[test]
-    fn a_popover_going_back_into_another_island_melts_into_it() {
+    fn a_popover_joins_the_island_it_comes_out_of_while_theyre_close() {
         let home = Shape::default();
         home.set(rect(300.0, 80.0));
+        let join = Join::default();
         let mut motion = Motion {
             home: Some(home.clone()),
+            join: Some(join.clone()),
             ..Motion::default()
         };
         motion.arrange(rect(0.0, 20.0), [(1, 10.0)].into_iter(), None);
-        let panel = Rectangle::new(Point::new(200.0, 60.0), Size::new(400.0, 300.0));
+        let panel = Rectangle::new(Point::new(200.0, 200.0), Size::new(400.0, 300.0));
         popover(&mut motion, true, panel, true);
-        run(&mut motion, Instant::now(), |_| {});
-        assert_eq!(motion.melted(), 0.0, "open, it's solid");
-        assert_eq!(
-            motion.landing(motion.shape()),
-            None,
-            "open, nothing's cut out"
-        );
-
-        popover(&mut motion, false, panel, true);
-        let mut melted_with_content = false;
-        let mut closed_moving = false;
-        let (mut landed, mut cut) = (false, false);
+        let mut blends = Vec::new();
         let mut now = Instant::now();
         while motion.step(now) {
-            melted_with_content |=
-                motion.melted() > REST_DISTANCE && motion.popover.panel.value > REST_DISTANCE;
-            landed |= motion.edges.off(home.get()) < theme::MELT_REACH;
-            assert!(
-                landed || motion.melted() == 0.0,
-                "melting before it's landed"
-            );
-            if let Some(over) = motion.landing(motion.shape()) {
-                cut = true;
-                assert_eq!(
-                    over,
-                    home.get().shrink(theme::LAND_INSET),
-                    "that island, all of it"
-                );
-            }
-            if motion.closing_done() {
-                assert!(motion.melted() > 0.99, "gone before it's done");
-                closed_moving = !motion.at_rest();
+            motion.publish();
+            if let Some(joining) = join.borrow().as_ref() {
+                blends.push(joining.blend);
             }
             now += FRAME;
         }
-        assert!(!melted_with_content, "solid while the content shows");
-        assert!(closed_moving, "done without waiting for the wobble");
-        assert!(cut, "that island shows through where it's over it");
+        motion.publish();
+        assert!(!blends.is_empty(), "joined as it leaves");
+        assert!(blends[0] < theme::JOIN_BLEND, "out of it, it hardly blends");
+        assert!(blends.iter().all(|blend| *blend <= theme::JOIN_BLEND));
+        assert!(join.borrow().is_none(), "apart once it's out");
+
+        popover(&mut motion, false, panel, true);
+        blends.clear();
+        while motion.step(now) {
+            motion.publish();
+            if let Some(joining) = join.borrow().as_ref() {
+                blends.push(joining.blend);
+                assert!(joining.bounds.intersects(&home.get().expand(40.0)));
+            }
+            assert!(!motion.closing_done(), "done before it's landed");
+            now += FRAME;
+        }
+        assert!(!blends.is_empty(), "joined as it lands");
+        assert!(
+            *blends.last().unwrap() < 0.5,
+            "landed, it's that island: {blends:?}"
+        );
+        assert!(motion.closing_done());
+        assert!(join.borrow().is_none(), "and apart once done");
+    }
+
+    #[test]
+    fn only_a_popover_asked_to_join_does() {
+        let home = Shape::default();
+        home.set(rect(300.0, 80.0));
+        let mut motion = Motion {
+            home: Some(home),
+            ..Motion::default()
+        };
+        motion.arrange(rect(0.0, 20.0), [(1, 10.0)].into_iter(), None);
+        popover(&mut motion, true, rect(280.0, 120.0), true);
+        motion.step(Instant::now());
+        assert!(motion.joining().is_none());
+    }
+
+    #[test]
+    fn the_biggest_part_clear_of_another_is_kept() {
+        let rect = Rectangle::new(Point::new(0.0, 0.0), Size::new(100.0, 100.0));
+        let away = Rectangle::new(Point::new(20.0, -10.0), Size::new(30.0, 40.0));
+        assert_eq!(
+            clear_of(rect, away),
+            Rectangle::new(Point::new(0.0, 30.0), Size::new(100.0, 70.0))
+        );
+        let far = Rectangle::new(Point::new(200.0, 0.0), Size::new(10.0, 10.0));
+        assert_eq!(clear_of(rect, far), rect);
     }
 
     #[test]

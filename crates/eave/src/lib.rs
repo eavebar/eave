@@ -26,6 +26,7 @@ mod highlight;
 mod icon;
 mod island;
 mod jelly;
+mod join;
 mod kit;
 mod label;
 mod lift;

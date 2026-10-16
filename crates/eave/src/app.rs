@@ -32,6 +32,7 @@ use crate::dialog::{self, Dialog, Origin, Touch, Touched};
 use crate::dormer::{self, Recent, Session, Source};
 use crate::glass;
 use crate::island::{self, Island, Placement, Toggle};
+use crate::join::Join;
 use crate::lift::{self, Lift};
 use crate::notch::{self, Notch, Place, Side};
 use crate::shortcut;
@@ -87,6 +88,9 @@ pub struct Bar {
     dialog: Option<Dialog>,
     /// Each island's shape as it was last drawn, for a dialog to come out of and go back into.
     shapes: RefCell<HashMap<IslandId, island::Shape>>,
+    /// Where the dialog or the dormer is for the island it comes out of, while they're close
+    /// enough to join (D-122).
+    join: Join,
     /// Whether the glass plugin draws glass behind the bar ([`glass`]).
     glass: bool,
     /// With glass, the islands over something bright, whose ink goes darker.
@@ -427,6 +431,7 @@ impl Bar {
             recent: Recent::default(),
             dialog: None,
             shapes: RefCell::default(),
+            join: Join::default(),
             glass: false,
             darker_ink: HashSet::new(),
             center_shape: island::Shape::default(),
@@ -1016,6 +1021,19 @@ impl Bar {
     /// Where `island`'s shape is put as it's drawn.
     fn shape(&self, island: IslandId) -> island::Shape {
         self.shapes.borrow_mut().entry(island).or_default().clone()
+    }
+
+    /// The island on the bar the dialog or the dormer comes out of and goes back into, joining it
+    /// while they're close (D-122): only that one is asked to.
+    fn joined_island(&self) -> Option<IslandId> {
+        match (&self.dialog, &self.dormer) {
+            (Some(dialog), _) => match dialog.origin {
+                Origin::Island(island) => Some(island),
+                Origin::Top => self.middle_island(),
+            },
+            (None, Some(_)) => self.middle_island(),
+            (None, None) => None,
+        }
     }
 
     /// The island in the middle of the top that the dormer, and a dialog nothing on the bar
@@ -2611,6 +2629,11 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
                     .corners(bar.screen.island_corners(Place::default()))
                     .height(bar.screen.island_height())
                     .shape(bar.shape(island))
+                    // What comes out of it on the surface it's drawn on joins it (D-122).
+                    .joined(
+                        (bar.toast_window() == Some(window) && bar.joined_island() == Some(island))
+                            .then(|| bar.join.clone()),
+                    )
                     // The screen's edges are walls, but where it's attached (D-104).
                     .walls(Walls {
                         top: (!attach.top && band.is_none()).then_some(bar.screen.grow),
@@ -2828,6 +2851,7 @@ fn dialog_popover<'a>(bar: &'a Bar, dialog: &Dialog) -> island::Popover<'a, Mess
             Box::new(|caught| Message::Dialog(Event::Neck(caught)))
         }),
         sag: top.then(|| bar.notch_sag.clone()),
+        join: home.as_ref().map(|_| bar.join.clone()),
         home,
         on_key: rows_on_key(id, None, keys),
     }
@@ -2954,6 +2978,7 @@ fn dormer_popover<'a>(bar: &'a Bar, session: &Session) -> island::Popover<'a, Me
             Box::new(|caught| Message::Dormer(Event::Neck(caught)))
         }),
         sag: top.then(|| bar.notch_sag.clone()),
+        join: home.as_ref().map(|_| bar.join.clone()),
         home,
         on_key: Some(Box::new(move |key, modifiers, _| {
             use keyboard::key::Named;
@@ -3187,6 +3212,7 @@ fn popover_view<'a>(bar: &'a Bar, popover: &Popover) -> island::Popover<'a, Mess
         on_neck: None,
         sag: None,
         home: None,
+        join: None,
     }
 }
 
@@ -3268,6 +3294,7 @@ fn notices_view<'a>(bar: &'a Bar, panel: &NoticePanel) -> island::Popover<'a, Me
         on_neck: None,
         sag: None,
         home: None,
+        join: None,
     }
 }
 

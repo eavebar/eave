@@ -123,12 +123,6 @@ pub const MAKE_WAY_RESPONSE: f32 = 0.08;
 /// toward its island as it fades out (D-121). A nudge, like the cascade's: it says where it came
 /// from.
 pub const CONTENT_DROP: f32 = 8.0;
-/// How far inside an island the cut-out of a dialog landing on it starts: past that island's
-/// antialiased edge, which the dialog covers, so the two read as one shape where they meet.
-pub const LAND_INSET: f32 = 1.0;
-/// How close, in px, a dialog going back into another island gets to it before it melts away
-/// the rest of the way: by then it's that island's shape, give or take its bounce.
-pub const MELT_REACH: f32 = 4.0;
 /// How far every reaction goes, all together: 1 is as the peaks below say.
 pub const REACT_SIZE: f32 = 0.8;
 /// How hard each piece of an island's outline is pulled toward its neighbors, as a share of how
@@ -241,6 +235,10 @@ pub const NECK_BLEND: f32 = 56.0;
 /// How far each way from the drop's middle the neck can spread along the notch's bottom: short of
 /// its lower corners.
 pub const NECK_SPREAD: f32 = 76.0;
+/// How far apart a dialog and the island it comes out of, or goes back into, flow together, in
+/// logical pixels (D-122): a neck pulls out between them and pinches off as it leaves, and the
+/// glass flows in as it lands. Less as they meet, so on top of each other they're just the one.
+pub const JOIN_BLEND: f32 = 24.0;
 /// How far a drop lurches as its neck lets go of it or catches it, and as it falls into place,
 /// in logical pixels: a nudge up or down, bigger.
 pub const DROP_BOUNCE: f32 = 3.0;
