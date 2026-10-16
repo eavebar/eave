@@ -206,6 +206,8 @@ pub fn run(plugins: &[fn(&mut Registry)]) -> Result<(), Error> {
             keyboard_interactivity: KeyboardInteractivity::None,
             ..Default::default()
         },
+        // 4× MSAA for canvas paths on wgpu: the islands' outlines and the morph's body (D-120).
+        antialiasing: true,
         ..Default::default()
     })
     .run()

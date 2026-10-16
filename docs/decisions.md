@@ -2829,3 +2829,30 @@ Without the stall, a frame is ~1.55 ms, D-99's figure. On tiny-skia the stall is
 
 The rooms come out within 0.015 px of before. Working out one island's rooms took ~25 ms in a test and 60–70 ms in the bar. Now it takes ~0.1 ms in a test and 0.4–1 ms in the bar (CPU 0.3–0.9 ms; the bar's main thread runs slower than a test's, likely on an efficiency core). The morph loop's eave went from 27.5–28.9% of a core to 24.3%, measured once, with the user at the computer.
 
+
+## D-120: Anti-aliased canvas paths on the GPU (4× MSAA)
+
+**Status:** accepted (2026-10-16). The user judged the morph "much better" with it.
+
+**Problem:** on wgpu, the islands' outlines and D-118's body looked jagged, most of all while morphing, when the stair-steps crawl along the moving edge. iced_wgpu draws canvas paths as plain triangles and smooths them only with MSAA, and iced_layershell's `Settings::antialiasing` defaults to off. Quads and text smooth themselves, and tiny-skia always anti-aliases paths, so only the GPU renderer's paths were affected.
+
+**Decision:** `antialiasing: true` in `lib.rs`'s settings, which gives iced_wgpu's triangle pipeline 4× MSAA. It's one line in the host, so it reaches everyone on the GPU renderer; there's nothing to set per machine.
+
+**Measured** (bench-only `EAVE_BENCH_AA` on the `bench-morph` branch, so both runs are the same binary; the user's config in dark, a bar of its own next to the user's; 10 s warm-up, 30 s measured, twice each, Asahi M1 Pro, 120 Hz, scale 2):
+
+| | MSAA off | MSAA on |
+|---|---|---|
+| eave CPU, morph loop (`volume` every 700 ms) | 22.4–22.9% | 32.6–33.0% |
+| Hyprland CPU, morph loop | 25.5–25.9% | 22.4% |
+| eave CPU, nothing moving | 0.1–0.5% | 0.7–0.9% |
+| RSS | 79.5–80.6 MB | 79.9–81.2 MB |
+| Binary | 21,000,200 B | 21,000,200 B |
+
+**Where the extra CPU goes:** the resolve. wgpu runs on GLES here (D-119), where resolving a multisampled target is a `glBlitFramebuffer`, and on Asahi's tiler that splits the frame into more GPU submissions: `BlitFramebuffer` is 26% of eave's samples with MSAA on, and the driver's `ioctl`s grow from 14% to 37%. That's ~0.9 ms more per animated frame. On a Vulkan driver the resolve is part of the render pass and should cost far less, so this is likely an Asahi-on-GLES cost, not MSAA's own. Hyprland's share dropping likely means eave delivered somewhat fewer frames; the bench doesn't count them.
+
+**GPU memory** isn't visible on Asahi (its DRM fdinfo has no memory keys). iced_wgpu sizes the multisampled target to the largest region it draws paths in and only ever grows it: at worst a full-width bar surface, 4 samples plus a resolve texture, ~5×4 bytes a pixel, ~30 MB on a 3024 px wide screen.
+
+**Alternatives:**
+- **Leave it off:** cheapest, but the morph looks jagged on every GPU.
+- **Our own edge fringe:** tessellate a half-pixel alpha ramp along each island outline ourselves. No extra targets and no resolve, but code of ours to maintain inside `island.rs`, and only for the shapes we draw.
+- **Vulkan on Asahi** (D-119's item 2) might make MSAA cheap here too.
