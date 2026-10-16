@@ -1689,10 +1689,23 @@ impl Motion {
         }
     }
 
+    /// How far a popover going back into another island ([`Popover::home`]) has melted into it,
+    /// from 0 to 1: as far as the items, its or that island's, have come back.
+    fn melted(&self) -> f32 {
+        let popover = &self.popover;
+        if self.home.is_some() && popover.present && !popover.open {
+            popover.items.value.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
     /// Whether a closing popover is all the way back to the island, and nobody's been told yet.
+    /// One that melted into another island is done once it's gone, wobbling or not.
     fn closing_done(&mut self) -> bool {
         let done = self.popover.present && !self.popover.open && !self.popover.closed;
-        if done && self.at_rest() {
+        let melted = self.melted() >= 1.0 - REST_DISTANCE && self.popover.items.at_rest();
+        if done && (melted || self.at_rest()) {
             self.popover.closed = true;
             return true;
         }
@@ -1950,6 +1963,12 @@ fn draw_island<M>(
         out.set(shape + motion.offset());
     }
     let fill = motion.fill(Palette::of(theme).island_bg);
+    // Going back into another island, it melts into it as it lands: that island is under it,
+    // the same color, so what's on it shows through as its items would come back.
+    let fill = Color {
+        a: fill.a * (1.0 - motion.melted()),
+        ..fill
+    };
     // While it morphs, what's drawn is the body (D-118): it pours, bounces and lands on its own,
     // in and out of the frame. Not for a shape attached to an edge, which hangs from it.
     let flowing = motion.island.is_some() && bleed == Padding::ZERO && !motion.body.at_rest();
@@ -3202,6 +3221,37 @@ mod tests {
         home.set(rect(500.0, 90.0));
         run(&mut motion, Instant::now(), |_| {});
         assert_eq!(motion.edges.rect(), rect(500.0, 90.0));
+    }
+
+    #[test]
+    fn a_popover_going_back_into_another_island_melts_into_it() {
+        let home = Shape::default();
+        home.set(rect(300.0, 80.0));
+        let mut motion = Motion {
+            home: Some(home),
+            ..Motion::default()
+        };
+        motion.arrange(rect(0.0, 20.0), [(1, 10.0)].into_iter(), None);
+        let panel = Rectangle::new(Point::new(200.0, 60.0), Size::new(400.0, 300.0));
+        popover(&mut motion, true, panel, true);
+        run(&mut motion, Instant::now(), |_| {});
+        assert_eq!(motion.melted(), 0.0, "open, it's solid");
+
+        popover(&mut motion, false, panel, true);
+        let mut melted_with_content = false;
+        let mut closed_moving = false;
+        let mut now = Instant::now();
+        while motion.step(now) {
+            melted_with_content |=
+                motion.melted() > REST_DISTANCE && motion.popover.panel.value > REST_DISTANCE;
+            if motion.closing_done() {
+                assert!(motion.melted() > 0.99, "gone before it's done");
+                closed_moving = !motion.at_rest();
+            }
+            now += FRAME;
+        }
+        assert!(!melted_with_content, "solid while the content shows");
+        assert!(closed_moving, "done without waiting for the wobble");
     }
 
     #[test]
