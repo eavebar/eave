@@ -24,7 +24,7 @@
 
 use iced::{Point, Rectangle, Vector};
 
-use crate::spring::{REST_DISTANCE, REST_SPEED, SUBSTEP};
+use crate::spring::SUBSTEP;
 use crate::squircle::{self, Corner, CornerShape, DOWN, LEFT, Polygons, RIGHT, Sink, UP};
 use crate::theme;
 
@@ -34,6 +34,12 @@ const CORNER: usize = 8;
 const ACROSS: usize = 24;
 const SIDE: usize = 16;
 const RING: usize = 4 * CORNER + 2 * (ACROSS + SIDE);
+
+/// How close to its anchor, and how slow, a point counts as there. Looser than a spring's rest:
+/// the spline already strays this far from the squircle it gives way to, so the last of a wobble
+/// isn't seen, and an island that waits for it (a popover closing) doesn't hang on for it.
+const REST_DISTANCE: f32 = 0.25;
+const REST_SPEED: f32 = 4.0;
 
 /// How hard a point pulls toward its anchor that swings once in `response` seconds, undamped.
 fn stiffness(response: f32) -> f32 {

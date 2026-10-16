@@ -293,6 +293,27 @@ pub fn warp(path: &Path, map: impl Fn(Point) -> Point) -> Path {
     })
 }
 
+/// The closed outlines of `path`, flattened.
+pub(crate) fn polygons(path: &Path) -> Vec<Vec<Point>> {
+    use path::lyon_path::Event;
+    use path::lyon_path::iterator::PathIterator;
+
+    let mut polygons: Vec<Vec<Point>> = Vec::new();
+    for event in path.raw().iter().flattened(WARP_TOLERANCE) {
+        match event {
+            Event::Begin { at } => polygons.push(vec![Point::new(at.x, at.y)]),
+            Event::Line { to, .. } => {
+                if let Some(polygon) = polygons.last_mut() {
+                    polygon.push(Point::new(to.x, to.y));
+                }
+            }
+            Event::End { .. } | Event::Quadratic { .. } | Event::Cubic { .. } => {}
+        }
+    }
+    polygons.retain(|polygon| polygon.len() >= 3);
+    polygons
+}
+
 /// The shape of one corner, in coordinates relative to the corner point: `x` along the edge
 /// coming in (negative before the corner), `y` along the edge going out.
 #[derive(Debug)]
@@ -533,7 +554,7 @@ impl<'a, T> Run<'a, T> {
 }
 
 /// The square of the distance from `point` to the segment from `a` to `b`.
-fn to_segment(point: Point, a: Point, b: Point) -> f32 {
+pub(crate) fn to_segment(point: Point, a: Point, b: Point) -> f32 {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
     let length = dx * dx + dy * dy;
     let t = if length == 0.0 {

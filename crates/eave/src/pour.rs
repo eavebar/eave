@@ -171,7 +171,7 @@ fn span(field: impl Fn(f32) -> f32, inside: f32, low: f32, high: f32) -> Option<
 
 /// The smooth union of two distances: their smaller one, pulled in where they're within `blend`
 /// of each other (the polynomial smooth minimum).
-fn smooth_min(a: f32, b: f32, blend: f32) -> f32 {
+pub(crate) fn smooth_min(a: f32, b: f32, blend: f32) -> f32 {
     let h = (blend - (a - b).abs()).max(0.0) / blend;
     a.min(b) - h * h * blend / 4.0
 }

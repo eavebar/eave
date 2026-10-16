@@ -116,6 +116,13 @@ pub const MORPH_DAMPING: f32 = 0.95;
 /// of the language: it's a value, not a shape.
 pub const FADE_RESPONSE: f32 = 0.16;
 pub const FADE_DAMPING: f32 = 1.0;
+/// An island's items making way for its popover's content: twice as quick as the fade, so the
+/// content can start while the shape is still well on its way (D-121).
+pub const MAKE_WAY_RESPONSE: f32 = 0.08;
+/// How far a popover's content drops into place as it fades in, riding the morph, and lifts back
+/// toward its island as it fades out (D-121). A nudge, like the cascade's: it says where it came
+/// from.
+pub const CONTENT_DROP: f32 = 8.0;
 /// How far every reaction goes, all together: 1 is as the peaks below say.
 pub const REACT_SIZE: f32 = 0.8;
 /// How hard each piece of an island's outline is pulled toward its neighbors, as a share of how
@@ -228,6 +235,10 @@ pub const NECK_BLEND: f32 = 56.0;
 /// How far each way from the drop's middle the neck can spread along the notch's bottom: short of
 /// its lower corners.
 pub const NECK_SPREAD: f32 = 76.0;
+/// How far apart a dialog and the island it comes out of, or goes back into, flow together, in
+/// logical pixels (D-122): a neck pulls out between them and pinches off as it leaves, and the
+/// glass flows in as it lands. Less as they meet, so on top of each other they're just the one.
+pub const JOIN_BLEND: f32 = 24.0;
 /// How far a drop lurches as its neck lets go of it or catches it, and as it falls into place,
 /// in logical pixels: a nudge up or down, bigger.
 pub const DROP_BOUNCE: f32 = 3.0;

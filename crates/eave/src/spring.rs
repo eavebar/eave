@@ -101,6 +101,8 @@ pub(crate) const MORPH: Feel = Feel::new(theme::MORPH_RESPONSE, theme::MORPH_DAM
 /// The handover between an island's items and its popover's content: quicker than the shape, so
 /// one side is gone in time for the other to come in while the shape still moves.
 pub(crate) const FADE: Feel = Feel::new(theme::FADE_RESPONSE, theme::FADE_DAMPING);
+/// An island's items making way for its popover's content: quicker than the fade (D-121).
+pub(crate) const MAKE_WAY: Feel = Feel::new(theme::MAKE_WAY_RESPONSE, theme::FADE_DAMPING);
 
 /// The longest step a single frame may take.
 pub(crate) const MAX_FRAME: Duration = Duration::from_millis(50);
