@@ -213,6 +213,8 @@ vec3 body(vec3 glass) {
 vec3 shade(vec2 s, vec3 glass, vec3 fill, bool lighterInk) {
     vec4 t      = layer(s);
     vec3 c      = t.rgb / max(t.a, 1e-4);
+    // Grey ink follows the glass; colored content keeps its colors.
+    float grey  = 1.0 - smoothstep(0.08, 0.25, chromaOf(c));
     vec3 b      = body(glass);
     vec3 behind = body(wideLook(s));
     if (ink == 2) {
@@ -221,20 +223,19 @@ vec3 shade(vec2 s, vec3 glass, vec3 fill, bool lighterInk) {
         behind  = makeRoom(behind, y, lighterInk);
     }
 
-    // A dark fill becomes glass by a screen, a light one by a multiply: what's drawn on it stays.
+    // A dark fill becomes glass by a screen or by laying what's on it over, a light one by a
+    // multiply: what's drawn on it stays.
     vec3 col;
     if (luma(fill) >= 0.5)
         col = clamp(c / max(fill, vec3(1e-4)), 0.0, 1.0) * b;
     else {
         vec3 k = clamp((c - fill) / max(vec3(1.0) - fill, vec3(1e-4)), 0.0, 1.0);
-        if (lighterInk)
-            col = k + (vec3(1.0) - k) * b;
-        else {
-            // Screened on bright glass, colors would wash out: laid over it by how much of the
-            // pixel they cover instead, they keep theirs.
-            float cover = max(k.r, max(k.g, k.b));
-            col         = mix(b, k / max(cover, 1e-4), cover);
-        }
+        // Screened on, colors would wash into the glass's (orange over blue turns pink): laid
+        // over it by how much of the pixel they cover instead, they keep theirs.
+        float cover = max(k.r, max(k.g, k.b));
+        vec3  over  = mix(b, k / max(cover, 1e-4), cover);
+        // Grey ink is screened on dark glass, so it stays light whatever is behind.
+        col = lighterInk ? mix(over, k + (vec3(1.0) - k) * b, grey) : over;
     }
 
     if (ink != 0) {
@@ -242,7 +243,6 @@ vec3 shade(vec2 s, vec3 glass, vec3 fill, bool lighterInk) {
         // dimmer ink stays dimmer, and colored content keeps its colors.
         float lf       = luma(fill);
         float amount   = t.a < 0.5 ? 0.0 : clamp(abs(luma(c) - lf) / max(max(lf, 1.0 - lf), 1e-4), 0.0, 1.0);
-        float grey     = 1.0 - smoothstep(0.08, 0.25, chromaOf(c));
         vec3  opposite = vec3(1.0) - behind;
         vec3  drawn    = mix(b, ink == 1 ? opposite : readable(opposite, behind, lighterInk), amount);
         col            = mix(col, drawn, grey);
