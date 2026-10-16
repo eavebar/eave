@@ -182,7 +182,8 @@ impl<M> canvas::Program<M> for Glyph {
         let background = Palette::of(theme).island_bg;
         let squish = squish::current();
         let pouring = matches!(self.icon, Icon::Battery { charging: true, .. });
-        if squish.is_none() && !pouring {
+        // Cached on the screen's renderer, it can't go into a picture's (`snapshot::taking`).
+        if squish.is_none() && !pouring && !crate::snapshot::taking() {
             let drawn = Some((self.icon, self.color, background));
             if state.drawn.replace(drawn) != drawn {
                 state.still.clear();

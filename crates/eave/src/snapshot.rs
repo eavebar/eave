@@ -28,6 +28,15 @@ thread_local! {
     /// One renderer for every picture, so its glyphs and images stay cached between them. `None`
     /// until the first, and if it can't be made.
     static RENDERER: RefCell<Option<iced::Renderer>> = const { RefCell::new(None) };
+    /// Whether a picture is being taken.
+    static TAKING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether what's being drawn is a picture. Geometry cached on the screen's renderer can't be
+/// drawn into a picture's, which is always tiny-skia: with the GPU renderer, iced panics. So
+/// anything that caches its drawing draws afresh while this is true.
+pub fn taking() -> bool {
+    TAKING.with(Cell::get)
 }
 
 /// Takes pictures at `scale` from now on.
@@ -79,7 +88,9 @@ impl Snapshot {
             renderer.reset(Rectangle::with_size(rect.size()));
             renderer.with_translation(Vector::new(-rect.x, -rect.y), |renderer| {
                 // What it draws isn't on screen: the glass plugin doesn't hear of it.
+                let before = TAKING.with(|cell| cell.replace(true));
                 crate::glass::frame::hushed(|| draw(renderer));
+                TAKING.with(|cell| cell.set(before));
             });
             Some(renderer.screenshot(size, scale, Color::TRANSPARENT))
         })?;
