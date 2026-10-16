@@ -461,8 +461,8 @@ pub struct Glass {
 impl Default for Glass {
     fn default() -> Self {
         Self {
-            band: 16.0,
-            thickness: 32.0,
+            band: 24.0,
+            thickness: 48.0,
             chroma: 0.15,
             rim: 1.0,
             frost: 0.25,

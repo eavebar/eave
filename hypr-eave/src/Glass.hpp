@@ -33,8 +33,8 @@ namespace Glass {
 
     // How the glass looks: lengths in logical px. eave sends it from its config.toml.
     struct SLook {
-        float band      = 16.F;  // how far in from the edge the bevel curves down
-        float thickness = 32.F;  // how thick the glass is, behind the bevel: the backdrop bends through it
+        float band      = 24.F;  // how far in from the edge the bevel curves down
+        float thickness = 48.F;  // how thick the glass is, behind the bevel: the backdrop bends through it
         float chroma    = 0.15F; // spread between red and blue lookups, as a fraction of the bend
         float rim       = 1.F;   // how bright the edge's reflection and the lit side are
         float frost     = 0.25F; // spread of each blur step (0 = clear glass)
