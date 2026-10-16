@@ -12,6 +12,7 @@
 // pointer under them, so it slides under the notch as under a MacBook's (Cursor.cpp, D-113).
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <optional>
 #include <cstdint>
@@ -148,6 +149,12 @@ namespace Glass {
         bool                     sdr  = true; // the ink's contrast math holds (8-bit-ish sRGB)
         SState                   state;
         CBox                     global; // the surface, logical px on the whole desktop
+
+        // What eave said, as the shaders take it (`records`): boxes in s px, each one's fill with
+        // its ink in w (-1 for solid), and each glass island's channel of the field (-1 for solid).
+        int                                count = 0;
+        std::array<float, MAX_REGIONS * 4> boxes{}, fills{};
+        std::array<int, MAX_REGIONS>       chans{};
 
         // Filled by the backdrop step:
         CBox                     copy; // the part of the framebuffer the backdrop holds

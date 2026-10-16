@@ -33,13 +33,14 @@ namespace Glass {
     struct SGlassProgram {
         GLuint id = 0;
         GLint  mask, surfSize, fbOrigin, toFb, toSurf, backdrop, bdOrigin, bdScale, bdLimit, wide, wideScale, wideLimit, wideSize, field, fieldScale, fieldLimit, fieldStep, sigma, band,
-            fade, thickness, gap, chroma, rim, tint, ink, contrast, margin, count, boxes, fills, fbSize, rect;
+            fade, thickness, gap, chroma, rim, tint, ink, contrast, margin, count, boxes, fills, chans, fbSize, rect;
     };
     static SGlassProgram g_glass[2];
 
     struct SPassProgram {
         GLuint id = 0;
         GLint  src, srcScale, texel, offset;
+        GLint  surfSize, margin, count, boxes, chans; // shape only: which island each pixel is
     };
     static SPassProgram g_down, g_up, g_blur, g_shape[2]; // shape: per kind of surface texture
     static GLuint       g_vao = 0, g_vbo = 0;
@@ -162,6 +163,7 @@ namespace Glass {
         p.count     = at("count");
         p.boxes     = at("boxes");
         p.fills     = at("fills");
+        p.chans     = at("chans");
         p.fbSize    = at("fbSize");
         p.rect      = at("rect");
         ensureQuad();
@@ -178,6 +180,11 @@ namespace Glass {
         p.srcScale = glGetUniformLocation(p.id, "srcScale");
         p.texel    = glGetUniformLocation(p.id, "texel");
         p.offset   = glGetUniformLocation(p.id, "offset");
+        p.surfSize = glGetUniformLocation(p.id, "surfSize");
+        p.margin   = glGetUniformLocation(p.id, "margin");
+        p.count    = glGetUniformLocation(p.id, "count");
+        p.boxes    = glGetUniformLocation(p.id, "boxes");
+        p.chans    = glGetUniformLocation(p.id, "chans");
         ensureQuad();
         return true;
     }
@@ -339,6 +346,63 @@ namespace Glass {
         return ensureFB(fb, like, need);
     }
 
+    // The bend's field's gaussian for a look, s px: two fifths of the band.
+    static float fieldSigma(const SLook& look, float scale) {
+        return std::max(look.band * scale / 2.5F, 0.5F);
+    }
+
+    // What eave said, in s px, for the shaders. Each glass island also gets one of the field's four
+    // channels, so its bend is its own shape's: an island whose field reaches another's (3 sigmas,
+    // and the margin either may wobble past its box) takes a channel the other hasn't. Islands
+    // that overlap are still two shapes, and are kept apart the same way. With more neighbours
+    // than channels, the one whose nearest user is farthest is shared.
+    static void records(SJob& job, float scale) {
+        const float k   = job.scale;
+        const float far = 3.F * fieldSigma(job.state.look, scale) + 2.F * ISLAND_MARGIN * k;
+        job.count       = 0;
+        for (auto const& r : job.state.regions) {
+            if (job.count >= sc<int>(MAX_REGIONS))
+                break;
+            const int i         = job.count++;
+            float*    b         = &job.boxes[i * 4];
+            float*    f         = &job.fills[i * 4];
+            b[0]                = r.x * k;
+            b[1]                = r.y * k;
+            b[2]                = (r.x + r.w) * k;
+            b[3]                = (r.y + r.h) * k;
+            f[0]                = ((r.fill >> 16) & 0xFF) / 255.F;
+            f[1]                = ((r.fill >> 8) & 0xFF) / 255.F;
+            f[2]                = (r.fill & 0xFF) / 255.F;
+            // w: -1 for solid content, else which way the island's ink goes, 0 to 1.
+            const bool solid    = r.kind == EAVE_GLASS_SURFACE_V1_KIND_SOLID;
+            f[3]                = solid ? -1.F : r.ink / 255.F;
+            job.chans[i]        = solid ? -1 : 0;
+            if (solid)
+                continue;
+            // How near each channel's nearest island is.
+            float nearest[4] = {INFINITY, INFINITY, INFINITY, INFINITY};
+            for (int j = 0; j < i; j++) {
+                if (job.chans[j] < 0)
+                    continue;
+                const float* o  = &job.boxes[j * 4];
+                const float  dx = std::max({o[0] - b[2], b[0] - o[2], 0.F});
+                const float  dy = std::max({o[1] - b[3], b[1] - o[3], 0.F});
+                const float  d  = std::hypot(dx, dy);
+                nearest[job.chans[j]] = std::min(nearest[job.chans[j]], d);
+            }
+            int best = 0;
+            for (int c = 0; c < 4; c++) {
+                if (nearest[c] >= far) {
+                    best = c;
+                    break;
+                }
+                if (nearest[c] > nearest[best])
+                    best = c;
+            }
+            job.chans[i] = best;
+        }
+    }
+
     // The bend's field: the surface's coverage, blurred by a gaussian a band wide. Its value says
     // how deep into the glass a pixel is and its slope which way is out, both smooth from pixel to
     // pixel, which rings of samples around each pixel weren't: they changed in steps as the edge
@@ -347,12 +411,15 @@ namespace Glass {
     //
     // It's drawn small, at most 4 texels to the sigma: a blur that wide has nothing finer. Each
     // texel averages the coverage under it first, so the edge can't fall between samples.
+    //
+    // One field per island, in its channel (`records`): each pixel's coverage counts only for the
+    // island it belongs to, so an island near another isn't bent by it.
     static bool drawField(SJob& job, SMonitorGlass& fbs, const SP<IFramebuffer>& target, float scale) {
         const bool external = job.tex->m_type == Render::TEXTURE_EXTERNAL;
         if (!ensurePass(g_shape[external], forTexture(SHADER_shape_frag, external)) || !ensurePass(g_blur, SHADER_blur_frag))
             return false;
 
-        const float    sigma = std::max(job.state.look.band * scale / 2.5F, 0.5F); // s px
+        const float    sigma = fieldSigma(job.state.look, scale); // s px
         const float    step  = std::max(sigma / 4.F, 1.F);                         // s px per texel
         const Vector2D size  = {std::ceil(job.box.w / step), std::ceil(job.box.h / step)};
         if (!ensureField(fbs.field, target, size) || !ensureField(fbs.across, target, size))
@@ -374,6 +441,11 @@ namespace Glass {
         glUniform2f(shape.srcScale, size.x * step / job.box.w, size.y * step / job.box.h);
         glUniform2f(shape.texel, step / job.box.w, step / job.box.h);
         glUniform1f(shape.offset, std::clamp(std::ceil(step), 1.F, 4.F));
+        glUniform2f(shape.surfSize, job.box.w, job.box.h);
+        glUniform1f(shape.margin, ISLAND_MARGIN * scale);
+        glUniform1i(shape.count, job.count);
+        glUniform4fv(shape.boxes, MAX_REGIONS, job.boxes.data());
+        glUniform1iv(shape.chans, MAX_REGIONS, job.chans.data());
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         job.tex->unbind();
 
@@ -465,8 +537,10 @@ namespace Glass {
                 job.wideLevel = {sizes[depth - 1].x / c.w, sizes[depth - 1].y / c.h};
             }
         }
-        if (ok)
+        if (ok) {
+            records(job, mon->m_scale);
             ok = drawField(job, fbs, target, mon->m_scale);
+        }
         if (ok && glass && job.state.reportCell)
             reportBackdrop(*glass, job);
 
@@ -489,25 +563,6 @@ namespace Glass {
         const auto fbSize = rd.currentFB->m_size;
         const auto& lk    = job.state.look;
         const float S     = mon->m_scale;
-
-        // The records, in s px.
-        std::array<float, MAX_REGIONS * 4> boxes{}, fills{};
-        int                                count = 0;
-        for (auto const& r : job.state.regions) {
-            if (count >= sc<int>(MAX_REGIONS))
-                break;
-            const float k  = job.scale;
-            boxes[count * 4 + 0] = r.x * k;
-            boxes[count * 4 + 1] = r.y * k;
-            boxes[count * 4 + 2] = (r.x + r.w) * k;
-            boxes[count * 4 + 3] = (r.y + r.h) * k;
-            fills[count * 4 + 0] = ((r.fill >> 16) & 0xFF) / 255.F;
-            fills[count * 4 + 1] = ((r.fill >> 8) & 0xFF) / 255.F;
-            fills[count * 4 + 2] = (r.fill & 0xFF) / 255.F;
-            // w: -1 for solid content, else which way the island's ink goes, 0 to 1.
-            fills[count * 4 + 3] = r.kind == EAVE_GLASS_SURFACE_V1_KIND_SOLID ? -1.F : r.ink / 255.F;
-            count++;
-        }
 
         SGLState gl;
         gl.save();
@@ -554,9 +609,10 @@ namespace Glass {
         glUniform1i(prog->ink, job.sdr ? lk.ink : sc<int>(EAVE_GLASS_SURFACE_V1_INK_OWN));
         glUniform1f(prog->contrast, lk.contrast);
         glUniform1f(prog->margin, ISLAND_MARGIN * S);
-        glUniform1i(prog->count, count);
-        glUniform4fv(prog->boxes, MAX_REGIONS, boxes.data());
-        glUniform4fv(prog->fills, MAX_REGIONS, fills.data());
+        glUniform1i(prog->count, job.count);
+        glUniform4fv(prog->boxes, MAX_REGIONS, job.boxes.data());
+        glUniform4fv(prog->fills, MAX_REGIONS, job.fills.data());
+        glUniform1iv(prog->chans, MAX_REGIONS, job.chans.data());
         glUniform2f(prog->fbSize, fbSize.x, fbSize.y);
         glUniform4f(prog->rect, job.fbBox.x, job.fbBox.y, job.fbBox.w, job.fbBox.h);
 
