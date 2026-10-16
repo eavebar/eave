@@ -293,6 +293,33 @@ pub fn warp(path: &Path, map: impl Fn(Point) -> Point) -> Path {
     })
 }
 
+/// `path` with a rounded rectangle cut out of it at `hole`, when filled by the even-odd rule.
+pub fn holed(path: &Path, hole: Rectangle, corners: [CornerShape; 4]) -> Path {
+    use path::lyon_path::Event;
+
+    let point = |p: path::lyon_path::math::Point| Point::new(p.x, p.y);
+    Path::new(|builder| {
+        for event in path.raw().iter() {
+            match event {
+                Event::Begin { at } => builder.move_to(point(at)),
+                Event::Line { to, .. } => builder.line_to(point(to)),
+                Event::Quadratic { ctrl, to, .. } => {
+                    builder.quadratic_curve_to(point(ctrl), point(to));
+                }
+                Event::Cubic {
+                    ctrl1, ctrl2, to, ..
+                } => builder.bezier_curve_to(point(ctrl1), point(ctrl2), point(to)),
+                Event::End { close, .. } => {
+                    if close {
+                        builder.close();
+                    }
+                }
+            }
+        }
+        rectangle(builder, hole, corners);
+    })
+}
+
 /// The shape of one corner, in coordinates relative to the corner point: `x` along the edge
 /// coming in (negative before the corner), `y` along the edge going out.
 #[derive(Debug)]

@@ -28,7 +28,8 @@ use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::alignment::Horizontal;
 use iced::keyboard::{self, key};
-use iced::widget::canvas::{Cache, Frame, Path};
+use iced::widget::canvas::fill::Rule;
+use iced::widget::canvas::{Cache, Fill, Frame, Path, Style};
 use iced::{
     Color, Element, Event, Length, Padding, Point, Rectangle, Size, Transformation, Vector, window,
 };
@@ -608,6 +609,16 @@ impl Edges {
                 (self.bottom.value - top).max(0.0),
             ),
         )
+    }
+
+    /// The furthest any edge is from `to`'s, in px.
+    fn off(&self, to: Rectangle) -> f32 {
+        let [left, top, right, bottom] = edges_of(to);
+        (self.left.value - left)
+            .abs()
+            .max((self.top.value - top).abs())
+            .max((self.right.value - right).abs())
+            .max((self.bottom.value - bottom).abs())
     }
 
     /// How far, from 0 to 1, the shape has come from `from` toward `to`.
@@ -1326,9 +1337,16 @@ impl Motion {
                 self.edges.aim(heading);
                 popover.panel.target = 0.0;
                 popover.items.feel = FADE;
-                popover.items.target = if popover.panel.value < REST_DISTANCE
-                    && self.edges.progress(panel, home) > 0.5
-                {
+                // Going back into another island, its "items" are what melts it into that one
+                // (`melted`): once it's landed, and for good, so a bounce can't bring it back.
+                let back = match self.home {
+                    Some(_) => {
+                        popover.items.target >= 1.0
+                            || self.edges.off(home) < theme::MELT_REACH
+                    }
+                    None => self.edges.progress(panel, home) > 0.5,
+                };
+                popover.items.target = if popover.panel.value < REST_DISTANCE && back {
                     1.0
                 } else {
                     0.0
@@ -1702,6 +1720,24 @@ impl Motion {
         }
     }
 
+    /// Where a popover going back into another island ([`Popover::home`]) is over it, in the
+    /// shape's coordinates, as far as `shape` and what's `poured` of the body reach: cut out of its
+    /// fill, so that island, the same color under it, shows through with what's on it, and the two
+    /// merge, glass and all, instead of one going over the other.
+    fn landing(&self, shape: Rectangle, poured: Option<Rectangle>) -> Option<Rectangle> {
+        let home = self.home.as_ref()?;
+        if !self.popover.present || self.popover.open {
+            return None;
+        }
+        let over = (home.get() - self.offset()).intersection(&shape)?;
+        let over = match poured {
+            Some(poured) => over.intersection(&poured)?,
+            None => over,
+        };
+        let over = over.shrink(theme::LAND_INSET);
+        (over.width >= 1.0 && over.height >= 1.0).then_some(over)
+    }
+
     /// Whether a closing popover is all the way back to the island, and nobody's been told yet.
     /// One that melted into another island is done once it's gone, wobbling or not.
     fn closing_done(&mut self) -> bool {
@@ -2021,6 +2057,10 @@ fn draw_island<M>(
     if state.shape_fill.replace(fill) != fill {
         state.shape.clear();
     }
+    let landing = motion.landing(shape, poured);
+    if landing.is_some() {
+        state.shape.clear();
+    }
     // What the glass plugin hears of it: where it's its fill, glass, or never. A drop still
     // hanging from the notch is the notch's, black, until it lets go.
     let moved = shape + motion.offset();
@@ -2113,7 +2153,24 @@ fn draw_island<M>(
                         }),
                         None => squircle_corners(outline, corners),
                     };
-                    frame.fill(&bend(outline), fill);
+                    match landing {
+                        Some(landing) => {
+                            let hole = Rectangle::new(
+                                origin + (landing.position() - area.position()),
+                                landing.size(),
+                            );
+                            let radius = theme::ISLAND_RADIUS - theme::LAND_INSET;
+                            let corners = [CornerShape::new(radius, theme::ISLAND_SMOOTHING); 4];
+                            frame.fill(
+                                &squircle::holed(&bend(outline), hole, corners),
+                                Fill {
+                                    style: Style::Solid(fill),
+                                    rule: Rule::EvenOdd,
+                                },
+                            );
+                        }
+                        None => frame.fill(&bend(outline), fill),
+                    }
                 });
                 renderer.with_translation(Vector::new(area.x, area.y) - room, |renderer| {
                     renderer.draw_geometry(geometry);
@@ -3236,7 +3293,7 @@ mod tests {
         let home = Shape::default();
         home.set(rect(300.0, 80.0));
         let mut motion = Motion {
-            home: Some(home),
+            home: Some(home.clone()),
             ..Motion::default()
         };
         motion.arrange(rect(0.0, 20.0), [(1, 10.0)].into_iter(), None);
@@ -3244,14 +3301,22 @@ mod tests {
         popover(&mut motion, true, panel, true);
         run(&mut motion, Instant::now(), |_| {});
         assert_eq!(motion.melted(), 0.0, "open, it's solid");
+        assert_eq!(motion.landing(motion.shape(), None), None, "open, nothing's cut out");
 
         popover(&mut motion, false, panel, true);
         let mut melted_with_content = false;
         let mut closed_moving = false;
+        let (mut landed, mut cut) = (false, false);
         let mut now = Instant::now();
         while motion.step(now) {
             melted_with_content |=
                 motion.melted() > REST_DISTANCE && motion.popover.panel.value > REST_DISTANCE;
+            landed |= motion.edges.off(home.get()) < theme::MELT_REACH;
+            assert!(landed || motion.melted() == 0.0, "melting before it's landed");
+            if let Some(over) = motion.landing(motion.shape(), None) {
+                cut = true;
+                assert!(home.get().contains(over.position()), "cut out of that island only");
+            }
             if motion.closing_done() {
                 assert!(motion.melted() > 0.99, "gone before it's done");
                 closed_moving = !motion.at_rest();
@@ -3260,6 +3325,7 @@ mod tests {
         }
         assert!(!melted_with_content, "solid while the content shows");
         assert!(closed_moving, "done without waiting for the wobble");
+        assert!(cut, "that island shows through where it's over it");
     }
 
     #[test]
