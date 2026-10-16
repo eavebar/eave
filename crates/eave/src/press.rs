@@ -96,9 +96,10 @@ struct Spec {
     depth: f32,
 }
 
-/// Whether what's drawn now is on glass, so a control's own fills give way to the glass's.
+/// Whether what's drawn now is on glass that controls shape, so a control's own fills give way
+/// to the glass's. With a plugin from before reliefs, they stay.
 pub fn on_glass() -> bool {
-    frame::on()
+    frame::on() && crate::glass::client::reliefs()
 }
 
 #[derive(Debug)]

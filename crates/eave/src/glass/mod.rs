@@ -9,7 +9,7 @@
 //! is behind the bar ([`tone`]), so the ink over something bright can turn dark. Without the
 //! plugin there's no glass to tell, and the theme looks dark.
 
-mod client;
+pub(crate) mod client;
 pub mod frame;
 mod protocol;
 pub mod tone;

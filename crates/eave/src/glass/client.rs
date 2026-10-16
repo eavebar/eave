@@ -38,6 +38,14 @@ pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
+/// Whether the plugin shapes the glass with the controls on it (version 4, D-126), as of the
+/// last frame told: before that, a control keeps its own fills, or it would be nothing on glass.
+static RELIEFS: AtomicBool = AtomicBool::new(false);
+
+pub fn reliefs() -> bool {
+    RELIEFS.load(Ordering::Relaxed)
+}
+
 struct Shared {
     queue: QueueHandle<State>,
     manager: Option<EaveGlassManagerV1>,
@@ -145,8 +153,10 @@ pub fn present(
         });
     }
     let Some(glass) = shared.glass.as_mut() else {
+        RELIEFS.store(false, Ordering::Relaxed);
         return;
     };
+    RELIEFS.store(glass.object.version() >= 4, Ordering::Relaxed);
     if let Some(look) = look
         && glass.look.as_ref() != Some(look)
     {
