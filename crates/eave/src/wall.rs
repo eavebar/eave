@@ -20,6 +20,10 @@ pub struct Walls {
     pub corners: [CornerShape; 2],
 }
 
+/// How far the outlines may stray from their curves here: plenty, next to `WALL_GAP`, and far
+/// fewer pieces to measure than the squircle's own tolerance (D-119).
+const CUT: f32 = 0.05;
+
 /// Which way an island moves toward a wall.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Toward {
@@ -68,7 +72,7 @@ fn room(
     }
     // The screen, from its top edge on down, far enough that only its top corners count.
     let far = 1.0e4;
-    let mut screen = Polygons::default();
+    let mut screen = Polygons::within(CUT);
     squircle::rectangle(
         &mut screen,
         Rectangle::new(Point::new(0.0, top), Size::new(width, far)),
@@ -84,14 +88,15 @@ fn room(
         Toward::Right => (1.0, 0.0),
         Toward::Left => (-1.0, 0.0),
     };
-    let clear = |by: f32| {
-        let mut island = Polygons::default();
+    // How much further than the gap it is from the screen, moved `by` that way.
+    let room = |by: f32| {
+        let mut island = Polygons::within(CUT);
         let moved = Rectangle::new(
             Point::new(shape.x + way.0 * by, shape.y + way.1 * by),
             shape.size(),
         );
         squircle::rectangle(&mut island, moved, corners);
-        squircle::clearance(&screen, &island) >= gap
+        squircle::clearance(&screen, &island) - gap
     };
     // Only the last stretch, where the island would be in a corner, can come too close: start
     // there, unless that's already too close.
@@ -101,32 +106,29 @@ fn room(
         .map(|corner| corner.radius * (1.0 + corner.smoothing))
         .fold(0.0, f32::max);
     let mut near = (straight - reach - gap).max(0.0);
-    if !clear(near) {
-        if near == 0.0 || !clear(0.0) {
+    let mut left = room(near);
+    if left < 0.0 {
+        if near == 0.0 {
             return 0.0;
         }
         near = 0.0;
-    }
-    // Feeling its way there, so it never steps past a corner it would cross: the clearance only
-    // shrinks until it touches, and grows again once it's through.
-    const STEP: f32 = 0.5;
-    while near < straight {
-        let next = (near + STEP).min(straight);
-        if !clear(next) {
-            let mut far = next;
-            for _ in 0..6 {
-                let middle = (near + far) / 2.0;
-                if clear(middle) {
-                    near = middle;
-                } else {
-                    far = middle;
-                }
-            }
-            return near;
+        left = room(0.0);
+        if left < 0.0 {
+            return 0.0;
         }
-        near = next;
     }
-    straight
+    // Moved no further than the room it has left, nothing of it can come within the gap, so it
+    // never steps past a corner it would cross: step by that until it's as good as there (D-119).
+    // Square on, it gets there in a step; slanting into a curve, in a few.
+    const THERE: f32 = 0.01;
+    for _ in 0..64 {
+        if near >= straight || left < THERE {
+            break;
+        }
+        near = (near + left).min(straight);
+        left = room(near);
+    }
+    near.min(straight)
 }
 
 #[cfg(test)]
