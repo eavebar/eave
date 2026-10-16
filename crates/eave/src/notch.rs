@@ -81,6 +81,8 @@ pub struct Screen {
     /// How much further in than the gap the first island on the left, and the last on the
     /// right, sit: room for a screen corner too round for theirs to follow (D-95).
     pub shift: [f32; 2],
+    /// The screen's scale: physical pixels to logical.
+    pub scale: f32,
 }
 
 impl Default for Screen {
@@ -93,6 +95,7 @@ impl Default for Screen {
             islands: CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING),
             measured: false,
             shift: [0.0; 2],
+            scale: 1.0,
         }
     }
 }
@@ -344,6 +347,7 @@ pub async fn resolve(screens: config::Screens, output: Option<String>) -> (Optio
         corners: screen
             .corners
             .map(|radius| CornerShape::new(radius / scale, screen.smoothing)),
+        scale,
         ..Screen::default()
     };
     resolved.resolve_islands(islands, scale);

@@ -17,7 +17,7 @@
 //! as they would without it. Like the switcher, it steps one frame at a time when the compositor
 //! asks, and stops asking once everything is at rest.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -41,6 +41,7 @@ use crate::hand::{self, rubber_band};
 use crate::jelly::{self, Jelly, Side};
 use crate::join::{self, Join, Joining};
 use crate::pour;
+use crate::snapshot::{self, Snapshot};
 use crate::spring::{FADE, HAND, MAKE_WAY, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
 use crate::squircle::{self, CornerShape, Polygons, squircle_corners, warp};
 use crate::squish::{self, Squish};
@@ -382,6 +383,9 @@ struct State {
     shape_fill: Cell<Color>,
     /// The popover panel's widget state, while there is one.
     panel: Option<Tree>,
+    /// Pictures of both sides while it turns into its popover and back (D-124). In a cell, since
+    /// they're taken as it's drawn.
+    crossing: RefCell<Option<Crossing>>,
     /// Whether the pointer is over the island, which shows the toggle.
     hovered: bool,
     /// Where the island itself is within its layout, from the layout's left, and how wide: the
@@ -398,6 +402,25 @@ struct State {
     /// Its shoulders and corners, so `shape` is rebuilt when they change.
     shoulders: Option<CornerShape>,
     corners: [CornerShape; 4],
+}
+
+/// Pictures of an island's items and of its popover's content, crossed as the shape goes from one
+/// to the other, each riding it, blurred halfway (D-124).
+#[derive(Debug)]
+struct Crossing {
+    /// Which popover they're of.
+    key: Option<u64>,
+    /// Which way it was going when they were taken: turning to close takes them again, so the
+    /// panel's is as it was left. Turning back to open keeps them.
+    open: bool,
+    /// Whether it got to the panel: the shape changing size after that (another tab) is the
+    /// panel's own, live.
+    there: bool,
+    /// The island and the panel, as they were taken.
+    island: Rectangle,
+    panel: Rectangle,
+    items: Option<Snapshot>,
+    content: Option<Snapshot>,
 }
 
 /// Gone, it's apart from the island it joined.
@@ -1863,6 +1886,25 @@ impl Motion {
         self.grab.is_some() && (self.x.value != 0.0 || self.y.value != 0.0)
     }
 
+    /// The island and the panel, while it turns into its popover or back and its content can
+    /// cross (D-124). Not for a drop, nor for one that comes out of or joins another island:
+    /// those hand their content over as before.
+    fn crosses(&self) -> Option<(Rectangle, Rectangle)> {
+        let popover = &self.popover;
+        let island = self.island?;
+        let panel = popover.rect?;
+        (popover.present && self.drop.is_none() && self.home.is_none() && self.join.is_none())
+            .then_some((island, panel))
+    }
+
+    /// How much an item shows of itself, whatever its popover does.
+    fn own(&self, key: u64) -> f32 {
+        self.items
+            .iter()
+            .find(|item| item.key == key)
+            .map_or(0.0, |item| item.shown.value)
+    }
+
     /// How far an item laid out at `x` is from where it's drawn, and how much it shows.
     fn item(&self, key: u64, x: f32) -> (f32, f32) {
         let fade = self.popover.items.value;
@@ -2042,6 +2084,84 @@ fn panel_offset(place: Size, content: Size) -> Vector {
 /// The ink spring's target: 1 for darker ink.
 fn ink_target(darker: bool) -> f32 {
     if darker { 1.0 } else { 0.0 }
+}
+
+/// How far the shape is from the island to the panel, while their content crosses (D-124), taking
+/// the pictures it needs as it sets off each way. None while it doesn't cross.
+#[allow(clippy::too_many_arguments)]
+fn cross_at<M>(
+    state: &State,
+    keys: &[u64],
+    items: &[Element<'_, M>],
+    trees: &[Tree],
+    layout: Layout<'_>,
+    (content, tree, content_layout): (&Element<'_, M>, &Tree, Layout<'_>),
+    theme: &iced::Theme,
+    style: &renderer::Style,
+    cursor: mouse::Cursor,
+    viewport: &Rectangle,
+) -> Option<f32> {
+    let motion = &state.motion;
+    let popover = &motion.popover;
+    let mut crossing = state.crossing.borrow_mut();
+    let Some((island, panel)) = motion.crosses() else {
+        *crossing = None;
+        return None;
+    };
+    // Another popover took over: it hands over as before.
+    if crossing
+        .as_ref()
+        .is_some_and(|crossing| crossing.key != popover.key)
+    {
+        *crossing = None;
+        return None;
+    }
+    let p = motion.edges.progress(island, panel);
+    let take = match &*crossing {
+        // Setting off from the island, or closing from the panel.
+        None if popover.open => p < theme::CROSS_SHOWS / 4.0,
+        None => p > 1.0 - theme::CROSS_SHOWS / 4.0,
+        // Turning to close: the panel as it was left, and the items as they are now.
+        Some(crossing) => crossing.open && !popover.open,
+    };
+    if take {
+        let items = Snapshot::take(island, |renderer| {
+            with_clip(island, || {
+                for ((key, item), (tree, child)) in keys
+                    .iter()
+                    .zip(items)
+                    .zip(trees.iter().zip(layout.children()))
+                {
+                    if motion.own(*key) >= REST_DISTANCE {
+                        item.as_widget()
+                            .draw(tree, renderer, theme, style, child, cursor, viewport);
+                    }
+                }
+            });
+        });
+        let content = snapshot::of(content, tree, content_layout, theme, style, cursor);
+        *crossing = Some(Crossing {
+            key: popover.key,
+            open: popover.open,
+            there: false,
+            island,
+            panel,
+            items,
+            content,
+        });
+    }
+    let crossing = crossing.as_mut()?;
+    if popover.open {
+        crossing.open = true;
+        if p >= 1.0 - 1e-3 && !crossing.there {
+            // Live from here on: the pictures are let go of, and taken again to close.
+            crossing.there = true;
+            crossing.items = None;
+            crossing.content = None;
+        }
+    }
+    // There, the panel changing size is its own, live.
+    Some(if crossing.there { 1.0 } else { p })
 }
 
 /// Draws the island as it is right now: the shape, the items that show, and the popover panel if
@@ -2288,6 +2408,25 @@ fn draw_island<M>(
                     Some(away) => (clear_of(clip, away), clear_of(shape, away)),
                     None => (clip, shape),
                 };
+                // While it turns into its popover and back, pictures of both sides cross (D-124).
+                let crossing_p = panel.filter(|_| !joins && joined.is_none()).and_then(
+                    |(content, tree, content_layout)| {
+                        cross_at(
+                            state,
+                            keys,
+                            items,
+                            trees,
+                            layout,
+                            (content, tree, content_layout),
+                            theme,
+                            style,
+                            cursor,
+                            viewport,
+                        )
+                    },
+                );
+                let crossing = state.crossing.borrow();
+                let crossing = crossing.as_ref().zip(crossing_p);
                 renderer.with_layer(clip, |renderer| {
                     for ((key, item), (tree, child)) in keys
                         .iter()
@@ -2296,6 +2435,13 @@ fn draw_island<M>(
                     {
                         let bounds = child.bounds();
                         let (dx, shown) = motion.item(*key, bounds.x);
+                        // Crossing, they're there whole under their picture near the island, and
+                        // not at all further out.
+                        let shown = match crossing {
+                            Some((_, p)) if live(p)[0] > 0.0 => motion.own(*key),
+                            Some(_) => 0.0,
+                            None => shown,
+                        };
                         if shown < REST_DISTANCE {
                             continue;
                         }
@@ -2328,7 +2474,11 @@ fn draw_island<M>(
                         });
                     }
                     if let Some((panel, tree, layout)) = panel {
-                        let shown = motion.popover.panel.value.clamp(0.0, 1.0);
+                        let shown = match crossing {
+                            Some((_, p)) if live(p)[1] > 0.0 => 1.0,
+                            Some(_) => 0.0,
+                            None => motion.popover.panel.value.clamp(0.0, 1.0),
+                        };
                         // The panel's viewport is what of it the shape shows, so a scrolling list or a
                         // text field clips to the shape while it grows.
                         if shown >= REST_DISTANCE
@@ -2354,6 +2504,31 @@ fn draw_island<M>(
                         }
                     }
                 });
+                // The pictures, over what's live of either side: a layer of their own, so they're
+                // over its text too.
+                if let Some((crossing, p)) = crossing {
+                    let [(items, items_blur), (content, content_blur)] = cross(p);
+                    let [items_live, content_live] = live(p);
+                    let along = along(crossing.island, crossing.panel);
+                    renderer.with_layer(clip, |renderer| {
+                        if let Some(picture) = &crossing.items {
+                            picture.draw(
+                                renderer,
+                                crossed(picture.rect, crossing.island, shape, along),
+                                items_blur,
+                                items * (1.0 - items_live),
+                            );
+                        }
+                        if let Some(picture) = &crossing.content {
+                            picture.draw(
+                                renderer,
+                                crossed(picture.rect, crossing.panel, shape, along),
+                                content_blur,
+                                content * (1.0 - content_live),
+                            );
+                        }
+                    });
+                }
             });
         })
     });
@@ -2446,6 +2621,62 @@ pub(crate) fn fade(
     });
 }
 
+/// How much each side's picture shows, and how blurred it is, when the shape is `p` of the way
+/// from the island to the panel: (opacity, blur) for the island's, then the panel's. The same
+/// either way, so turning round mid-way just goes back.
+fn cross(p: f32) -> [(f32, f32); 2] {
+    let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
+    // Sharp and whole while the live side is under it.
+    let reach = 1.0 - theme::CROSS_LIVE;
+    let gone = ((p - reach) / (theme::CROSS_GONE - reach)).clamp(0.0, 1.0);
+    let shows =
+        ((p - theme::CROSS_SHOWS) / (theme::CROSS_LIVE - theme::CROSS_SHOWS)).clamp(0.0, 1.0);
+    [
+        (1.0 - smooth(gone), theme::CONTENT_BLUR * gone),
+        (smooth(shows), theme::CONTENT_BLUR * (1.0 - shows)),
+    ]
+}
+
+/// How much of each side is live under its picture at `p`, from 0 to 1: the island's items near
+/// the island, the panel's content near the panel. Its picture fades off it as it gets there.
+fn live(p: f32) -> [f32; 2] {
+    let reach = 1.0 - theme::CROSS_LIVE;
+    [
+        (1.0 - p / reach).clamp(0.0, 1.0),
+        ((p - theme::CROSS_LIVE) / reach).clamp(0.0, 1.0),
+    ]
+}
+
+/// Where a picture of what was at `side` (taken of `picture`) is drawn while the shape is
+/// `shape`: scaled a little with it, at its top, and as far along it as the island is along the
+/// panel (`along`, 0 at its left, 1 at its right).
+fn crossed(picture: Rectangle, side: Rectangle, shape: Rectangle, along: f32) -> Rectangle {
+    let scale = if side.width >= 1.0 {
+        (shape.width / side.width).powf(theme::CROSS_STRETCH)
+    } else {
+        1.0
+    };
+    let left = shape.x + along * (shape.width - side.width * scale);
+    Rectangle::new(
+        Point::new(
+            left + (picture.x - side.x) * scale,
+            shape.y + (picture.y - side.y) * scale,
+        ),
+        Size::new(picture.width * scale, picture.height * scale),
+    )
+}
+
+/// How far along the panel the island is: 0 at its left, 1 at its right, where the panel grows
+/// from.
+fn along(island: Rectangle, panel: Rectangle) -> f32 {
+    let room = panel.width - island.width;
+    if room.abs() < 1.0 {
+        0.5
+    } else {
+        ((island.x - panel.x) / room).clamp(0.0, 1.0)
+    }
+}
+
 impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
     fn tag(&self) -> tree::Tag {
         tree::Tag::of::<State>()
@@ -2463,6 +2694,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             shape_band: Cell::new(None),
             shape_fill: Cell::new(Color::TRANSPARENT),
             panel: None,
+            crossing: RefCell::new(None),
             hovered: false,
             toggle_shown: false,
             expanded: None,
@@ -2647,7 +2879,10 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         match (&self.popover, panel.as_mut()) {
             (Some(popover), Some(tree)) => tree.diff(&popover.content),
             (Some(popover), None) => *panel = Some(Tree::new(&popover.content)),
-            (None, _) => *panel = None,
+            (None, _) => {
+                *panel = None;
+                state.crossing.replace(None);
+            }
         }
     }
 
@@ -4397,5 +4632,70 @@ mod tests {
         assert!(!items_shown, "never back to the island on the way");
         assert_eq!(motion.edges.rect(), second);
         assert_eq!(motion.popover.panel.value, 1.0);
+    }
+
+    #[test]
+    fn content_crosses_from_the_island_to_the_panel_and_hands_over_to_what_is_live() {
+        let at = |p: f32| (cross(p), live(p));
+        // At the island: only its items, live, the pictures sharp.
+        let ([(items, blur), (content, _)], [items_live, content_live]) = at(0.0);
+        assert_eq!((items, blur, content), (1.0, 0.0, 0.0));
+        assert_eq!((items_live, content_live), (1.0, 0.0));
+        // At the panel: only its content, live, sharp.
+        let ([(items, _), (content, blur)], [items_live, content_live]) = at(1.0);
+        assert_eq!((items, content, blur), (0.0, 1.0, 0.0));
+        assert_eq!((items_live, content_live), (0.0, 1.0));
+        // Halfway, both show, blurred, and neither is live.
+        let ([(items, items_blur), (content, content_blur)], live_now) = at(0.45);
+        assert!(items > 0.0 && content > 0.0, "they cross");
+        assert!(items_blur > 1.0 && content_blur > 1.0, "blurred");
+        assert_eq!(live_now, [0.0, 0.0]);
+        // Each goes one way all along, so turning round just goes back.
+        let mut last = at(0.0);
+        for step in 1..=100 {
+            let now = at(step as f32 / 100.0);
+            assert!(now.0[0].0 <= last.0[0].0 && now.0[1].0 >= last.0[1].0);
+            assert!(now.1[0] <= last.1[0] && now.1[1] >= last.1[1]);
+            last = now;
+        }
+        // A picture is whole and sharp while its side is live under it, so the two are the
+        // same pixels.
+        for step in 0..=100 {
+            let p = step as f32 / 100.0;
+            let ([(items, items_blur), (content, content_blur)], [items_live, content_live]) =
+                at(p);
+            if items_live > 0.0 {
+                assert_eq!((items, items_blur), (1.0, 0.0), "at {p}");
+            }
+            if content_live > 0.0 {
+                assert_eq!((content, content_blur), (1.0, 0.0), "at {p}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_picture_rides_the_shape_from_where_the_panel_grows() {
+        let island = rect(400.0, 120.0);
+        let panel = Rectangle::new(Point::new(400.0, 6.0), Size::new(360.0, 300.0));
+        // Grown from its left.
+        assert_eq!(along(island, panel), 0.0);
+        // Where it was taken, as it was.
+        let picture = island.expand(4.0);
+        assert_eq!(crossed(picture, island, island, 0.0), picture);
+        // On the way, bigger, but less than the shape: still at its top and left.
+        let shape = Rectangle::new(Point::new(400.0, 6.0), Size::new(240.0, 150.0));
+        let drawn = crossed(island, island, shape, 0.0);
+        assert!(drawn.width > island.width && drawn.width < shape.width);
+        assert_eq!((drawn.x, drawn.y), (shape.x, shape.y));
+        // The panel's, smaller at the start, never bigger than itself.
+        let start = crossed(panel, panel, island, 0.0);
+        assert!(start.width < panel.width && start.width > island.width);
+        assert_eq!(crossed(panel, panel, panel, 0.0), panel);
+        // From the middle, it stays centered.
+        let middle = Rectangle::new(Point::new(520.0, 6.0), Size::new(120.0, 32.0));
+        let wide = Rectangle::new(Point::new(400.0, 6.0), Size::new(360.0, 300.0));
+        assert_eq!(along(middle, wide), 0.5);
+        let drawn = crossed(middle, middle, shape, 0.5);
+        assert!((drawn.center_x() - shape.center_x()).abs() < 0.01);
     }
 }

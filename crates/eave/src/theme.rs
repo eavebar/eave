@@ -123,6 +123,22 @@ pub const MAKE_WAY_RESPONSE: f32 = 0.08;
 /// toward its island as it fades out (D-121). A nudge, like the cascade's: it says where it came
 /// from.
 pub const CONTENT_DROP: f32 = 8.0;
+/// An island turning into its popover and back crosses pictures of the two sides' content,
+/// riding the shape (D-124). How blurred each is, in logical pixels, halfway gone.
+pub const CONTENT_BLUR: f32 = 6.0;
+/// How far the shape is from the island, from 0 to 1, when the island's content is gone: it
+/// goes in the first part, so the panel's isn't over it for long.
+pub const CROSS_GONE: f32 = 0.6;
+/// How far the shape is when the panel's content starts to show: they overlap in between, each
+/// blurred, so one reads as turning into the other.
+pub const CROSS_SHOWS: f32 = 0.25;
+/// From how far, on the way to the panel, the live content is under its picture, which fades off
+/// it: the two are the same pixels by then. Coming back, the island's own items are under from
+/// one minus it.
+pub const CROSS_LIVE: f32 = 0.92;
+/// How much each picture grows or shrinks with the shape: 1 would scale it with the shape's width,
+/// 0 not at all. In between, an island's few words don't swell to the panel's width.
+pub const CROSS_STRETCH: f32 = 0.45;
 /// How far every reaction goes, all together: 1 is as the peaks below say.
 pub const REACT_SIZE: f32 = 0.8;
 /// How hard each piece of an island's outline is pulled toward its neighbors, as a share of how

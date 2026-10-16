@@ -185,6 +185,7 @@ crates/eave/               the host, as a library (`eave::run`) plus the default
   src/slot.rs              item wrapper: clicks, scroll steps, and the pointer for alternates
   src/alternate.rs         alternate: one option at a time with fades; hover, and growing (expand)
   src/handover.rs          one thing on screen at a time: fade (and slide) out, then the next in; alternates and tabs
+  src/snapshot.rs          pictures of what widgets draw, taken offscreen, sharp and blurred: a popover's content crossing its island's (D-124)
   src/switcher.rs          switcher: row of options with a sliding, frame-paced mark
   src/tabs.rs              tabs: a pill strip of names over the current page, which the host owns; pages hand over
   src/toggle.rs            toggle: a pill whose knob slides over

@@ -2285,6 +2285,7 @@ fn handle(bar: &mut Bar, message: Message) -> Task<Message> {
             if look != bar.looks || bar.screen == screen {
                 return Task::none();
             }
+            crate::snapshot::set_scale(screen.scale);
             let moved = bar.screen.inset != screen.inset
                 || bar.screen.surface_height() != screen.surface_height()
                 || bar.screen.bar_height() != screen.bar_height();
