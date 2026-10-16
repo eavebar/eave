@@ -1341,8 +1341,7 @@ impl Motion {
                 // (`melted`): once it's landed, and for good, so a bounce can't bring it back.
                 let back = match self.home {
                     Some(_) => {
-                        popover.items.target >= 1.0
-                            || self.edges.off(home) < theme::MELT_REACH
+                        popover.items.target >= 1.0 || self.edges.off(home) < theme::MELT_REACH
                     }
                     None => self.edges.progress(panel, home) > 0.5,
                 };
@@ -1724,19 +1723,15 @@ impl Motion {
         }
     }
 
-    /// Where a popover going back into another island ([`Popover::home`]) is over it, in the
-    /// shape's coordinates, as far as `shape` and what's `poured` of the body reach: cut out of its
-    /// fill, so that island, the same color under it, shows through with what's on it, and the two
-    /// merge, glass and all, instead of one going over the other.
-    fn landing(&self, shape: Rectangle, poured: Option<Rectangle>) -> Option<Rectangle> {
+    /// The other island a popover going back into it ([`Popover::home`]) is over, in the shape's
+    /// coordinates, if it reaches it (`drawn`): cut out of its fill, so that island, the same color
+    /// under it, shows through with what's on it, and the two merge, glass and all, instead of one
+    /// going over the other.
+    fn landing(&self, drawn: Rectangle) -> Option<Rectangle> {
         let home = self.home.as_ref().filter(|_| self.going_home())?;
-        let over = (home.get() - self.offset()).intersection(&shape)?;
-        let over = match poured {
-            Some(poured) => over.intersection(&poured)?,
-            None => over,
-        };
-        let over = over.shrink(theme::LAND_INSET);
-        (over.width >= 1.0 && over.height >= 1.0).then_some(over)
+        let home = home.get() - self.offset();
+        home.intersection(&drawn)?;
+        Some(home.shrink(theme::LAND_INSET))
     }
 
     /// Whether a closing popover is all the way back to the island, and nobody's been told yet.
@@ -2058,7 +2053,7 @@ fn draw_island<M>(
     if state.shape_fill.replace(fill) != fill {
         state.shape.clear();
     }
-    let landing = motion.landing(shape, poured);
+    let landing = motion.landing(seen);
     if landing.is_some() {
         state.shape.clear();
     }
@@ -2163,7 +2158,7 @@ fn draw_island<M>(
                             let radius = theme::ISLAND_RADIUS - theme::LAND_INSET;
                             let corners = [CornerShape::new(radius, theme::ISLAND_SMOOTHING); 4];
                             frame.fill(
-                                &squircle::holed(&bend(outline), hole, corners),
+                                &squircle::cut(&bend(outline), &squircle_corners(hole, corners)),
                                 Fill {
                                     style: Style::Solid(fill),
                                     rule: Rule::EvenOdd,
@@ -3306,7 +3301,11 @@ mod tests {
         popover(&mut motion, true, panel, true);
         run(&mut motion, Instant::now(), |_| {});
         assert_eq!(motion.melted(), 0.0, "open, it's solid");
-        assert_eq!(motion.landing(motion.shape(), None), None, "open, nothing's cut out");
+        assert_eq!(
+            motion.landing(motion.shape()),
+            None,
+            "open, nothing's cut out"
+        );
 
         popover(&mut motion, false, panel, true);
         let mut melted_with_content = false;
@@ -3317,10 +3316,17 @@ mod tests {
             melted_with_content |=
                 motion.melted() > REST_DISTANCE && motion.popover.panel.value > REST_DISTANCE;
             landed |= motion.edges.off(home.get()) < theme::MELT_REACH;
-            assert!(landed || motion.melted() == 0.0, "melting before it's landed");
-            if let Some(over) = motion.landing(motion.shape(), None) {
+            assert!(
+                landed || motion.melted() == 0.0,
+                "melting before it's landed"
+            );
+            if let Some(over) = motion.landing(motion.shape()) {
                 cut = true;
-                assert!(home.get().contains(over.position()), "cut out of that island only");
+                assert_eq!(
+                    over,
+                    home.get().shrink(theme::LAND_INSET),
+                    "that island, all of it"
+                );
             }
             if motion.closing_done() {
                 assert!(motion.melted() > 0.99, "gone before it's done");

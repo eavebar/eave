@@ -293,31 +293,82 @@ pub fn warp(path: &Path, map: impl Fn(Point) -> Point) -> Path {
     })
 }
 
-/// `path` with a rounded rectangle cut out of it at `hole`, when filled by the even-odd rule.
-pub fn holed(path: &Path, hole: Rectangle, corners: [CornerShape; 4]) -> Path {
-    use path::lyon_path::Event;
-
-    let point = |p: path::lyon_path::math::Point| Point::new(p.x, p.y);
+/// `path` with the convex shape `hole` cut out of it, when filled by the even-odd rule: what of
+/// `path` is inside `hole` is added to it as a second outline, which cancels it there. Where it
+/// isn't inside, nothing changes, so the edges of what's left are exactly `path`'s and `hole`'s.
+pub fn cut(path: &Path, hole: &Path) -> Path {
+    let hole = polygons(hole).into_iter().next().unwrap_or_default();
+    let subjects = polygons(path);
     Path::new(|builder| {
-        for event in path.raw().iter() {
-            match event {
-                Event::Begin { at } => builder.move_to(point(at)),
-                Event::Line { to, .. } => builder.line_to(point(to)),
-                Event::Quadratic { ctrl, to, .. } => {
-                    builder.quadratic_curve_to(point(ctrl), point(to));
-                }
-                Event::Cubic {
-                    ctrl1, ctrl2, to, ..
-                } => builder.bezier_curve_to(point(ctrl1), point(ctrl2), point(to)),
-                Event::End { close, .. } => {
-                    if close {
-                        builder.close();
-                    }
+        for polygon in subjects
+            .iter()
+            .cloned()
+            .chain(subjects.iter().map(|subject| clip(subject, &hole)))
+        {
+            let mut points = polygon.into_iter();
+            let Some(first) = points.next() else {
+                continue;
+            };
+            builder.move_to(first);
+            for point in points {
+                builder.line_to(point);
+            }
+            builder.close();
+        }
+    })
+}
+
+/// The closed outlines of `path`, flattened.
+fn polygons(path: &Path) -> Vec<Vec<Point>> {
+    use path::lyon_path::Event;
+    use path::lyon_path::iterator::PathIterator;
+
+    let mut polygons: Vec<Vec<Point>> = Vec::new();
+    for event in path.raw().iter().flattened(WARP_TOLERANCE) {
+        match event {
+            Event::Begin { at } => polygons.push(vec![Point::new(at.x, at.y)]),
+            Event::Line { to, .. } => {
+                if let Some(polygon) = polygons.last_mut() {
+                    polygon.push(Point::new(to.x, to.y));
                 }
             }
+            Event::End { .. } | Event::Quadratic { .. } | Event::Cubic { .. } => {}
         }
-        rectangle(builder, hole, corners);
-    })
+    }
+    polygons.retain(|polygon| polygon.len() >= 3);
+    polygons
+}
+
+/// What of `subject` is inside the convex `hole` (Sutherland–Hodgman). A concave subject can come
+/// out with edges doubled back on themselves, which enclose nothing.
+fn clip(subject: &[Point], hole: &[Point]) -> Vec<Point> {
+    // Which side of its edges is inside, whichever way it winds.
+    let area: f32 = hole
+        .iter()
+        .zip(hole.iter().cycle().skip(1))
+        .map(|(a, b)| a.x * b.y - b.x * a.y)
+        .sum();
+    let side = |a: Point, b: Point, p: Point| {
+        ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) * area.signum()
+    };
+    let mut out = subject.to_vec();
+    for (&a, &b) in hole.iter().zip(hole.iter().cycle().skip(1)) {
+        if out.is_empty() {
+            break;
+        }
+        let input = std::mem::take(&mut out);
+        for (&p, &q) in input.iter().zip(input.iter().cycle().skip(1)) {
+            let (sp, sq) = (side(a, b, p), side(a, b, q));
+            if sp >= 0.0 {
+                out.push(p);
+            }
+            if (sp >= 0.0) != (sq >= 0.0) {
+                let t = sp / (sp - sq);
+                out.push(Point::new(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t));
+            }
+        }
+    }
+    out
 }
 
 /// The shape of one corner, in coordinates relative to the corner point: `x` along the edge
@@ -576,6 +627,48 @@ fn to_segment(point: Point, a: Point, b: Point) -> f32 {
 mod tests {
     use super::*;
     use iced::Size;
+
+    fn area(polygon: &[Point]) -> f32 {
+        let twice: f32 = polygon
+            .iter()
+            .zip(polygon.iter().cycle().skip(1))
+            .map(|(a, b)| a.x * b.y - b.x * a.y)
+            .sum();
+        twice.abs() / 2.0
+    }
+
+    #[test]
+    fn a_cut_takes_out_what_of_the_shape_is_inside_the_hole_and_nothing_else() {
+        let shape = squircle_corners(
+            Rectangle::new(Point::new(0.0, 0.0), Size::new(100.0, 40.0)),
+            [CornerShape::SQUARE; 4],
+        );
+        // Half inside, half out, wound either way.
+        let hole = Rectangle::new(Point::new(80.0, 10.0), Size::new(40.0, 20.0));
+        let inside = clip(
+            &polygons(&shape)[0],
+            &polygons(&squircle(hole, 0.0, 0.0))[0],
+        );
+        assert!(
+            (area(&inside) - 20.0 * 20.0).abs() < 0.5,
+            "{}",
+            area(&inside)
+        );
+        let reversed: Vec<Point> = polygons(&squircle(hole, 0.0, 0.0))[0]
+            .iter()
+            .rev()
+            .copied()
+            .collect();
+        assert!((area(&clip(&polygons(&shape)[0], &reversed)) - 400.0).abs() < 0.5);
+        // Nowhere near: nothing.
+        let far = squircle(
+            Rectangle::new(Point::new(300.0, 0.0), Size::new(10.0, 10.0)),
+            0.0,
+            0.0,
+        );
+        assert!(area(&clip(&polygons(&shape)[0], &polygons(&far)[0])) < 0.01);
+        assert_eq!(polygons(&cut(&shape, &far)).len(), 1);
+    }
 
     #[test]
     fn skipping_far_runs_finds_what_every_pair_finds() {

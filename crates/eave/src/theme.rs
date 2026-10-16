@@ -123,9 +123,9 @@ pub const MAKE_WAY_RESPONSE: f32 = 0.08;
 /// toward its island as it fades out (D-121). A nudge, like the cascade's: it says where it came
 /// from.
 pub const CONTENT_DROP: f32 = 8.0;
-/// How far inside the island a dialog lands on its cut-out starts: past that island's
-/// antialiased edge, so the two read as one shape where they meet.
-pub const LAND_INSET: f32 = 2.0;
+/// How far inside an island the cut-out of a dialog landing on it starts: past that island's
+/// antialiased edge, which the dialog covers, so the two read as one shape where they meet.
+pub const LAND_INSET: f32 = 1.0;
 /// How close, in px, a dialog going back into another island gets to it before it melts away
 /// the rest of the way: by then it's that island's shape, give or take its bounce.
 pub const MELT_REACH: f32 = 4.0;
