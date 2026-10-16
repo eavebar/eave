@@ -34,17 +34,17 @@ namespace Glass {
 
     // How the glass looks: lengths in logical px. eave sends it from its config.toml.
     struct SLook {
-        float band      = 32.F;  // how far in from the edge the bevel curves down
+        float band      = 24.F;  // how far in from the edge the bevel curves down
         float thickness = 32.F;  // how thick the glass is, behind the bevel: the backdrop bends through it
         float chroma    = 0.2F; // spread between red and blue lookups, as a fraction of the bend
-        float rim       = 0.4F;   // how bright the edge's reflection and the lit side are
-        float frost     = 1.F; // spread of each blur step (0 = clear glass)
+        float rim       = 1.F;    // how bright the edge's reflection and the lit side are
+        float frost     = 2.F; // spread of each blur step (0 = clear glass)
         int   depth     = 2;     // how many times the blur halves the backdrop: each doubles its reach
         float tint      = 0.35F; // how much the glass takes the color behind it
         int   ink       = EAVE_GLASS_SURFACE_V1_INK_READABLE;
         float contrast  = 7.F;  // ink readable: the contrast ratio it reaches
         float inkBlur   = 12.F;  // ink: how far apart the taps of the wider blur its color is chosen on are
-        float gap       = 12.F;  // how high the glass floats over what's behind it (set_gap, version 3)
+        float gap       = 24.F;  // how high the glass floats over what's behind it (set_gap, version 3)
 
         bool  operator==(const SLook&) const = default;
     };
@@ -155,6 +155,7 @@ namespace Glass {
         int                                count = 0;
         std::array<float, MAX_REGIONS * 4> boxes{}, fills{};
         std::array<int, MAX_REGIONS>       chans{};
+        std::array<float, MAX_REGIONS>     bevels{}; // each island's bevel, s px: the band, or less on a narrow one
 
         // Filled by the backdrop step:
         CBox                     copy; // the part of the framebuffer the backdrop holds

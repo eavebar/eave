@@ -11,6 +11,7 @@
 #include <hyprland/src/desktop/view/LayerSurface.hpp>
 #include <hyprland/src/helpers/math/Math.hpp>
 #include <hyprland/src/helpers/cm/ColorManagement.hpp>
+#include <cmath>
 
 #include "shaders.inc"
 
@@ -33,7 +34,7 @@ namespace Glass {
     struct SGlassProgram {
         GLuint id = 0;
         GLint  mask, surfSize, fbOrigin, toFb, toSurf, backdrop, bdOrigin, bdScale, bdLimit, wide, wideScale, wideLimit, wideSize, field, fieldScale, fieldLimit, fieldStep, sigma, band,
-            fade, thickness, gap, chroma, rim, tint, ink, contrast, margin, count, boxes, fills, chans, fbSize, rect;
+            fade, thickness, gap, chroma, rim, tint, ink, contrast, margin, count, boxes, fills, chans, bevels, fbSize, rect;
     };
     static SGlassProgram g_glass[2];
 
@@ -164,6 +165,7 @@ namespace Glass {
         p.boxes     = at("boxes");
         p.fills     = at("fills");
         p.chans     = at("chans");
+        p.bevels    = at("bevels");
         p.fbSize    = at("fbSize");
         p.rect      = at("rect");
         ensureQuad();
@@ -351,11 +353,31 @@ namespace Glass {
         return std::max(look.band * scale / 2.5F, 0.5F);
     }
 
+    // The inverse error function, as glass.frag's (Giles, 2010), for |x| up to 0.995.
+    static float erfinv(float x) {
+        const float w = -std::log((1.F - x) * (1.F + x)) - 2.5F;
+        float       p = 2.81022636e-08F;
+        for (float c : {3.43273939e-07F, -3.5233877e-06F, -4.39150654e-06F, 0.00021858087F, -0.00125372503F, -0.00417768164F, 0.246640727F, 1.50140941F})
+            p = c + p * w;
+        return p * x;
+    }
+
+    // An island's bevel, s px: the band, or on an island too narrow for two, as deep as the
+    // field lets glass.frag see into it. That's where the field across a strip `w` px from each
+    // edge to its middle peaks, read as a straight edge would be, so the bevel ends flat exactly
+    // there and the two sides meet in one smooth round: two bevels still sloping met in a crease.
+    static float bevelOf(const float* box, float band, float sigma) {
+        const float w     = 0.5F * std::min(box[2] - box[0], box[3] - box[1]);
+        const float r     = sigma * std::sqrt(2.F);
+        const float peak  = std::clamp(2.F * std::erf(std::max(w, 0.F) / r) - 1.F, -0.995F, 0.995F);
+        return std::clamp(r * erfinv(peak), 1.F, std::max(band, 1.F));
+    }
+
     // What eave said, in s px, for the shaders. Each glass island also gets one of the field's four
     // channels, so its bend is its own shape's: an island whose field reaches another's (3 sigmas,
     // and the margin either may wobble past its box) takes a channel the other hasn't. Islands
     // that overlap are still two shapes, and are kept apart the same way. With more neighbours
-    // than channels, the one whose nearest user is farthest is shared.
+    // than channels, the one whose nearest user is farthest is shared. And each gets its bevel.
     static void records(SJob& job, float scale) {
         const float k   = job.scale;
         const float far = 3.F * fieldSigma(job.state.look, scale) + 2.F * ISLAND_MARGIN * k;
@@ -377,6 +399,7 @@ namespace Glass {
             const bool solid    = r.kind == EAVE_GLASS_SURFACE_V1_KIND_SOLID;
             f[3]                = solid ? -1.F : r.ink / 255.F;
             job.chans[i]        = solid ? -1 : 0;
+            job.bevels[i]       = solid ? 0.F : bevelOf(b, job.state.look.band * scale, fieldSigma(job.state.look, scale));
             if (solid)
                 continue;
             // How near each channel's nearest island is.
@@ -613,6 +636,7 @@ namespace Glass {
         glUniform4fv(prog->boxes, MAX_REGIONS, job.boxes.data());
         glUniform4fv(prog->fills, MAX_REGIONS, job.fills.data());
         glUniform1iv(prog->chans, MAX_REGIONS, job.chans.data());
+        glUniform1fv(prog->bevels, MAX_REGIONS, job.bevels.data());
         glUniform2f(prog->fbSize, fbSize.x, fbSize.y);
         glUniform4f(prog->rect, job.fbBox.x, job.fbBox.y, job.fbBox.w, job.fbBox.h);
 

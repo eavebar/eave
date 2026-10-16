@@ -27,7 +27,7 @@ uniform vec2 fieldScale;     // s px -> uv in it
 uniform vec4 fieldLimit;     // its first and last texel centers with content, uv
 uniform float fieldStep;     // s px between its texels
 uniform float sigma;         // the field's gaussian, s px
-uniform float band;          // s px
+uniform float band;          // s px: the bevel, on an island wide enough for it
 
 uniform float fade;          // the surface's fade-in or -out
 uniform float thickness;     // s px
@@ -41,12 +41,14 @@ uniform float margin;        // s px
 
 // What eave said about this frame: boxes in s px (x0, y0, x1, y1), and each one's fill color
 // with, in w, -1 for solid content, or for an island which way its ink goes: 0 lighter, 1 darker;
-// and each island's channel of the field.
+// and each island's channel of the field and its bevel, s px: the band, or less on an island too
+// narrow for two (Render.cpp's `bevelOf`).
 const int MAX = 64;
-uniform int  count;
-uniform vec4 boxes[MAX];
-uniform vec4 fills[MAX];
-uniform int  chans[MAX];
+uniform int   count;
+uniform vec4  boxes[MAX];
+uniform vec4  fills[MAX];
+uniform int   chans[MAX];
+uniform float bevels[MAX];
 
 out vec4 fragColor;
 
@@ -97,17 +99,19 @@ float erfinv(float x) {
 }
 
 // The glass is a slab lying on the backdrop, `thickness` deep, whose edge curves down to nothing
-// over a band: a squircle's quarter, steep at the very edge and flat a band in. Its height, and
-// its slope, for a pixel `d` s px in from the edge. The slope is taken half a pixel in at least,
-// where the edge's outermost pixel is, so it's never vertical: an error in `d` there leaves a
-// steep edge, not a flat strip all bent the same way.
-float profile(float d) {
-    float e = 1.0 - clamp(d / band, 0.0, 1.0);
-    return thickness * pow(1.0 - e * e * e * e, 0.25);
+// over a bevel `b` wide: a squircle's quarter, steep at the very edge and flat `b` in. Narrower
+// than the band, the slab is thinner by as much, so the island is the same glass made smaller:
+// its two sides meet in the middle flat, as one smooth round. Its height, and its slope, for a
+// pixel `d` s px in from the edge. The slope is taken half a pixel in at least, where the edge's
+// outermost pixel is, so it's never vertical: an error in `d` there leaves a steep edge, not a
+// flat strip all bent the same way.
+float profile(float d, float b) {
+    float e = 1.0 - clamp(d / b, 0.0, 1.0);
+    return thickness * b / band * pow(1.0 - e * e * e * e, 0.25);
 }
 
-float steepness(float d) {
-    float e = 1.0 - clamp(max(d, 0.5) / band, 0.0, 1.0);
+float steepness(float d, float b) {
+    float e = 1.0 - clamp(max(d, 0.5) / b, 0.0, 1.0);
     return min(thickness / band * e * e * e * pow(1.0 - e * e * e * e, -0.75), 8.0);
 }
 
@@ -125,10 +129,11 @@ vec3 wideLook(vec2 s) {
 
 // Which island s belongs to: the nearest one eave said may turn to glass, within `margin` of it
 // (an island's jelly and squish reach a little past the shape it reports), and of those it's
-// inside, the smallest; with its fill, which way its ink goes and its channel of the field. False
+// inside, the smallest; with its fill, which way its ink goes, its channel of the field and its
+// bevel. False
 // for none, and inside solid content, whatever it's over. shape.frag's `owner` finds the same
 // island: keep them alike.
-bool region(vec2 s, out vec3 fill, out float darker, out vec4 chan) {
+bool region(vec2 s, out vec3 fill, out float darker, out vec4 chan, out float bevel) {
     int   found   = -1;
     float nearest = margin;
     float area    = 0.0;
@@ -152,11 +157,13 @@ bool region(vec2 s, out vec3 fill, out float darker, out vec4 chan) {
     fill   = vec3(0.0);
     darker = 0.0;
     chan   = vec4(0.0);
+    bevel  = band;
     if (found < 0)
         return false;
     fill   = fills[found].rgb;
     darker = fills[found].w;
     chan   = vec4(equal(ivec4(0, 1, 2, 3), ivec4(chans[found])));
+    bevel  = max(bevels[found], 1.0);
     return true;
 }
 
@@ -267,7 +274,8 @@ void main() {
     vec3  fill;
     float darker;
     vec4  chan;
-    if (!region(s, fill, darker, chan))
+    float b;
+    if (!region(s, fill, darker, chan, b))
         discard; // not an island eave said may turn to glass, or content over one
 
     // How deep into the glass the pixel is, from the island's field: 0.5 on the edge, all but 1 a
@@ -292,6 +300,8 @@ void main() {
     // bent and lit the most, the same: a flat white patch. So the depth is moved out by that much,
     // from the curvature of the field's line through the pixel, taken back to the edge's (a line
     // d in from an edge of radius R has radius R - d). Concave corners move it the other way.
+    // It fades out toward the bevel's flat top: in the middle of a narrow island the field's
+    // slope is all but nothing, its curvature noise, and moved by it the middle would crease.
     float hdr = height(s + e.xx, chan), hul = height(s - e.xx, chan);
     float hur = height(s + vec2(e.x, -e.x), chan), hdl = height(s + vec2(-e.x, e.x), chan);
     float gx = slope.x / (2.0 * e.x), gy = slope.y / (2.0 * e.x);
@@ -300,16 +310,16 @@ void main() {
     float g2  = gx * gx + gy * gy;
     float k   = g2 > 1e-12 ? -(hxx * gy * gy - 2.0 * hxy * gx * gy + hyy * gx * gx) / (g2 * sqrt(g2)) : 0.0;
     k         = k / max(1.0 + k * max(d, 0.0), 0.1); // the edge's, not the line's
-    d += clamp(0.5 * sigma * sigma * k, -0.5 * band, 0.5 * band);
+    d += clamp(0.5 * sigma * sigma * k, -0.5 * b, 0.5 * b) * clamp(1.0 - d / b, 0.0, 1.0);
 
     // The glass's surface there, facing up (+z, at the viewer) and, down the bevel, out. The view
     // ray goes straight down into it, bends by Snell's law (glass, 1.5), crosses the slab and the
     // gap under it, and meets the backdrop: where it does is what the pixel shows. A convex edge
     // bends it in, so what's under the bevel is magnified, and near the rim turned over, as in a
     // lens. The wider the gap, the farther a bent ray drifts, and the more turns over.
-    vec3 N      = normalize(vec3(n * steepness(d), 1.0));
+    vec3 N      = normalize(vec3(n * steepness(d, b), 1.0));
     vec3 R      = refract(vec3(0.0, 0.0, -1.0), N, 1.0 / 1.5);
-    vec2 offset = R.xy / max(-R.z, 1e-3) * (profile(d) + gap);
+    vec2 offset = R.xy / max(-R.z, 1e-3) * (profile(d, b) + gap);
     // Red bends a little less than blue.
     vec3 col;
     col.r = look(s + offset * (1.0 - chroma)).r;
@@ -323,7 +333,7 @@ void main() {
     // dark, a bright one over bright, never a white outline on everything. Both are what they'd
     // be on the flat top less what they are there (the 4% glass reflects straight on is in the
     // frost), so they fade out where the bevel does.
-    vec3  around = mix(look(s + n * (max(d, 0.0) + 0.25 * band)), vec3(1.0), 0.35);
+    vec3  around = mix(look(s + n * (max(d, 0.0) + 0.25 * b)), vec3(1.0), 0.35);
     vec3  sun    = normalize(vec3(normalize(vec2(-0.35, -1.0)) * 0.8, 0.6));
     vec3  mid    = normalize(sun + vec3(0.0, 0.0, 1.0));
     float f      = 0.96 * pow(1.0 - N.z, 5.0);

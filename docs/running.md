@@ -275,12 +275,12 @@ Over something bright, an island's text turns dark so it stays readable. Popover
 theme = "glass"
 
 [glass]
-band = 32          # how far in from the edge the bevel curves down, logical px
+band = 24          # how far in from the edge the bevel curves down, logical px
 thickness = 32     # how thick the glass is: thicker bends more, and folds near the rim
-gap = 12           # how high it floats over what's behind: wider turns more of it over
+gap = 24           # how high it floats over what's behind: wider turns more of it over
 chroma = 0.2       # red and blue bending apart
-rim = 0.4          # the edge's reflection and its lit side
-frost = 1          # 0 is clear glass
+rim = 1            # the edge's reflection and its lit side
+frost = 2          # 0 is clear glass
 depth = 2          # 1 to 6: how far the frost reaches
 tint = 0.35        # 0 to 1: how much it takes the color behind it
 ink = "readable"   # "own", "invert" or "readable": grey text and symbols over glass
