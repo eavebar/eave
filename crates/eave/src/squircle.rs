@@ -388,11 +388,28 @@ impl Corner {
 /// How far a piece of a flattened curve may be from the curve, in pixels.
 pub const TOLERANCE: f32 = 0.005;
 
-/// The outline as polygons: its curves cut into lines short enough to stay on them.
-#[derive(Default)]
-pub struct Polygons(pub Vec<Vec<Point>>);
+/// The outline as polygons: its curves cut into lines short enough to stay on them, within
+/// [`TOLERANCE`] unless cut [`Polygons::within`] another.
+pub struct Polygons(pub Vec<Vec<Point>>, f32);
+
+impl Default for Polygons {
+    fn default() -> Self {
+        Self::within(TOLERANCE)
+    }
+}
 
 impl Polygons {
+    /// These polygons, as they are.
+    #[cfg(test)]
+    pub fn new(polygons: Vec<Vec<Point>>) -> Self {
+        Self(polygons, TOLERANCE)
+    }
+
+    /// None yet, with curves cut to stay within `tolerance` of them.
+    pub fn within(tolerance: f32) -> Self {
+        Self(Vec::new(), tolerance)
+    }
+
     fn last(&mut self) -> Point {
         self.0
             .last()
@@ -420,7 +437,7 @@ impl Sink for Polygons {
             Point::new(p.x - 2.0 * q.x + r.x, p.y - 2.0 * q.y + r.y).distance(Point::ORIGIN)
         };
         let most = bend(from, a, b).max(bend(a, b, to));
-        let pieces = ((0.75 * most / TOLERANCE).sqrt().ceil() as usize).clamp(1, 1024);
+        let pieces = ((0.75 * most / self.1).sqrt().ceil() as usize).clamp(1, 1024);
         for piece in 1..=pieces {
             let t = piece as f32 / pieces as f32;
             let u = 1.0 - t;
@@ -435,7 +452,7 @@ impl Sink for Polygons {
 }
 
 /// How close `inner` comes to `outer`: the shortest distance from any point of one outline, as
-/// flattened, to the other's edges. Exact to [`TOLERANCE`], plus how finely `inner` is cut.
+/// flattened, to the other's edges. Exact to how finely they're cut.
 pub fn clearance(outer: &Polygons, inner: &Polygons) -> f32 {
     // Flattened finely, each outline has hundreds of pieces, and the walls ask this hundreds of
     // times as they feel their way (D-119). So both go in runs with a box round each, the pairs of

@@ -20,6 +20,10 @@ pub struct Walls {
     pub corners: [CornerShape; 2],
 }
 
+/// How far the outlines may stray from their curves here: plenty, next to `WALL_GAP`, and far
+/// fewer pieces to measure than the squircle's own tolerance (D-119).
+const CUT: f32 = 0.05;
+
 /// Which way an island moves toward a wall.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Toward {
@@ -68,7 +72,7 @@ fn room(
     }
     // The screen, from its top edge on down, far enough that only its top corners count.
     let far = 1.0e4;
-    let mut screen = Polygons::default();
+    let mut screen = Polygons::within(CUT);
     squircle::rectangle(
         &mut screen,
         Rectangle::new(Point::new(0.0, top), Size::new(width, far)),
@@ -86,7 +90,7 @@ fn room(
     };
     // How much further than the gap it is from the screen, moved `by` that way.
     let room = |by: f32| {
-        let mut island = Polygons::default();
+        let mut island = Polygons::within(CUT);
         let moved = Rectangle::new(
             Point::new(shape.x + way.0 * by, shape.y + way.1 * by),
             shape.size(),

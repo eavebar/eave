@@ -408,7 +408,7 @@ mod tests {
             let off = drawn.0[0]
                 .iter()
                 .map(|point| {
-                    let one = Polygons(vec![vec![*point]]);
+                    let one = Polygons::new(vec![vec![*point]]);
                     squircle::clearance(&exact, &one)
                 })
                 .fold(0.0f32, f32::max);
