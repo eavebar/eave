@@ -260,7 +260,7 @@ bind = SUPER, M, event, eave-action volume mute
 
 ## Glass
 
-`theme = "glass"` makes the islands liquid glass: what's behind them shows through, frosted and bent at their edges ([D-112](decisions.md)). That takes `hypr-eave`, a Hyprland plugin in this repository. `eave-build` builds it against the Hyprland you have whenever Hyprland's headers are installed (`pkg-config hyprland`; on Arch they come with the `hyprland` package). It installs it as `~/.local/share/eave/hypr-eave.so`. Nothing loads it for you: add it to Hyprland's config. While Hyprland doesn't load it, every `eave-build` prints this line, and `eave doctor` warns:
+`theme = "glass"` makes the islands liquid glass: what's behind them shows through, lightly frosted and magnified, and bent at their edges ([D-112](decisions.md)). That takes `hypr-eave`, a Hyprland plugin in this repository. `eave-build` builds it against the Hyprland you have whenever Hyprland's headers are installed (`pkg-config hyprland`; on Arch they come with the `hyprland` package). It installs it as `~/.local/share/eave/hypr-eave.so`. Nothing loads it for you: add it to Hyprland's config. While Hyprland doesn't load it, every `eave-build` prints this line, and `eave doctor` warns:
 
 ```lua
 -- hyprland.lua (Hyprland 0.56+)
@@ -275,11 +275,12 @@ Over something bright, an island's text turns dark so it stays readable. Popover
 theme = "glass"
 
 [glass]
-band = 12          # how far in from the edge it bends, logical px
-strength = 22      # how far what's behind moves at the edge
-chroma = 0.18      # red and blue bending apart
+band = 16          # how far in from the edge it bends, logical px
+strength = 24      # how far past the edge the rim reaches for what it shows
+lens = 0.04        # 0 to 0.25: how much the middle magnifies
+chroma = 0.12      # red and blue bending apart
 rim = 0.7          # the lit edge
-frost = 2          # 0 is clear glass
+frost = 0.5        # 0 is clear glass
 depth = 3          # 1 to 6: how far the frost reaches
 tint = 0.35        # 0 to 1: how much it takes the color behind it
 ink = "readable"   # "own", "invert" or "readable": grey text and symbols over glass
