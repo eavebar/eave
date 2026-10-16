@@ -2783,7 +2783,7 @@ Tuning those numbers couldn't fix it. For a morph to flow, the outline itself ha
 
 ## D-119: Where a morph's frame goes (measured, no change)
 
-**Status:** measurement (2026-10-16). Nothing changed; it does D-99's next step and finds a stall.
+**Status:** accepted (2026-10-16). It does D-99's next step: a measurement, and one fix, the wall stall (*Fixed* below). The rest is open.
 
 **Question:** D-99 found that every GPU frame costs ~1.5 ms of eave's CPU and ~1.3 ms of Hyprland's, whatever moves, but not where it goes. D-118's body costs ~30 µs a frame (6.5 µs stepping, ~25 µs tessellating its path), so the room to optimise morphs, if any, is elsewhere.
 
@@ -2817,7 +2817,15 @@ Without the stall, a frame is ~1.55 ms, D-99's figure. On tiny-skia the stall is
 - **The morph itself is small:** the body plus every canvas path is ~0.14 ms a frame.
 
 **What could be done**, by what it would save:
-1. **Fix the wall stall.** Make `clearance` cheap: compare squared distances and take one root at the end, and skip the screen's segments whose bounding box is further than the closest so far (only its top corners are ever near). That's likely 10–100× less, which brings 65 ms under a frame. Separately, find why the island moves by a third of a pixel when its popover opens. Cost: small, in `squircle.rs`, `wall.rs` and the island's layout; `wall.rs` has tests to keep.
+1. **Fix the wall stall.** Done, see *Fixed*. Still open: why the island moves by a third of a pixel when its popover opens. It now costs under a millisecond, not a stall, but it shouldn't move.
 2. **Try Vulkan on Asahi.** Install Mesa's Asahi Vulkan driver and measure again. It may cut part of the ~0.85 ms of submit and present, or not: Asahi's GL is mature. Cost: none in code. If it helps, `docs/platform.md` says to install it. CachyOS likely has Vulkan already.
 3. **Reuse the frosted backdrop in hypr-eave** while nothing under the bar is damaged. This could save up to about half of Hyprland's frame while only the bar moves. Cost: the plugin has to tell damage under its surface from damage on it. This is the hardest of the four.
 4. **Layout and tessellation** (~0.4 ms together): leave them. They're small, and cutting them means caching inside iced.
+
+**Fixed: the wall stall.** Three changes, in `squircle.rs` and `wall.rs`, no dependency:
+- `clearance` puts both outlines in boxed runs of 16 pieces, measures the pairs of runs nearest first in squared distances, and stops at the first pair whose boxes are further apart than the closest found. A test checks it gives exactly what measuring every pair gives.
+- `wall::room` steps by the room it has left past the gap instead of half a pixel at a time. Moved no further than that, nothing of the island can come within the gap, so it still never steps past a corner. It gets there in a few steps instead of ~130.
+- The walls cut outlines to 0.05 px instead of the squircle's 0.005: next to a 2 px gap that's plenty, and about a third as many pieces each side.
+
+The rooms come out within 0.015 px of before. Working out one island's rooms took ~25 ms in a test and 60–70 ms in the bar. Now it takes ~0.1 ms in a test and 0.4–1 ms in the bar (CPU 0.3–0.9 ms; the bar's main thread runs slower than a test's, likely on an efficiency core). The morph loop's eave went from 27.5–28.9% of a core to 24.3%, measured once, with the user at the computer.
+
