@@ -156,7 +156,7 @@ systemctl --user enable --now eave-rebuild.path   # eave-build init put the unit
 
 ## Hyprland's layer animation
 
-Turn off Hyprland's `layersIn` animation, or the bar squeezes and stretches whenever a popover opens or closes ([D-122](decisions.md)):
+Turn off Hyprland's `layersIn` animation, or the bar squeezes and stretches whenever a popover opens or closes ([D-123](decisions.md)):
 
 ```lua
 -- hyprland.lua (Hyprland 0.56+)

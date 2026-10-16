@@ -363,7 +363,7 @@ fn plugin_check(hypr_eave: HyprEave, glass: bool) -> Check {
 }
 
 /// Whether Hyprland animates a layer surface's size, which squeezes the bar each time a popover
-/// opens or closes (D-122). `lasting` is how long `layersIn` takes, `None` when it's off.
+/// opens or closes (D-123). `lasting` is how long `layersIn` takes, `None` when it's off.
 fn layers_animation_check(lasting: Option<Duration>) -> Check {
     match lasting {
         None => Check::good(

@@ -2870,7 +2870,7 @@ The rooms come out within 0.015 px of before. Working out one island's rooms too
 - **When to drop it:** when a wgpu-hal release disables the scissor before that blit, or when eave runs on Vulkan everywhere.
 - **Not re-measured:** the CPU figures above are from before the fix. The fix only widens the blit, so they should still hold.
 
-## D-122: Hyprland's `layersIn` animation squeezes the bar; `eave doctor` warns
+## D-123: Hyprland's `layersIn` animation squeezes the bar; `eave doctor` warns
 
 **Status:** accepted (2026-10-16).
 
