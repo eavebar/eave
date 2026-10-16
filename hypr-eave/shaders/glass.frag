@@ -53,7 +53,7 @@ uniform float bevels[MAX];
 // The controls eave cut into the glass, or stood on it (D-126): four texels each, a row a relief
 // (Render.cpp's `records`), in s px. `unit` is s px to a logical px.
 const int MAX_RELIEFS = 64;
-const float WELL_TONE = 0.08;
+const float WELL_TONE = 0.11;
 const float BEAD_TONE = 0.14;
 uniform highp sampler2D reliefs;
 uniform int   reliefCount;
