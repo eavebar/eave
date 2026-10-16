@@ -464,17 +464,17 @@ pub struct Glass {
 impl Default for Glass {
     fn default() -> Self {
         Self {
-            band: 24.0,
-            thickness: 48.0,
-            chroma: 0.15,
-            rim: 1.0,
-            frost: 0.25,
-            depth: 3,
+            band: 32.0,
+            thickness: 32.0,
+            chroma: 0.2,
+            rim: 0.4,
+            frost: 1.0,
+            depth: 2,
             tint: 0.35,
             ink: Ink::Readable,
-            contrast: 4.5,
+            contrast: 7.0,
             ink_blur: 12.0,
-            gap: 24.0,
+            gap: 12.0,
         }
     }
 }
@@ -1133,7 +1133,7 @@ fn glass(value: toml::Value, warnings: &mut Vec<String>) -> Glass {
             "gap" => number(&mut glass.gap, 0.0, 128.0),
             "depth" => match value.as_integer() {
                 Some(depth @ 1..=6) => glass.depth = depth as u32,
-                _ => warnings.push("`glass.depth` must be 1 to 6, using 3".into()),
+                _ => warnings.push("`glass.depth` must be 1 to 6, using 2".into()),
             },
             "ink" => match value.as_str() {
                 Some("own") => glass.ink = Ink::Own,
