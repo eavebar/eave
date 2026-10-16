@@ -37,14 +37,11 @@
     every theme, so the compositor can draw the pointer under them, the way
     a physical notch hides it. A client without glass sends only those.
 
-    Since version 3 the client can also say how much the middle of an
-    island magnifies (set_lens).
-
     When the global is absent the client draws as it would anyway: nothing
     depends on it.
   </description>
 
-  <interface name="eave_glass_manager_v1" version="3">
+  <interface name="eave_glass_manager_v1" version="2">
     <description summary="glass for eave's surfaces"/>
 
     <request name="destroy" type="destructor">
@@ -67,7 +64,7 @@
     </request>
   </interface>
 
-  <interface name="eave_glass_surface_v1" version="3">
+  <interface name="eave_glass_surface_v1" version="2">
     <description summary="the glass of one surface">
       All requests set double-buffered state, applied on the surface's next
       wl_surface.commit, so what they say lands with the frame it describes.
@@ -125,26 +122,16 @@
         Lengths are logical pixels. The initial value is the compositor's
         defaults.
       </description>
-      <arg name="band" type="fixed" summary="how far in from the edge the glass bends"/>
-      <arg name="strength" type="fixed" summary="how far the lookup moves at the very edge"/>
+      <arg name="band" type="fixed" summary="how far in from the edge the glass's bevel curves down"/>
+      <arg name="thickness" type="fixed" summary="how thick the glass is: the backdrop bends through it"/>
       <arg name="chroma" type="fixed" summary="spread between red and blue, a fraction of the bend"/>
-      <arg name="rim" type="fixed" summary="brightness of the lit edge"/>
+      <arg name="rim" type="fixed" summary="brightness of the edge's reflection and its lit side"/>
       <arg name="frost" type="fixed" summary="spread of each blur step, 0 for clear glass"/>
       <arg name="depth" type="uint" summary="how many times the blur halves the backdrop, 1 to 6"/>
       <arg name="tint" type="fixed" summary="how much the glass takes the color behind it, 0 to 1"/>
       <arg name="ink" type="uint" enum="ink" summary="what grey ink over glass looks like"/>
       <arg name="contrast" type="fixed" summary="with ink readable: the contrast ratio it reaches"/>
       <arg name="ink_blur" type="fixed" summary="how wide an area the ink's color is chosen over"/>
-    </request>
-
-    <request name="set_lens" since="3">
-      <description summary="how much an island's middle magnifies">
-        Each pixel of an island's glass shows what's behind it this fraction
-        nearer the island's middle, 0 to 0.25: the whole island is a lens.
-        set_look leaves it as it is. The initial value is the compositor's
-        default.
-      </description>
-      <arg name="lens" type="fixed"/>
     </request>
 
     <enum name="ink">

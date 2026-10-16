@@ -30,8 +30,7 @@ uniform float sigma;         // the field's gaussian, s px
 uniform float band;          // s px
 
 uniform float fade;          // the surface's fade-in or -out
-uniform float strength;      // s px
-uniform float lens;          // how much the middle magnifies, a fraction
+uniform float thickness;     // s px
 uniform float chroma;
 uniform float rim;
 uniform float tint;
@@ -93,13 +92,17 @@ float erfinv(float x) {
     return p * x;
 }
 
-// How far the bevel pulls in what's past the edge, for a pixel `d` s px in from it: 1 at the
-// edge, falling to 0 a band in, with no slope there. The lookup moves out by this times
-// `strength`, faster and faster toward the edge, so what's past it is squeezed into the rim and
-// never folds over: the side of a convex lens.
-float bevel(float d) {
+// The glass is a slab lying on the backdrop, `thickness` deep, whose edge curves down to nothing
+// over a band: a squircle's quarter, steep at the very edge and flat a band in. Its height, and
+// its slope, for a pixel `d` s px in from the edge.
+float profile(float d) {
     float e = 1.0 - clamp(d / band, 0.0, 1.0);
-    return e * e;
+    return thickness * pow(1.0 - e * e * e * e, 0.25);
+}
+
+float steepness(float d) {
+    float e = 1.0 - clamp(d / band, 1e-3, 1.0);
+    return thickness / band * e * e * e * pow(1.0 - e * e * e * e, -0.75);
 }
 
 // The glass behind s, much more blurred than the glass itself, and without its bend: what the
@@ -115,12 +118,11 @@ vec3 wideLook(vec2 s) {
 }
 
 // Which island s belongs to: the nearest one eave said may turn to glass, within `margin` of it
-// (an island's jelly and squish reach a little past the shape it reports), with its box, its fill
-// and which way its ink goes. False for none, and inside solid content, whatever it's over.
-bool region(vec2 s, out vec4 box, out vec3 fill, out float darker) {
+// (an island's jelly and squish reach a little past the shape it reports), with its fill and which
+// way its ink goes. False for none, and inside solid content, whatever it's over.
+bool region(vec2 s, out vec3 fill, out float darker) {
     bool  found   = false;
     float nearest = margin;
-    box           = vec4(0.0);
     fill          = vec3(0.0);
     darker        = 0.0;
     for (int i = 0; i < MAX; i++) {
@@ -136,7 +138,6 @@ bool region(vec2 s, out vec4 box, out vec3 fill, out float darker) {
         if (d <= nearest) {
             nearest = d;
             found   = true;
-            box     = b;
             fill    = fills[i].rgb;
             darker  = fills[i].w;
         }
@@ -248,16 +249,10 @@ void main() {
     float a = cover(s);
     if (a <= 0.0)
         discard;
-    vec4  box;
     vec3  fill;
     float darker;
-    if (!region(s, box, fill, darker))
+    if (!region(s, fill, darker))
         discard; // not an island eave said may turn to glass, or content over one
-
-    // The whole island is a lens: each pixel looks a little nearer its middle, so what's behind
-    // the middle is magnified.
-    vec2 middle = (box.xy + box.zw) * 0.5;
-    vec2 seen   = middle + (s - middle) * (1.0 - lens);
 
     // How deep into the glass the pixel is, from the field: 0.5 on the edge, all but 1 a band
     // in. Its slope points out of the glass. The field is smooth, so both change smoothly from
@@ -265,32 +260,38 @@ void main() {
     // integral, so it gives back the distance in.
     float h = height(s);
     if (h >= 0.995) {
-        put(s, look(seen), a, fill, darker); // deep inside, only the lens
+        put(s, look(s), a, fill, darker); // deep inside, where the glass is flat
         return;
     }
     vec2  e     = vec2(fieldStep, 0.0);
     vec2  slope = vec2(height(s + e.xy) - height(s - e.xy), height(s + e.yx) - height(s - e.yx));
     float d     = sigma * 1.41421356 * erfinv(clamp(h * 2.0 - 1.0, -0.995, 0.995)); // s px in
-    float x     = clamp(d / band, 0.0, 1.0); // 0 at the edge, 1 a band in
     vec2  n     = length(slope) > 1e-6 ? -normalize(slope) : vec2(0.0);
 
-    // The bevel: the lookup moves out, past the edge, so the rim shows what's around the island,
-    // squeezed. Red and blue move apart with it.
-    vec2 offset = n * strength * bevel(d);
+    // The glass's surface there, facing up (+z, at the viewer) and, down the bevel, out. The view
+    // ray goes straight down into it, bends by Snell's law (glass, 1.5), and meets the backdrop
+    // under the slab: where it does is what the pixel shows. A convex edge bends it in, so what's
+    // under the bevel is magnified, and near a thick slab's rim turned over, as in a lens.
+    vec3 N      = normalize(vec3(n * steepness(d), 1.0));
+    vec3 R      = refract(vec3(0.0, 0.0, -1.0), N, 1.0 / 1.5);
+    vec2 offset = R.xy / max(-R.z, 1e-3) * profile(d);
+    // Red bends a little less than blue.
     vec3 col;
-    col.r = look(seen + offset * (1.0 + chroma)).r;
-    col.g = look(seen + offset).g;
-    col.b = look(seen + offset * (1.0 - chroma)).b;
+    col.r = look(s + offset * (1.0 - chroma)).r;
+    col.g = look(s + offset).g;
+    col.b = look(s + offset * (1.0 + chroma)).b;
 
-    // The rim, lit from above and a little left: a thin bright line right at the edge, softer on
-    // the far side, and a faint shadow just inside it, where the bevel turns away from the light.
-    vec2  sun    = normalize(vec2(-0.35, -1.0));
-    float toward = max(dot(n, sun), 0.0);
-    float away   = max(dot(n, -sun), 0.0);
-    float line   = pow(1.0 - x, 8.0);
-    float inner  = smoothstep(0.0, 0.15, x) * (1.0 - smoothstep(0.15, 0.5, x));
-    col += rim * (toward + 0.4 * away) * line;
-    col *= 1.0 - 0.25 * rim * (0.5 + 0.5 * away) * inner;
+    // The light off the same surface: what it reflects of the bright surroundings, by Schlick's
+    // Fresnel, from none straight on to all of it at a grazing angle, so a thin bright line runs
+    // all around the steep edge; and a highlight on the side that faces the light, above and a
+    // little left. Both are what they'd be on the flat top less what they are there (the 4% glass
+    // reflects straight on is in the frost), so they fade out where the bevel does.
+    vec3  sun  = normalize(vec3(normalize(vec2(-0.35, -1.0)) * 0.8, 0.6));
+    vec3  mid  = normalize(sun + vec3(0.0, 0.0, 1.0));
+    float f    = 0.96 * pow(1.0 - N.z, 5.0);
+    float hl   = max(pow(max(dot(N, mid), 0.0), 40.0) - pow(mid.z, 40.0), 0.0);
+    col        = mix(col, vec3(1.0), clamp(rim * f, 0.0, 1.0));
+    col += rim * 0.6 * hl;
 
     put(s, col, a, fill, darker);
 }
