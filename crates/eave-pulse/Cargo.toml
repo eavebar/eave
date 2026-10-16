@@ -1,6 +1,6 @@
 [package]
 name = "eave-pulse"
-version = "0.1.0"
+version = "0.1.1"
 description = "Audio for eave plugins, over the PulseAudio protocol (PipeWire's pipewire-pulse)"
 edition.workspace = true
 license.workspace = true
