@@ -2832,7 +2832,7 @@ The rooms come out within 0.015 px of before. Working out one island's rooms too
 
 ## D-120: Anti-aliased canvas paths on the GPU (4× MSAA)
 
-**Status:** proposed (2026-10-16), waiting for the user to judge it by eye.
+**Status:** accepted (2026-10-16). The user judged the morph "much better" with it.
 
 **Problem:** on wgpu, the islands' outlines and D-118's body looked jagged, most of all while morphing, when the stair-steps crawl along the moving edge. iced_wgpu draws canvas paths as plain triangles and smooths them only with MSAA, and iced_layershell's `Settings::antialiasing` defaults to off. Quads and text smooth themselves, and tiny-skia always anti-aliases paths, so only the GPU renderer's paths were affected.
 
