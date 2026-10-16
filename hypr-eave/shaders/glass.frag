@@ -53,6 +53,8 @@ uniform float bevels[MAX];
 // The controls eave cut into the glass, or stood on it (D-126): four texels each, a row a relief
 // (Render.cpp's `records`), in s px. `unit` is s px to a logical px.
 const int MAX_RELIEFS = 64;
+const float WELL_TONE = 0.08;
+const float BEAD_TONE = 0.14;
 uniform highp sampler2D reliefs;
 uniform int   reliefCount;
 uniform float unit;
@@ -127,11 +129,12 @@ float steepness(float d, float b) {
 // edge rounds down over its own small bevel, the slab's squircle quarter, steep at the rim and
 // flat a few px in: so the glass bends at a control's walls the way it does at the island's, a
 // line of light running round them. A press deepens a well, most around the finger.
-void relief(vec2 s, out float z, out vec2 slope, out float milk, out float lit) {
+void relief(vec2 s, out float z, out vec2 slope, out float milk, out float lit, out float tone) {
     z     = 0.0;
     slope = vec2(0.0);
     milk  = 0.0;
     lit   = 0.0;
+    tone  = 0.0;
     for (int i = 0; i < MAX_RELIEFS; i++) {
         if (i >= reliefCount)
             break;
@@ -167,6 +170,9 @@ void relief(vec2 s, out float z, out vec2 slope, out float milk, out float lit) 
         // Up the bevel is in, against `out_`.
         slope += depth * steep / b * -out_ * inside;
         milk = max(milk, on.x * inside * clamp(on.y - s.x + 0.5, 0.0, 1.0));
+        // A control is a shade lighter than the glass round it, so it reads even where the
+        // backdrop is plain: a well a little, a bead more. A row level with the glass, none.
+        tone = max(tone, inside * (shape.y > 0.5 ? BEAD_TONE : (shape.z < 0.0 ? WELL_TONE : 0.0)));
         float glow = 30.0 * unit;
         lit = max(lit, bright * inside * exp(-dot(toLight, toLight) / (2.0 * glow * glow)));
     }
@@ -267,12 +273,12 @@ vec3 body(vec3 glass) {
 // way is the island's (eave decides it over what's behind the whole island, with hysteresis), never
 // the pixel's, so it can't flip partway through a letter; the glass gives way instead, so the ink
 // can always reach it.
-vec3 shade(vec2 s, vec3 glass, vec3 fill, bool lighterInk, float milk, float lit) {
+vec3 shade(vec2 s, vec3 glass, vec3 fill, bool lighterInk, float milk, float lit, float tone) {
     vec4 t      = layer(s);
     vec3 c      = t.rgb / max(t.a, 1e-4);
     // Grey ink follows the glass; colored content keeps its colors.
     float grey  = 1.0 - smoothstep(0.08, 0.25, chromaOf(c));
-    vec3 b      = body(glass);
+    vec3 b      = mix(body(glass), vec3(1.0), tone);
     vec3 behind = body(wideLook(s));
     if (ink == 2) {
         float y = dot(pow(behind, vec3(2.2)), W);
@@ -318,17 +324,17 @@ vec3 shade(vec2 s, vec3 glass, vec3 fill, bool lighterInk, float milk, float lit
 }
 
 // Replaces the surface's pixel: shaded once, or both ways while the island's ink turns.
-void put(vec2 s, vec3 glass, float a, vec3 fill, float darker, float milk, float lit) {
+void put(vec2 s, vec3 glass, float a, vec3 fill, float darker, float milk, float lit, float tone) {
     // Its own ink goes the way it's drawn.
     if (ink == 0)
         darker = luma(fill) >= 0.5 ? 1.0 : 0.0;
     vec3 col;
     if (darker <= 0.0)
-        col = shade(s, glass, fill, true, milk, lit);
+        col = shade(s, glass, fill, true, milk, lit, tone);
     else if (darker >= 1.0)
-        col = shade(s, glass, fill, false, milk, lit);
+        col = shade(s, glass, fill, false, milk, lit, tone);
     else
-        col = mix(shade(s, glass, fill, true, milk, lit), shade(s, glass, fill, false, milk, lit), darker);
+        col = mix(shade(s, glass, fill, true, milk, lit, tone), shade(s, glass, fill, false, milk, lit, tone), darker);
     a *= fade;
     fragColor = vec4(col * a, a);
 }
@@ -362,7 +368,7 @@ void bevelAt(vec2 s, vec4 chan, float h, float b, out float d, out vec2 n) {
 }
 
 // What the bent ray shows, and the light off the surface it bent at.
-void lightUp(vec2 s, vec2 offset, vec3 N, vec2 n, float d, float b, float a, vec3 fill, float darker, float milk, float lit) {
+void lightUp(vec2 s, vec2 offset, vec3 N, vec2 n, float d, float b, float a, vec3 fill, float darker, float milk, float lit, float tone) {
     // Red bends a little less than blue.
     vec3 col;
     col.r = look(s + offset * (1.0 - chroma)).r;
@@ -384,7 +390,7 @@ void lightUp(vec2 s, vec2 offset, vec3 N, vec2 n, float d, float b, float a, vec
     col          = mix(col, around, clamp(rim * f, 0.0, 1.0));
     col += rim * 0.4 * shine;
 
-    put(s, col, a, fill, darker, milk, lit);
+    put(s, col, a, fill, darker, milk, lit, tone);
 }
 
 void main() {
@@ -404,12 +410,12 @@ void main() {
     // from pixel to pixel, around corners too. By a straight edge the field is the gaussian's
     // integral, so it gives back the distance in.
     float h = height(s, chan);
-    float rz, milk, lit;
+    float rz, milk, lit, tone;
     vec2  rslope;
-    relief(s, rz, rslope, milk, lit);
+    relief(s, rz, rslope, milk, lit, tone);
     bool shaped = rz != 0.0 || dot(rslope, rslope) > 0.0;
     if (h >= 0.995 && !shaped) {
-        put(s, look(s), a, fill, darker, milk, lit); // deep inside, where the glass is flat
+        put(s, look(s), a, fill, darker, milk, lit, tone); // deep inside, where the glass is flat
         return;
     }
     // Deep inside, on a control: the slab is flat there, and the control shapes it alone.
@@ -428,5 +434,5 @@ void main() {
     vec3  N      = normalize(vec3(n * slab - rslope, 1.0));
     vec3  R      = refract(vec3(0.0, 0.0, -1.0), N, 1.0 / 1.5);
     vec2  offset = R.xy / max(-R.z, 1e-3) * (max(profile(d, b) + rz, 0.0) + gap);
-    lightUp(s, offset, N, n, d, b, a, fill, darker, milk, lit);
+    lightUp(s, offset, N, n, d, b, a, fill, darker, milk, lit, tone);
 }
