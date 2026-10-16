@@ -181,6 +181,11 @@ pub enum Placement {
 }
 
 impl<'a, M> Island<'a, M> {
+    /// Whether its popover is open: one closing no longer keeps the island to itself.
+    fn popover_open(&self) -> bool {
+        self.popover.as_ref().is_some_and(|popover| popover.open)
+    }
+
     pub fn new(items: impl IntoIterator<Item = (u64, Element<'a, M>)>) -> Self {
         let (keys, items) = items.into_iter().unzip();
         Self {
@@ -935,7 +940,7 @@ impl Motion {
 
     /// Plays the nudges it hasn't seen yet, with where each item starts across the surface and
     /// how wide it is. A new island only notes them: they happened before it. A held island, or
-    /// one with a popover, lets them pass.
+    /// one with an open popover, lets them pass.
     fn nudges<N: Into<NudgeRequest>>(
         &mut self,
         nudges: impl IntoIterator<Item = (u64, (u64, N))>,
@@ -948,7 +953,7 @@ impl Motion {
             newest = newest.max(number);
             if seen.is_some_and(|seen| number > seen)
                 && self.press.is_none()
-                && !self.popover.present
+                && !self.popover.open
             {
                 let request = nudge.into();
                 self.nudge(request, span(key), now);
@@ -2458,8 +2463,9 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         viewport: &Rectangle,
     ) {
         let shown = tree.state.downcast_ref::<State>().toggle_shown;
-        // Items under a popover are hidden, and stay out of it.
-        if self.popover.is_none() {
+        // Items under an open popover are hidden, and stay out of it. One closing gives them back
+        // at once: they fade back in, and the island takes clicks while it lands.
+        if !self.popover_open() {
             for (index, ((item, tree), layout)) in self
                 .items
                 .iter_mut()
@@ -2569,7 +2575,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
             // Watched whether or not an item handled it: the island reacts to every press on it.
             Event::Mouse(mouse::Event::ButtonPressed(
                 mouse::Button::Left | mouse::Button::Right,
-            )) if self.popover.is_none() => {
+            )) if !self.popover_open() => {
                 if let Some(at) = cursor.position_over(own) {
                     motion.press(at);
                 }
@@ -2624,7 +2630,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Island<'_, M> {
         viewport: &Rectangle,
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
-        if self.popover.is_some() {
+        if self.popover_open() {
             return mouse::Interaction::None;
         }
         let shown = tree.state.downcast_ref::<State>().toggle_shown;
@@ -2852,8 +2858,9 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
             }
         }
         // A press anywhere on the shape is the popover's, handled or not: it isn't a click on the
-        // bar, which would close it.
+        // bar, which would close it. One closing lets it through to what's under it.
         if let Event::Mouse(mouse::Event::ButtonPressed(_)) = event
+            && popover.open
             && cursor.is_over(state.motion.edges.rect())
         {
             shell.capture_event();
@@ -2886,7 +2893,9 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
         let state = self.tree.state.downcast_ref::<State>();
-        if !cursor.is_over(state.motion.edges.rect()) {
+        // Closing, the shape keeps nothing from what's under it.
+        let open = self.island.popover.as_ref().is_some_and(|popover| popover.open);
+        if !open || !cursor.is_over(state.motion.edges.rect()) {
             return mouse::Interaction::None;
         }
         let inner = match (&self.island.popover, &state.panel) {
@@ -3302,12 +3311,14 @@ mod tests {
 
         popover(&mut motion, false, panel, true);
         let mut items_while_panel = false;
-        run(&mut motion, Instant::now(), |motion| {
+        let frames = run(&mut motion, Instant::now(), |motion| {
             if both_show(motion) {
                 items_while_panel = true;
             }
         });
         assert!(!items_while_panel, "the items wait for the panel to go");
+        // Closed, the island is the bar's again: the last of the body's wobble isn't waited out.
+        assert!(frames < 45, "back in {frames} frames");
         assert_eq!(motion.edges.rect(), island);
         assert_eq!(motion.item(1, 10.0), (0.0, 1.0));
         assert_eq!(motion.popover.panel.value, 0.0);
