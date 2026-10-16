@@ -40,7 +40,7 @@ use crate::glass;
 use crate::hand::{self, rubber_band};
 use crate::jelly::{self, Jelly, Side};
 use crate::pour;
-use crate::spring::{FADE, HAND, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
+use crate::spring::{FADE, HAND, MAKE_WAY, MAX_FRAME, MORPH, REACT, REST_DISTANCE, Spring};
 use crate::squircle::{self, CornerShape, squircle_corners, warp};
 use crate::squish::{self, Squish};
 use crate::theme::{self, Palette};
@@ -750,7 +750,8 @@ struct PopoverMotion {
     arrived: bool,
     /// How much the island's items show: they make way for the panel.
     items: Spring,
-    /// How much the panel's content shows.
+    /// How much the panel's content shows. It rides the morph, dropping into place as it shows
+    /// (D-121).
     panel: Spring,
     /// Whether the content has shown in full since this way of the morph set off. Until then it
     /// waits for the shape to be halfway out of the island; after, the panel only changes size,
@@ -777,7 +778,7 @@ impl Default for PopoverMotion {
             joined: false,
             arrived: false,
             items: Spring::new(1.0, FADE),
-            panel: Spring::new(0.0, FADE),
+            panel: Spring::new(0.0, MORPH),
             out: false,
             key: None,
             hovered: false,
@@ -951,9 +952,7 @@ impl Motion {
         let mut newest = seen.unwrap_or(0);
         for (key, (number, nudge)) in nudges {
             newest = newest.max(number);
-            if seen.is_some_and(|seen| number > seen)
-                && self.press.is_none()
-                && !self.popover.open
+            if seen.is_some_and(|seen| number > seen) && self.press.is_none() && !self.popover.open
             {
                 let request = nudge.into();
                 self.nudge(request, span(key), now);
@@ -1245,7 +1244,7 @@ impl Motion {
             && new != old
             && popover.present
         {
-            popover.panel = Spring::new(0.0, FADE);
+            popover.panel = Spring::new(0.0, MORPH);
             popover.out = false;
             popover.closed = false;
             true
@@ -1300,6 +1299,7 @@ impl Motion {
                     bounce = true;
                 }
                 popover.items.target = 0.0;
+                popover.items.feel = MAKE_WAY;
                 // Out once, a change of size (another page, a row more) keeps the content: the
                 // halfway rule measures from the island, and a big enough change of size would
                 // cover the content with the island's color until the shape got there.
@@ -1325,6 +1325,7 @@ impl Motion {
                 // It only goes by the stops.
                 self.edges.aim(heading);
                 popover.panel.target = 0.0;
+                popover.items.feel = FADE;
                 popover.items.target = if popover.panel.value < REST_DISTANCE
                     && self.edges.progress(panel, home) > 0.5
                 {
@@ -1336,6 +1337,7 @@ impl Motion {
             _ => {
                 // Any other change of shape.
                 self.edges.aim(home);
+                popover.items.feel = FADE;
                 popover.items.target = 1.0;
                 popover.panel.target = 0.0;
             }
@@ -2160,13 +2162,15 @@ fn draw_island<M>(
                         });
                     }
                     if let Some((panel, tree, layout)) = panel {
-                        let shown = motion.popover.panel.value;
+                        let shown = motion.popover.panel.value.clamp(0.0, 1.0);
                         // The panel's viewport is what of it the shape shows, so a scrolling list or a
                         // text field clips to the shape while it grows.
                         if shown >= REST_DISTANCE
                             && let Some(visible) = layout.bounds().intersection(&shape)
                         {
-                            let moved = motion.pull(shape, layout.bounds().center());
+                            // It drops into place as it shows, and lifts as it goes (D-121).
+                            let drop = Vector::new(0.0, -(1.0 - shown) * theme::CONTENT_DROP);
+                            let moved = motion.pull(shape, layout.bounds().center()) + drop;
                             renderer.with_translation(moved, |renderer| {
                                 glass::frame::translated(moved, || {
                                     panel.as_widget().draw(
@@ -2913,7 +2917,11 @@ impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for Morph<'_, '_
     ) -> mouse::Interaction {
         let state = self.tree.state.downcast_ref::<State>();
         // Closing, the shape keeps nothing from what's under it.
-        let open = self.island.popover.as_ref().is_some_and(|popover| popover.open);
+        let open = self
+            .island
+            .popover
+            .as_ref()
+            .is_some_and(|popover| popover.open);
         if !open || !cursor.is_over(state.motion.edges.rect()) {
             return mouse::Interaction::None;
         }
@@ -3478,6 +3486,31 @@ mod tests {
         assert!(between, "the shape eases down");
         assert!(kept, "the room stays while it moves");
         assert_eq!(motion.reach(), Some(shorter), "and goes once it lands");
+    }
+
+    #[test]
+    fn content_comes_in_while_the_shape_is_on_its_way_and_rides_it() {
+        let island = rect(100.0, 120.0);
+        let panel = Rectangle::new(Point::new(100.0, 6.0), Size::new(260.0, 400.0));
+        let mut motion = settled(island, &[1]);
+        popover(&mut motion, true, panel, true);
+        let mut started = None;
+        let mut half = None;
+        run(&mut motion, Instant::now(), |motion| {
+            let progress = motion.edges.progress(island, panel);
+            let shown = motion.popover.panel.value;
+            if started.is_none() && shown > REST_DISTANCE {
+                started = Some(progress);
+            }
+            if half.is_none() && shown > 0.5 {
+                half = Some(progress);
+            }
+        });
+        let (Some(started), Some(half)) = (started, half) else {
+            panic!("it came in");
+        };
+        assert!(started < 0.85, "starts while the shape moves: at {started}");
+        assert!(half < 0.98, "mostly in before the shape lands: at {half}");
     }
 
     /// Whether the island's items and the panel's content are both drawn.
