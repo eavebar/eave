@@ -83,7 +83,7 @@ The wgpu renderer measured 9.5 MB binary, ~72 MB RSS and ~1% idle CPU at the ske
 
 Update this table when the baseline moves for a good reason, and record that reason in [decisions.md](decisions.md).
 
-For smoothness: watch animations with Hyprland's debug overlay (`hyprctl keyword debug:overlay true`) and check that the bar's CPU only rises *while* something is animating.
+For smoothness: watch animations with Hyprland's debug overlay (`hyprctl keyword debug:overlay true`) and check that the bar's CPU only rises *while* something is animating. To measure smoothness, time the frames: how many refreshes apart they start (one at 120 Hz is 8.3 ms), not their average rate. D-128 did it with timing patched into scratch copies of iced_layershell and iced_wgpu, and the user's config on a second bar.
 
 ## Code rules
 

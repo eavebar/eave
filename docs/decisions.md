@@ -1656,7 +1656,7 @@ A corner that's attached somewhere is out of sight, so whatever it would be does
 **Alternatives:**
 - **Patch iced_layershell too, for a proper event:** two vendored crates, and the event still has to become an existing iced one.
 - **Stop only when the fingers move again:** what D-77 did. A touch that doesn't move went unnoticed.
-- **Upstream first:** worth doing. Drop `vendor/layershellev` once a release has hold gestures.
+- **Upstream first:** worth doing. Drop `vendor/layershellev` once a release has hold gestures. *(Amended by [D-128](#d-128-the-surface-grows-once-and-two-frames-may-be-in-flight): it also carries two frames in flight now.)*
 
 **Cost:** one more global and one gesture object per pointer, and no new dependency (wayland-protocols already has the protocol). A hold only wakes the bar when fingers land.
 
@@ -2843,7 +2843,7 @@ Without the stall, a frame is ~1.55 ms, D-99's figure. On tiny-skia the stall is
 
 **What could be done**, by what it would save:
 1. **Fix the wall stall.** Done, see *Fixed*. Still open: why the island moves by a third of a pixel when its popover opens. It now costs under a millisecond, not a stall, but it shouldn't move.
-2. **Try Vulkan on Asahi.** Install Mesa's Asahi Vulkan driver and measure again. It may cut part of the ~0.85 ms of submit and present, or not: Asahi's GL is mature. Cost: none in code. If it helps, `docs/platform.md` says to install it. CachyOS likely has Vulkan already.
+2. **Try Vulkan on Asahi.** Install Mesa's Asahi Vulkan driver and measure again. It may cut part of the ~0.85 ms of submit and present, or not: Asahi's GL is mature. Cost: none in code. If it helps, `docs/platform.md` says to install it. CachyOS likely has Vulkan already. *(Tried in [D-128](#d-128-the-surface-grows-once-and-two-frames-may-be-in-flight): no smoother, and it flashed with two frames in flight.)*
 3. **Reuse the frosted backdrop in hypr-eave** while nothing under the bar is damaged. This could save up to about half of Hyprland's frame while only the bar moves. Cost: the plugin has to tell damage under its surface from damage on it. This is the hardest of the four.
 4. **Layout and tessellation** (~0.4 ms together): leave them. They're small, and cutting them means caching inside iced.
 
@@ -3043,3 +3043,27 @@ The cause underneath: the dialog is a second solid shape, drawn by the island in
 **Alternatives:** squeezing from the button's style (it has no pointer position); a new spring for the press (`HAND` is what the hand moves); stretching the mark with a separate width spring (two edges say it with what's there).
 
 **Cost:** no dependencies. Nothing at rest: each spring settles and stops asking for frames. *Measured* (Asahi, release, the user's config, tiny-skia, same session, both together with D-125 and D-126): binary 21,065,744 → 21,065,768 bytes; RSS ~23.6 → ~23.7 MB; idle CPU unchanged.
+
+---
+
+## D-128: The surface grows once, and two frames may be in flight
+
+**Status:** accepted (2026-10-16). The user found the popover-to-dialog morph "much smoother" with two frames in flight. The single resize was measured and the user couldn't tell it apart. Amends [D-79](#d-79-fingers-landing-on-the-touchpad-stop-a-fling) (a second patch in `vendor/layershellev`) and closes [D-119](#d-119-where-a-morphs-frame-goes-measured-no-change)'s Vulkan item.
+
+**Problem:** opening the Claude chat dialog out of its popover stuttered. A test bar timed every frame through patched copies of iced_layershell and iced_wgpu, on Asahi at 120 Hz with the user's config. Only 31% of the morph's frames made the next refresh, and 25% took three or more. Building the UI was cheap (`view` and `layout` under 0.1 ms, and only once per message), and glass made no difference (the dark theme measured the same). Two things were wrong:
+- **Resizes mid-morph.** `Bar::fit` sized the surface to what was placed so far, so one open and close resized it about five times (98 → 446 → 542 → 1732 → 1828 px tall, and back). Each resize waits on the compositor: frame gaps of 22–36 ms (median) and up to 140 ms, right where the user is looking.
+- **Frames in series.** Upstream layershellev starts a frame only once the last one's frame callback is back. A frame was ~4.5 ms of CPU and ~3.6 ms of GPU, then compositing. Together that misses 8.3 ms, so a frame landed on every second or third refresh.
+
+**Decision:**
+- **One resize.** `notch::Screen` knows the output's logical height (`notch::logical_height`, shared with the dialog's `center`). While anything is placed on a surface (a popover, notices, the dormer, a dialog), `Bar::fitted_height` makes it at least that tall, and it shrinks only once all of it has folded away. The input region is still only what's out. With the height unknown, it's as before. Measured: two resizes per open and close (98 ↔ 1964 px). A frame on the full-height surface costs what one on the old sizes did (10.0 ms against 9.3–10.7 ms, all included), and Hyprland's CPU didn't rise (33% of a core at the 90th percentile, against 39%).
+- **Two frames in flight** (`FRAMES_AHEAD`, marked `eave patch` in `vendor/layershellev`). After a commit, the next frame may start right away while fewer than two frame callbacks are outstanding. A callback that comes back while a frame is being drawn doesn't take its slot. It can never get ahead of the display by more than one frame, and a surface the compositor stops calling back stops after two. Measured: frames taking three or more refreshes went from 25% to 6%. The cost is up to one frame of extra latency.
+
+**What was tried and left out:**
+- **Vulkan on Asahi** (D-119's item 2). With `vulkan-asahi`, wgpu used Vulkan with explicit sync and the FIFO protocol: a frame's CPU work fell to 3.9 ms and presenting no longer blocked. But pacing didn't improve, with two frames in flight the bar sometimes flashed, and with one it paced worse than GL with two. The user removed the driver. If it's installed, the bar takes Vulkan on its next start, so the flash needs finding before Vulkan is recommended.
+- **`ICED_PRESENT_MODE=no_vsync`:** no change. wgpu's GL backend offers only FIFO on Linux.
+- **EGL swap interval 0** (a wgpu-hal patch). Mesa's `eglSwapBuffers` waits on the last frame's callback, blocking ~4.6 ms (median) with two frames in flight. Without that wait, more frames made the refresh (41% against 31%). But 14% now started under 4 ms after the one before: two frames drawn back to back show nearly the same moment, a refresh apart. The user couldn't tell it from the version without, so it's out. Doing it properly means stamping `RedrawRequested` with the time the frame will be shown, not when it's drawn, inside iced_layershell.
+- **MSAA off:** a little better on GL (52% on time), at the cost of D-120's edges.
+
+**Upstream:** both layershellev patches are worth offering. Drop `vendor/layershellev` once a release has hold gestures and frames in flight.
+
+**Cost:** no dependency. Binary unchanged (21,065,768 bytes either way, default build). A surface with something out is as tall as the screen, which costs nothing at rest: idle, the test bar drew 2 frames in 20 s, made about 5 wakeups a second and used about 0.15% CPU.
