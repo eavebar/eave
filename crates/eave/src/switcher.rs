@@ -8,6 +8,7 @@ use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::{Border, Element, Event, Length, Point, Rectangle, Size, Vector, window};
 
+use crate::glass::frame::{self, Relief, Shape};
 use crate::spring::{Feel, MAX_FRAME, MORPH, Spring};
 use crate::theme;
 
@@ -166,14 +167,33 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Switcher<'_, M> {
 
         if let Some(shown) = tree.state.downcast_ref::<Motion>().shown {
             let origin = layout.bounds().position();
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds: shown + Vector::new(origin.x, origin.y),
-                    border: Border::default().rounded(self.radius),
-                    ..renderer::Quad::default()
-                },
-                p.switcher_mark,
-            );
+            let shown = shown + Vector::new(origin.x, origin.y);
+            // On glass, the current option is a bead on it (D-126).
+            if crate::press::on_glass() {
+                frame::relief(
+                    Relief {
+                        rect: shown,
+                        radius: self.radius.min(shown.height / 2.0),
+                        shape: Shape::Bead,
+                        depth: theme::RELIEF_BEAD,
+                        press: 0.0,
+                        milk: 0.0,
+                        fill_x: shown.x + shown.width,
+                        light: shown.center(),
+                        lit: 0.0,
+                    },
+                    viewport,
+                );
+            } else {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: shown,
+                        border: Border::default().rounded(self.radius),
+                        ..renderer::Quad::default()
+                    },
+                    p.switcher_mark,
+                );
+            }
         }
         let Some(row) = layout.children().next() else {
             return;

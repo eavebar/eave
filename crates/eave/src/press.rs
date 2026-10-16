@@ -3,8 +3,10 @@
 //!
 //! - it squeezes in a few pixels on `HAND`, most on the side the finger is on, and overshoots
 //!   past its rest as it's let go;
-//! - it keeps where the finger is while it's held, and a light that comes up there and fades
-//!   once it's let go, for the glass to draw.
+//! - it keeps where the pointer is over it, and a light there, faint under the pointer and
+//!   bright while it's held, which fades once it's let go;
+//! - with glass, it's cut into it (D-126): a well the press deepens, milky where it's on, with
+//!   the light in it. Its own fills give way, so it's the glass that answers the hand.
 //!
 //! iced's button keeps only whether it's pressed, not where, so this can't live in its style.
 
@@ -15,6 +17,7 @@ use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, r
 use iced::touch;
 use iced::{Element, Event, Length, Point, Rectangle, Size, Transformation, Vector, window};
 
+use crate::glass::frame::{self, Relief, Shape};
 use crate::spring::{FADE, HAND, MAX_FRAME, Spring};
 use crate::theme;
 
@@ -22,6 +25,8 @@ pub struct Press<'a, M> {
     content: Element<'a, M>,
     /// Whether it squeezes: not in the bar, where its island squeezes as a whole.
     squeezes: bool,
+    /// How it shapes the glass, if it does.
+    relief: Option<Spec>,
 }
 
 impl<'a, M> Press<'a, M> {
@@ -29,6 +34,7 @@ impl<'a, M> Press<'a, M> {
         Self {
             content: content.into(),
             squeezes: true,
+            relief: None,
         }
     }
 
@@ -37,6 +43,62 @@ impl<'a, M> Press<'a, M> {
         self.squeezes = squeezes;
         self
     }
+
+    /// Cut into the glass, with corners `radius`: milky `milk` where it's on (D-126).
+    pub fn well(mut self, radius: f32, milk: f32) -> Self {
+        self.relief = Some(Spec {
+            shape: Shape::Well,
+            radius,
+            milk,
+            depth: theme::RELIEF_WELL,
+        });
+        self
+    }
+
+    /// Level with the glass until it's pressed, with corners `radius`: a row of a list, which
+    /// would be a stack of wells otherwise. The light still shows on it.
+    pub fn dimple(mut self, radius: f32) -> Self {
+        self.relief = Some(Spec {
+            shape: Shape::Well,
+            radius,
+            milk: 0.0,
+            depth: 0.0,
+        });
+        self
+    }
+
+    /// A row of a list, or an option: a bead while it's the one in use, level otherwise.
+    pub fn row(self, selected: bool, radius: f32) -> Self {
+        if selected {
+            self.bead(radius)
+        } else {
+            self.dimple(radius)
+        }
+    }
+
+    /// Standing out of the glass, with corners `radius`: what's current (D-126).
+    pub fn bead(mut self, radius: f32) -> Self {
+        self.relief = Some(Spec {
+            shape: Shape::Bead,
+            radius,
+            milk: 0.0,
+            depth: theme::RELIEF_BEAD,
+        });
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Spec {
+    shape: Shape,
+    radius: f32,
+    milk: f32,
+    depth: f32,
+}
+
+/// Whether what's drawn now is on glass, so a control's own fills give way to the glass's.
+pub fn on_glass() -> bool {
+    frame::on()
 }
 
 #[derive(Debug)]
@@ -71,10 +133,21 @@ impl State {
         self.light.target = 1.0;
     }
 
-    fn up(&mut self) {
+    fn up(&mut self, over: bool) {
         self.held = false;
         self.press.target = 0.0;
-        self.light.target = 0.0;
+        self.light.target = if over { theme::HOVER_LIGHT } else { 0.0 };
+    }
+
+    /// The pointer came onto it, or moved on it (`Some`), or left it, while it isn't held.
+    fn hover(&mut self, at: Option<Vector>) {
+        match at {
+            Some(at) => {
+                self.grab = Some(at);
+                self.light.target = theme::HOVER_LIGHT;
+            }
+            None => self.light.target = 0.0,
+        }
     }
 
     /// Advances to `now`. Returns whether another frame is needed.
@@ -119,6 +192,17 @@ impl State {
         Transformation::translate(pivot.x, pivot.y)
             * Transformation::scale(scale)
             * Transformation::translate(-pivot.x, -pivot.y)
+    }
+
+    /// Where `bounds` is drawn, squeezed.
+    pub(crate) fn squeezed(&self, bounds: Rectangle) -> Rectangle {
+        let transformation = self.transformation(bounds);
+        let top_left = bounds.position() * transformation;
+        let scale = transformation.scale_factor();
+        Rectangle::new(
+            top_left,
+            Size::new(bounds.width * scale, bounds.height * scale),
+        )
     }
 }
 
@@ -182,10 +266,40 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Press<'_, M> {
                 viewport,
             );
         };
-        if self.squeezes && state.press.value != 0.0 {
+        let squeezed = self.squeezes && state.press.value != 0.0;
+        if squeezed {
             renderer.with_transformation(state.transformation(layout.bounds()), draw);
         } else {
             draw(renderer);
+        }
+        if let Some(Spec {
+            shape,
+            radius,
+            milk,
+            depth,
+        }) = self.relief
+        {
+            let bounds = layout.bounds();
+            let rect = if squeezed {
+                state.squeezed(bounds)
+            } else {
+                bounds
+            };
+            let light = bounds.position() + state.grab.unwrap_or(Vector::ZERO);
+            frame::relief(
+                Relief {
+                    rect,
+                    radius: radius.min(rect.width / 2.0).min(rect.height / 2.0),
+                    shape,
+                    depth,
+                    press: state.press.value.max(0.0),
+                    milk,
+                    fill_x: rect.x + rect.width,
+                    light,
+                    lit: state.light.value.clamp(0.0, 1.0),
+                },
+                viewport,
+            );
         }
     }
 
@@ -244,8 +358,15 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Press<'_, M> {
             );
             state.grab = Some(at - bounds.position());
             shell.request_redraw();
+        } else if let Some(at) = moved_to.filter(|_| on_glass() && self.relief.is_some()) {
+            // Only the glass draws the light: without it, no frames for it.
+            let over = bounds.contains(at);
+            if over || state.light.target > 0.0 {
+                state.hover(over.then(|| at - bounds.position()));
+                shell.request_redraw();
+            }
         } else if released && state.held {
-            state.up();
+            state.up(cursor.is_over(bounds));
             shell.request_redraw();
         } else if let Event::Window(window::Event::RedrawRequested(now)) = event
             && state.step(*now)
@@ -349,7 +470,7 @@ mod tests {
         let mut state = State::default();
         state.down(Vector::ZERO);
         let now = run(&mut state, Instant::now(), |_| {});
-        state.up();
+        state.up(false);
         let mut past: f32 = 0.0;
         run(&mut state, now, |state| past = past.min(state.press.value));
         assert!(past < -0.01, "it springs back past rest: {past}");

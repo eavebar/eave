@@ -35,7 +35,7 @@ use crate::markdown;
 use crate::meter::Meter;
 use crate::page::Page;
 use crate::pip::Pip;
-use crate::press::Press;
+use crate::press::{Press, on_glass};
 use crate::shortcut;
 use crate::slider::Slider;
 use crate::slot::Slot;
@@ -776,7 +776,16 @@ fn answer_button<'a>(
                 }
             }
         });
-    Press::new(button).into()
+    Press::new(button)
+        .well(
+            radius,
+            if fill.is_some() && ctx.content.is_none() {
+                1.0
+            } else {
+                0.0
+            },
+        )
+        .into()
 }
 
 /// How far a choice's check box sits in from its row's top: its corner nests in the row's.
@@ -858,6 +867,7 @@ fn choice<'a>(
             .padding([CHOICE_INSET as u16, 6])
             .style(move |theme: &Theme, status| row_style(theme, status, picked, radius)),
     )
+    .row(picked, radius)
     .into()
 }
 
@@ -1266,6 +1276,20 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             shortcut,
         } => {
             let only_icon = matches!(content.kind(), Kind::Icon { .. } | Kind::Image { .. });
+            // With glass, a popover's button is a well in it, milky if it's filled with the ink
+            // (D-126); one filled with the content's color keeps it.
+            let milk = if prominent && ctx.content.is_none() {
+                1.0
+            } else {
+                0.0
+            };
+            let well = if only_icon && prominent {
+                theme::PROMINENT_BUTTON / 2.0
+            } else if only_icon {
+                theme::ICON_BUTTON / 2.0
+            } else {
+                ctx.radius
+            };
             let button = if !ctx.panel() {
                 button(render(*content, ctx, icons))
                     .on_press(on_press)
@@ -1320,6 +1344,11 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                     })
             };
             let button = Press::new(button).squeezes(ctx.panel());
+            let button = if ctx.panel() {
+                button.well(well, milk)
+            } else {
+                button
+            };
             match on_secondary {
                 Some(message) => mouse_area(button).on_right_press(message).into(),
                 None => button.into(),
@@ -1532,14 +1561,24 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
         } => {
             let slider = Slider::new(value, range, step, on_change, on_release, ctx.fill());
             if ctx.panel() {
-                slider.width(Length::Fill).groove(ctx.radius).into()
+                slider
+                    .width(Length::Fill)
+                    .groove(ctx.radius, ctx.content.is_none())
+                    .into()
             } else {
                 slider.width(Length::Fixed(80.0)).into()
             }
         }
-        Kind::Toggle { on, on_toggle } => Press::new(Toggle::new(on, on_toggle))
-            .squeezes(ctx.panel())
-            .into(),
+        Kind::Toggle { on, on_toggle } => {
+            let toggle = Press::new(Toggle::new(on, on_toggle)).squeezes(ctx.panel());
+            if ctx.panel() {
+                toggle
+                    .well(theme::TOGGLE_HEIGHT / 2.0, if on { 1.0 } else { 0.0 })
+                    .into()
+            } else {
+                toggle.into()
+            }
+        }
         Kind::Meter {
             fraction,
             limit,
@@ -1846,17 +1885,23 @@ fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMess
                 .style(move |theme: &Theme, status| row_style(theme, status, selected, radius)),
         )
         .squeezes(ctx.panel())
+        .row(selected, radius)
         .into(),
-        None => container(content)
-            .center_y(Length::Fixed(height))
-            .width(Length::Fill)
-            .padding(padding)
-            .style(move |_| container::Style {
-                background: selected.then_some(Background::Color(p.selected_bg)),
-                border: Border::default().rounded(radius),
-                ..container::Style::default()
-            })
-            .into(),
+        None => Press::new(
+            container(content)
+                .center_y(Length::Fixed(height))
+                .width(Length::Fill)
+                .padding(padding)
+                .style(move |_| container::Style {
+                    background: (selected && !on_glass())
+                        .then_some(Background::Color(p.selected_bg)),
+                    border: Border::default().rounded(radius),
+                    ..container::Style::default()
+                }),
+        )
+        .squeezes(false)
+        .row(selected, radius)
+        .into(),
     };
     match item.on_secondary {
         Some(message) => mouse_area(row).on_right_press(message).into(),
@@ -1939,9 +1984,18 @@ fn bar_button_style(theme: &Theme, status: button::Status, radius: f32) -> butto
     }
 }
 
-/// Icon buttons in a popover: plain until hovered, like the bar's.
+/// Icon buttons in a popover: plain until hovered, like the bar's. On glass, plain: the glass
+/// answers the hand (D-126).
 fn icon_button_style(theme: &Theme, status: button::Status, radius: f32) -> button::Style {
-    bar_button_style(theme, status, radius)
+    let style = bar_button_style(theme, status, radius);
+    if on_glass() {
+        button::Style {
+            background: None,
+            ..style
+        }
+    } else {
+        style
+    }
 }
 
 /// A button that's only its text, dim until hovered: a card's "Show all".
@@ -1977,15 +2031,17 @@ fn text_button_style(
 ) -> button::Style {
     let p = Palette::of(theme);
     let background = match prominent {
-        Some(fill) => filled(fill, status),
-        None => match status {
+        Some(fill) => Some(filled(fill, status)),
+        // On glass, a well in it instead (D-126).
+        None if on_glass() => None,
+        None => Some(match status {
             button::Status::Hovered => p.pressed_bg,
             button::Status::Pressed => p.hover_bg,
             _ => p.button_bg,
-        },
+        }),
     };
     button::Style {
-        background: Some(Background::Color(background)),
+        background: background.map(Background::Color),
         text_color: p.tone(Tone::Normal),
         border: Border::default().rounded(radius),
         ..button::Style::default()
@@ -1996,6 +2052,8 @@ fn text_button_style(
 fn row_style(theme: &Theme, status: button::Status, selected: bool, radius: f32) -> button::Style {
     let p = Palette::of(theme);
     let background = match (selected, status) {
+        // On glass, the row in use is a bead and the hand's a light (D-126).
+        _ if on_glass() => None,
         (true, button::Status::Pressed) => Some(Background::Color(p.selected_bg.scale_alpha(1.4))),
         (true, _) => Some(Background::Color(p.selected_bg)),
         (false, status) => state_background(p, status),

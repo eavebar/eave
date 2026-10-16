@@ -17,6 +17,7 @@ use iced::{Border, Color, Element, Event, Length, Point, Rectangle, Size, touch,
 use std::time::Instant;
 
 use crate::ease::Ease;
+use crate::glass::frame::{self, Relief, Shape};
 use crate::hand;
 use crate::spring::{HAND, MAX_FRAME, Spring};
 use crate::theme;
@@ -31,6 +32,8 @@ pub struct Slider<'a, M> {
     color: Color,
     /// A groove's corner, in a popover; a line in the bar.
     groove: Option<f32>,
+    /// Whether its fill is the ink's, which turns the glass milky (D-126).
+    milky: bool,
 }
 
 impl<'a, M> Slider<'a, M> {
@@ -51,12 +54,15 @@ impl<'a, M> Slider<'a, M> {
             width: Length::Fill,
             color,
             groove: None,
+            milky: false,
         }
     }
 
-    /// A groove with corners `radius`, instead of a line.
-    pub fn groove(mut self, radius: f32) -> Self {
+    /// A groove with corners `radius`, instead of a line: a well in the glass, milky up to the
+    /// value if `milky`.
+    pub fn groove(mut self, radius: f32, milky: bool) -> Self {
         self.groove = Some(radius);
+        self.milky = milky;
         self
     }
 
@@ -217,7 +223,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slider<'_, M> {
         _style: &renderer::Style,
         layout: Layout<'_>,
         _cursor: mouse::Cursor,
-        _viewport: &Rectangle,
+        viewport: &Rectangle,
     ) {
         let p = crate::theme::Palette::of(theme);
         use iced::advanced::Renderer as _;
@@ -227,16 +233,36 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Slider<'_, M> {
         if let Some(radius) = self.groove {
             // A groove: brighter under the pointer, filled up to the value with the fill at
             // least as wide as it's tall, so it stays round at the start.
-            let rounded = Border::default().rounded(radius.min(bounds.height / 2.0));
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds,
-                    border: rounded,
-                    ..renderer::Quad::default()
-                },
-                p.track.scale_alpha(1.0 + 0.5 * state.grow.value()),
-            );
+            let radius = radius.min(bounds.height / 2.0);
+            let rounded = Border::default().rounded(radius);
             let filled = bounds.width * state.fill.value();
+            if crate::press::on_glass() {
+                // A well in the glass, milky up to the value (D-126).
+                frame::relief(
+                    Relief {
+                        rect: bounds,
+                        radius,
+                        shape: Shape::Well,
+                        depth: theme::RELIEF_WELL,
+                        // Deeper under the pointer, as the line grows thicker without glass.
+                        press: 0.5 * state.grow.value(),
+                        milk: if self.milky { 1.0 } else { 0.0 },
+                        fill_x: bounds.x + filled.max(bounds.height),
+                        light: bounds.position(),
+                        lit: 0.0,
+                    },
+                    viewport,
+                );
+            } else {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds,
+                        border: rounded,
+                        ..renderer::Quad::default()
+                    },
+                    p.track.scale_alpha(1.0 + 0.5 * state.grow.value()),
+                );
+            }
             if filled >= 0.5 {
                 renderer.fill_quad(
                     renderer::Quad {

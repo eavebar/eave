@@ -122,9 +122,10 @@ impl<M> overlay::Overlay<M, iced::Theme, iced::Renderer> for Sender<'_> {
         for rect in self.bezel {
             frame::bezel(*rect);
         }
-        let records = frame::take();
+        let records = frame::fit(frame::take());
+        let reliefs = frame::fit_reliefs(frame::take_reliefs(), &records);
         if self.primary {
-            client::present(self.look.as_ref(), frame::fit(records));
+            client::present(self.look.as_ref(), records, reliefs);
         }
     }
 }

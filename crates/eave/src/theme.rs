@@ -50,6 +50,9 @@ pub const GLASS_TO_LIGHT_INK: f32 = 0.5;
 /// The most records a frame tells the glass: as many as hypr-eave reads (`MAX_REGIONS`), well
 /// inside one Wayland message.
 pub const GLASS_MAX_REGIONS: usize = 64;
+/// The most controls told to hypr-eave as reliefs in a frame (D-126): 52 bytes each, so they fit
+/// in one message with room to spare, like the records.
+pub const GLASS_MAX_RELIEFS: usize = 64;
 /// How far past an island's shape its pixels may reach while it moves, for hypr-eave
 /// (`ISLAND_MARGIN`): what's further from every island changes nothing.
 pub const GLASS_MARGIN: f32 = 12.0;
@@ -85,6 +88,13 @@ pub const CONTROL_PRESS_INSET: f32 = 2.0;
 /// How far across from the finger a pressed control squeezes about, as a share of the way from
 /// its center to its edge: the side the finger is on gives most.
 pub const CONTROL_PRESS_LEAN: f32 = 0.6;
+/// With glass, a control is a well this deep in it, and what's current a bead this high on it,
+/// in logical px (D-126). A press deepens a well, most around the finger.
+pub const RELIEF_WELL: f32 = 2.5;
+pub const RELIEF_BEAD: f32 = 3.0;
+/// How bright the light under the pointer is on a control it's only over: a press lights it
+/// fully.
+pub const HOVER_LIGHT: f32 = 0.35;
 /// The most the part of a dragged island under the pointer moves, sideways and up or down. It only
 /// approaches these: the further the pointer goes, the harder it pulls back.
 pub const DRAG_LIMIT_X: f32 = 10.0;
