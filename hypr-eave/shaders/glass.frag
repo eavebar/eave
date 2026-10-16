@@ -31,6 +31,7 @@ uniform float band;          // s px
 
 uniform float fade;          // the surface's fade-in or -out
 uniform float strength;      // s px
+uniform float lens;          // how much the middle magnifies, a fraction
 uniform float chroma;
 uniform float rim;
 uniform float tint;
@@ -92,17 +93,13 @@ float erfinv(float x) {
     return p * x;
 }
 
-// How deep into the glass a pixel `d` s px in from a straight edge is, as rings of samples a
-// band out would say: three rings, the nearer weighing more, each the share of it that's inside.
-// 0 at the edge, 1 a band in. It rises steeply near the edge, which keeps the rim crisp.
-float ringDepth(float d) {
-    float sum = 0.0, weight = 0.0;
-    for (int r = 1; r <= 3; r++) {
-        float w = 1.0 / float(r);
-        sum += w * (0.5 + asin(clamp(d * 3.0 / (band * float(r)), -1.0, 1.0)) / 3.14159265);
-        weight += w;
-    }
-    return clamp((sum / weight - 0.5) * 2.0, 0.0, 1.0);
+// How far the bevel pulls in what's past the edge, for a pixel `d` s px in from it: 1 at the
+// edge, falling to 0 a band in, with no slope there. The lookup moves out by this times
+// `strength`, faster and faster toward the edge, so what's past it is squeezed into the rim and
+// never folds over: the side of a convex lens.
+float bevel(float d) {
+    float e = 1.0 - clamp(d / band, 0.0, 1.0);
+    return e * e;
 }
 
 // The glass behind s, much more blurred than the glass itself, and without its bend: what the
@@ -118,11 +115,12 @@ vec3 wideLook(vec2 s) {
 }
 
 // Which island s belongs to: the nearest one eave said may turn to glass, within `margin` of it
-// (an island's jelly and squish reach a little past the shape it reports), with its fill and which
-// way its ink goes. False for none, and inside solid content, whatever it's over.
-bool region(vec2 s, out vec3 fill, out float darker) {
+// (an island's jelly and squish reach a little past the shape it reports), with its box, its fill
+// and which way its ink goes. False for none, and inside solid content, whatever it's over.
+bool region(vec2 s, out vec4 box, out vec3 fill, out float darker) {
     bool  found   = false;
     float nearest = margin;
+    box           = vec4(0.0);
     fill          = vec3(0.0);
     darker        = 0.0;
     for (int i = 0; i < MAX; i++) {
@@ -138,6 +136,7 @@ bool region(vec2 s, out vec3 fill, out float darker) {
         if (d <= nearest) {
             nearest = d;
             found   = true;
+            box     = b;
             fill    = fills[i].rgb;
             darker  = fills[i].w;
         }
@@ -249,40 +248,49 @@ void main() {
     float a = cover(s);
     if (a <= 0.0)
         discard;
+    vec4  box;
     vec3  fill;
     float darker;
-    if (!region(s, fill, darker))
+    if (!region(s, box, fill, darker))
         discard; // not an island eave said may turn to glass, or content over one
+
+    // The whole island is a lens: each pixel looks a little nearer its middle, so what's behind
+    // the middle is magnified.
+    vec2 middle = (box.xy + box.zw) * 0.5;
+    vec2 seen   = middle + (s - middle) * (1.0 - lens);
 
     // How deep into the glass the pixel is, from the field: 0.5 on the edge, all but 1 a band
     // in. Its slope points out of the glass. The field is smooth, so both change smoothly from
     // pixel to pixel, around corners too. By a straight edge the field is the gaussian's
-    // integral, so it gives back the distance in, and from that the depth the rings had.
+    // integral, so it gives back the distance in.
     float h = height(s);
     if (h >= 0.995) {
-        put(s, look(s), a, fill, darker); // deep inside, nothing bends
+        put(s, look(seen), a, fill, darker); // deep inside, only the lens
         return;
     }
-    vec2 e     = vec2(fieldStep, 0.0);
-    vec2 slope = vec2(height(s + e.xy) - height(s - e.xy), height(s + e.yx) - height(s - e.yx));
+    vec2  e     = vec2(fieldStep, 0.0);
+    vec2  slope = vec2(height(s + e.xy) - height(s - e.xy), height(s + e.yx) - height(s - e.yx));
     float d     = sigma * 1.41421356 * erfinv(clamp(h * 2.0 - 1.0, -0.995, 0.995)); // s px in
-    float depth = ringDepth(d); // 0 at the edge, 1 inside
-    float edge  = 1.0 - depth;
+    float x     = clamp(d / band, 0.0, 1.0); // 0 at the edge, 1 a band in
     vec2  n     = length(slope) > 1e-6 ? -normalize(slope) : vec2(0.0);
 
-    // A rounded rim: the bend grows quickly near the edge, like the side of a lens.
-    float bend   = strength * edge * edge;
-    vec2  offset = -n * bend; // look inward: the rim magnifies what's under the middle
-
+    // The bevel: the lookup moves out, past the edge, so the rim shows what's around the island,
+    // squeezed. Red and blue move apart with it.
+    vec2 offset = n * strength * bevel(d);
     vec3 col;
-    col.r = look(s + offset * (1.0 + chroma)).r;
-    col.g = look(s + offset).g;
-    col.b = look(s + offset * (1.0 - chroma)).b;
+    col.r = look(seen + offset * (1.0 + chroma)).r;
+    col.g = look(seen + offset).g;
+    col.b = look(seen + offset * (1.0 - chroma)).b;
 
-    // Light from above and a little left; a softer bounce on the far side.
-    vec2  sun = normalize(vec2(-0.35, -1.0));
-    float lit = max(dot(n, sun), 0.0) + 0.35 * max(dot(n, -sun), 0.0);
-    col += rim * lit * pow(edge, 3.0);
+    // The rim, lit from above and a little left: a thin bright line right at the edge, softer on
+    // the far side, and a faint shadow just inside it, where the bevel turns away from the light.
+    vec2  sun    = normalize(vec2(-0.35, -1.0));
+    float toward = max(dot(n, sun), 0.0);
+    float away   = max(dot(n, -sun), 0.0);
+    float line   = pow(1.0 - x, 8.0);
+    float inner  = smoothstep(0.0, 0.15, x) * (1.0 - smoothstep(0.15, 0.5, x));
+    col += rim * (toward + 0.4 * away) * line;
+    col *= 1.0 - 0.15 * rim * (0.5 + 0.5 * away) * inner;
 
     put(s, col, a, fill, darker);
 }

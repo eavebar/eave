@@ -33,7 +33,7 @@ namespace Glass {
     struct SGlassProgram {
         GLuint id = 0;
         GLint  mask, surfSize, fbOrigin, toFb, toSurf, backdrop, bdOrigin, bdScale, bdLimit, wide, wideScale, wideLimit, wideSize, field, fieldScale, fieldLimit, fieldStep, sigma, band,
-            fade, strength, chroma, rim, tint, ink, contrast, margin, count, boxes, fills, fbSize, rect;
+            fade, strength, lens, chroma, rim, tint, ink, contrast, margin, count, boxes, fills, fbSize, rect;
     };
     static SGlassProgram g_glass[2];
 
@@ -152,6 +152,7 @@ namespace Glass {
         p.band       = at("band");
         p.fade      = at("fade");
         p.strength  = at("strength");
+        p.lens      = at("lens");
         p.chroma    = at("chroma");
         p.rim       = at("rim");
         p.tint      = at("tint");
@@ -546,6 +547,7 @@ namespace Glass {
         glUniform1f(prog->band, std::max(lk.band * S, 1e-3F));
         glUniform1f(prog->fade, job.fade);
         glUniform1f(prog->strength, lk.strength * S);
+        glUniform1f(prog->lens, lk.lens);
         glUniform1f(prog->chroma, lk.chroma);
         glUniform1f(prog->rim, lk.rim);
         glUniform1f(prog->tint, lk.tint);

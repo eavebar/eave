@@ -38,7 +38,7 @@ namespace Glass {
 
     class CProtocol : public IWaylandProtocol {
       public:
-        CProtocol() : IWaylandProtocol(&eave_glass_manager_v1_interface, 2, "EaveGlass") {}
+        CProtocol() : IWaylandProtocol(&eave_glass_manager_v1_interface, 3, "EaveGlass") {}
 
         void bindManager(wl_client* client, void*, uint32_t ver, uint32_t id) override {
             guarded("bind", [&] {
@@ -193,7 +193,14 @@ namespace Glass {
                 .ink      = std::min(sc<int>(ink), sc<int>(EAVE_GLASS_SURFACE_V1_INK_READABLE)),
                 .contrast = f(contrast, 1.F, 21.F),
                 .inkBlur  = f(inkBlur, 0.F, 64.F),
+                .lens     = glass->m_pending.look.lens, // set_lens's
             };
+        });
+        m_resource->setSetLens([key, generation](CEaveGlassSurfaceV1*, wl_fixed_t lens) {
+            if (generation != g_generation)
+                return;
+            if (auto* glass = Glass::glassOf(key))
+                glass->m_pending.look.lens = std::clamp(sc<float>(wl_fixed_to_double(lens)), 0.F, 0.25F);
         });
         m_resource->setSetReport([key, generation](CEaveGlassSurfaceV1*, uint32_t cell) {
             if (generation != g_generation)
@@ -288,6 +295,7 @@ namespace Glass {
             m_resource->setSetRegions([](CEaveGlassSurfaceV1*, wl_array*) {});
             m_resource->setSetLook([](CEaveGlassSurfaceV1*, wl_fixed_t, wl_fixed_t, wl_fixed_t, wl_fixed_t, wl_fixed_t, uint32_t, wl_fixed_t, eaveGlassSurfaceV1Ink, wl_fixed_t,
                                       wl_fixed_t) {});
+            m_resource->setSetLens([](CEaveGlassSurfaceV1*, wl_fixed_t) {});
             m_resource->setSetReport([](CEaveGlassSurfaceV1*, uint32_t) {});
             new SP<CEaveGlassSurfaceV1>(m_resource); // leaked with it
             m_resource.reset();

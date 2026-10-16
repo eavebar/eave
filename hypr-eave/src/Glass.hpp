@@ -33,16 +33,17 @@ namespace Glass {
 
     // How the glass looks: lengths in logical px. eave sends it from its config.toml.
     struct SLook {
-        float band     = 12.F;  // how far in from the edge the glass bends
-        float strength = 22.F;  // the most a pixel's lookup moves, at the very edge
-        float chroma   = 0.18F; // spread between red and blue lookups, as a fraction of the bend
+        float band     = 16.F;  // how far in from the edge the glass bends
+        float strength = 24.F;  // the most a pixel's lookup moves, at the very edge
+        float chroma   = 0.12F; // spread between red and blue lookups, as a fraction of the bend
         float rim      = 0.7F;  // brightness of the lit edge
-        float frost    = 2.F;   // spread of each blur step (0 = clear glass)
+        float frost    = 0.5F;  // spread of each blur step (0 = clear glass)
         int   depth    = 3;     // how many times the blur halves the backdrop: each doubles its reach
         float tint     = 0.35F; // how much the glass takes the color behind it
         int   ink      = EAVE_GLASS_SURFACE_V1_INK_READABLE;
         float contrast = 4.5F;  // ink readable: the contrast ratio it reaches
         float inkBlur  = 12.F;  // ink: how far apart the taps of the wider blur its color is chosen on are
+        float lens     = 0.04F; // how much the middle magnifies, a fraction (set_lens, version 3)
 
         bool  operator==(const SLook&) const = default;
     };
