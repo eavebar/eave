@@ -290,7 +290,7 @@ void main() {
     float line   = pow(1.0 - x, 8.0);
     float inner  = smoothstep(0.0, 0.15, x) * (1.0 - smoothstep(0.15, 0.5, x));
     col += rim * (toward + 0.4 * away) * line;
-    col *= 1.0 - 0.15 * rim * (0.5 + 0.5 * away) * inner;
+    col *= 1.0 - 0.25 * rim * (0.5 + 0.5 * away) * inner;
 
     put(s, col, a, fill, darker);
 }

@@ -464,16 +464,16 @@ impl Default for Glass {
     fn default() -> Self {
         Self {
             band: 16.0,
-            strength: 24.0,
-            chroma: 0.12,
-            rim: 0.7,
-            frost: 0.5,
+            strength: 48.0,
+            chroma: 0.15,
+            rim: 1.2,
+            frost: 0.25,
             depth: 3,
             tint: 0.35,
             ink: Ink::Readable,
             contrast: 4.5,
             ink_blur: 12.0,
-            lens: 0.04,
+            lens: 0.1,
         }
     }
 }
