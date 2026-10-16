@@ -145,7 +145,7 @@ pub fn present(look: Option<&config::Glass>, records: Vec<super::frame::Record>)
     {
         glass.object.set_look(
             f64::from(look.band),
-            f64::from(look.strength),
+            f64::from(look.thickness),
             f64::from(look.chroma),
             f64::from(look.rim),
             f64::from(look.frost),
@@ -159,6 +159,10 @@ pub fn present(look: Option<&config::Glass>, records: Vec<super::frame::Record>)
             f64::from(look.contrast),
             f64::from(look.ink_blur),
         );
+        // A compositor from before the gap (version 2) keeps the glass on what's behind it.
+        if glass.object.version() >= 3 {
+            glass.object.set_gap(f64::from(look.gap));
+        }
         glass.look = Some(*look);
     }
     // No reports without glass: nothing would read them.
@@ -208,7 +212,7 @@ fn run(connection: Connection) -> Result<(), String> {
         registry_queue_init::<State>(&connection).map_err(|error| error.to_string())?;
     let handle = queue.handle();
     let manager = globals
-        .bind::<EaveGlassManagerV1, _, _>(&handle, 1..=2, ())
+        .bind::<EaveGlassManagerV1, _, _>(&handle, 1..=3, ())
         .ok();
     let mut state = State {
         name: globals.contents().with_list(|list| {
@@ -255,7 +259,7 @@ impl Dispatch<WlRegistry, GlobalListContents> for State {
                 version,
             } if interface == EaveGlassManagerV1::interface().name && state.name.is_none() => {
                 let manager =
-                    registry.bind::<EaveGlassManagerV1, _, _>(name, version.min(2), handle, ());
+                    registry.bind::<EaveGlassManagerV1, _, _>(name, version.min(3), handle, ());
                 state.name = Some(name);
                 if let Some(shared) = shared().as_mut() {
                     shared.glass = None;

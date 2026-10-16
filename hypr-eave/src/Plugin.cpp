@@ -65,8 +65,8 @@ namespace Glass {
             for (auto const& region : s.regions)
                 (region.kind == EAVE_GLASS_SURFACE_V1_KIND_SOLID ? solid : islands)++;
             out += std::format("surface: {} glass regions, {} solid, {} bezel; report every {} px: {} reads, {} sent\n", islands, solid, s.bezel.size(), s.reportCell, r.reads, r.posted);
-            out += std::format("  look: band {} strength {} chroma {} rim {} frost {} depth {} tint {} ink {} contrast {} ink-blur {}\n", s.look.band, s.look.strength,
-                               s.look.chroma, s.look.rim, s.look.frost, s.look.depth, s.look.tint, s.look.ink, s.look.contrast, s.look.inkBlur);
+            out += std::format("  look: band {} thickness {} chroma {} rim {} frost {} depth {} tint {} ink {} contrast {} ink-blur {} gap {}\n", s.look.band, s.look.thickness,
+                               s.look.chroma, s.look.rim, s.look.frost, s.look.depth, s.look.tint, s.look.ink, s.look.contrast, s.look.inkBlur, s.look.gap);
         }
         out += cursorStatus();
         const auto bufs = buffers();

@@ -260,7 +260,7 @@ bind = SUPER, M, event, eave-action volume mute
 
 ## Glass
 
-`theme = "glass"` makes the islands liquid glass: what's behind them shows through, frosted and bent at their edges ([D-112](decisions.md)). That takes `hypr-eave`, a Hyprland plugin in this repository. `eave-build` builds it against the Hyprland you have whenever Hyprland's headers are installed (`pkg-config hyprland`; on Arch they come with the `hyprland` package). It installs it as `~/.local/share/eave/hypr-eave.so`. Nothing loads it for you: add it to Hyprland's config. While Hyprland doesn't load it, every `eave-build` prints this line, and `eave doctor` warns:
+`theme = "glass"` makes the islands liquid glass: what's behind them shows through, lightly frosted and magnified, and bent at their edges ([D-112](decisions.md)). That takes `hypr-eave`, a Hyprland plugin in this repository. `eave-build` builds it against the Hyprland you have whenever Hyprland's headers are installed (`pkg-config hyprland`; on Arch they come with the `hyprland` package). It installs it as `~/.local/share/eave/hypr-eave.so`. Nothing loads it for you: add it to Hyprland's config. While Hyprland doesn't load it, every `eave-build` prints this line, and `eave doctor` warns:
 
 ```lua
 -- hyprland.lua (Hyprland 0.56+)
@@ -275,15 +275,16 @@ Over something bright, an island's text turns dark so it stays readable. Popover
 theme = "glass"
 
 [glass]
-band = 12          # how far in from the edge it bends, logical px
-strength = 22      # how far what's behind moves at the edge
-chroma = 0.18      # red and blue bending apart
-rim = 0.7          # the lit edge
+band = 24          # how far in from the edge the bevel curves down, logical px
+thickness = 32     # how thick the glass is: thicker bends more, and folds near the rim
+gap = 24           # how high it floats over what's behind: wider turns more of it over
+chroma = 0.2       # red and blue bending apart
+rim = 1            # the edge's reflection and its lit side
 frost = 2          # 0 is clear glass
-depth = 3          # 1 to 6: how far the frost reaches
+depth = 2          # 1 to 6: how far the frost reaches
 tint = 0.35        # 0 to 1: how much it takes the color behind it
 ink = "readable"   # "own", "invert" or "readable": grey text and symbols over glass
-contrast = 4.5     # with "readable": the contrast ratio it reaches
+contrast = 7       # with "readable": the contrast ratio it reaches
 ink-blur = 12      # how wide an area the ink's color is chosen over
 ```
 
