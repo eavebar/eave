@@ -277,6 +277,7 @@ theme = "glass"
 [glass]
 band = 24          # how far in from the edge the bevel curves down, logical px
 thickness = 48     # how thick the glass is: thicker bends more, and folds near the rim
+gap = 24           # how high it floats over what's behind: wider turns more of it over
 chroma = 0.15      # red and blue bending apart
 rim = 1.0          # the edge's reflection and its lit side
 frost = 0.25       # 0 is clear glass
