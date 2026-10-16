@@ -22,8 +22,12 @@ uniform vec2 wideScale;
 uniform vec2 wideLimit;
 uniform float wideSize;      // s px between its taps
 
+uniform sampler2D field;     // the surface's coverage, blurred by a gaussian a band wide
+uniform vec2 fieldScale;     // s px -> uv in it
+uniform vec4 fieldLimit;     // its first and last texel centers with content, uv
+uniform float fieldStep;     // s px between its texels
+
 uniform float fade;          // the surface's fade-in or -out
-uniform float band;          // s px
 uniform float strength;      // s px
 uniform float chroma;
 uniform float rim;
@@ -64,6 +68,11 @@ float cover(vec2 s) {
 
 vec3 look(vec2 s) {
     return texture(backdrop, clamp((fbOrigin + toFb * s - bdOrigin) * bdScale, vec2(0.0), bdLimit)).rgb;
+}
+
+// How much of the area around s is glass, weighted by a gaussian a band wide.
+float height(vec2 s) {
+    return texture(field, clamp(s * fieldScale, fieldLimit.xy, fieldLimit.zw)).r;
 }
 
 // The glass behind s, much more blurred than the glass itself, and without its bend: what the
@@ -215,39 +224,19 @@ void main() {
     if (!region(s, fill, darker))
         discard; // not an island eave said may turn to glass, or content over one
 
-    // Deep inside, nothing bends: eight taps a band away settle most of a popover's pixels
-    // without the rings below.
-    float inside = 1.0;
-    for (int i = 0; i < 8; i++) {
-        float ang = float(i) * 0.7853982;
-        inside    = min(inside, cover(s + vec2(cos(ang), sin(ang)) * band * 1.05));
-    }
-    if (inside >= 1.0) {
-        put(s, look(s), a, fill, darker);
+    // How deep into the glass the pixel is, from the field: 0.5 on the edge, all but 1 a band
+    // in. Its slope points out of the glass. The field is smooth, so both change smoothly from
+    // pixel to pixel, around corners too.
+    float h = height(s);
+    if (h >= 0.995) {
+        put(s, look(s), a, fill, darker); // deep inside, nothing bends
         return;
     }
-
-    // Rings of samples around the pixel: their mean coverage says how deep into the glass it is
-    // (0.5 on the edge, 1 a full band in), and the empty ones point out of it.
-    const int DIRS  = 12;
-    const int RINGS = 3;
-    float     sum = 0.0, weight = 0.0;
-    vec2      out_ = vec2(0.0);
-    for (int r = 1; r <= RINGS; r++) {
-        float radius = band * float(r) / float(RINGS);
-        float w      = 1.0 / float(r);
-        for (int i = 0; i < DIRS; i++) {
-            float ang = (float(i) + 0.5 * float(r & 1)) * 6.2831853 / float(DIRS);
-            vec2  d   = vec2(cos(ang), sin(ang));
-            float c   = cover(s + d * radius);
-            sum += c * w;
-            weight += w;
-            out_ += d * (1.0 - c) * w;
-        }
-    }
-    float depth = clamp((sum / weight - 0.5) * 2.0, 0.0, 1.0); // 0 at the edge, 1 inside
+    vec2 e     = vec2(fieldStep, 0.0);
+    vec2 slope = vec2(height(s + e.xy) - height(s - e.xy), height(s + e.yx) - height(s - e.yx));
+    float depth = clamp((h - 0.5) * 2.0, 0.0, 1.0); // 0 at the edge, 1 inside
     float edge  = 1.0 - depth;
-    vec2  n     = length(out_) > 1e-4 ? normalize(out_) : vec2(0.0);
+    vec2  n     = length(slope) > 1e-6 ? -normalize(slope) : vec2(0.0);
 
     // A rounded rim: the bend grows quickly near the edge, like the side of a lens.
     float bend   = strength * edge * edge;

@@ -154,7 +154,10 @@ namespace Glass {
         Vector2D                 level; // the sampled texture's size over the copy's
         SP<Render::IFramebuffer> wide;  // the most blurred level, for the ink's color
         Vector2D                 wideLevel;
-        bool                     ready = false;
+        SP<Render::IFramebuffer> field;          // the surface's coverage, blurred: the bend's shape
+        Vector2D                 fieldSize;      // the part of it that holds content, texels
+        float                    fieldStep = 1.F; // s px per texel
+        bool                     ready     = false;
     };
 
     // Cursor.cpp: the pointer under the notch and the grown edge.
