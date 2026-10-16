@@ -1709,12 +1709,16 @@ impl Motion {
         }
     }
 
+    /// Whether it's a popover going back into another island ([`Popover::home`]).
+    fn going_home(&self) -> bool {
+        self.home.is_some() && self.popover.present && !self.popover.open
+    }
+
     /// How far a popover going back into another island ([`Popover::home`]) has melted into it,
     /// from 0 to 1: as far as the items, its or that island's, have come back.
     fn melted(&self) -> f32 {
-        let popover = &self.popover;
-        if self.home.is_some() && popover.present && !popover.open {
-            popover.items.value.clamp(0.0, 1.0)
+        if self.going_home() {
+            self.popover.items.value.clamp(0.0, 1.0)
         } else {
             0.0
         }
@@ -1725,10 +1729,7 @@ impl Motion {
     /// fill, so that island, the same color under it, shows through with what's on it, and the two
     /// merge, glass and all, instead of one going over the other.
     fn landing(&self, shape: Rectangle, poured: Option<Rectangle>) -> Option<Rectangle> {
-        let home = self.home.as_ref()?;
-        if !self.popover.present || self.popover.open {
-            return None;
-        }
+        let home = self.home.as_ref().filter(|_| self.going_home())?;
         let over = (home.get() - self.offset()).intersection(&shape)?;
         let over = match poured {
             Some(poured) => over.intersection(&poured)?,
@@ -2214,8 +2215,12 @@ fn draw_island<M>(
                                     });
                                 });
                             });
-                            // In the item's moved coordinates, the shape is the other way.
-                            fade(renderer, theme, bounds, shape - moved, shown);
+                            // In the item's moved coordinates, the shape is the other way. Not
+                            // going back into another island: the items coming back are that
+                            // island's, already there, and a fade would cover them.
+                            if !motion.going_home() {
+                                fade(renderer, theme, bounds, shape - moved, shown);
+                            }
                         });
                     }
                     if let Some((panel, tree, layout)) = panel {
