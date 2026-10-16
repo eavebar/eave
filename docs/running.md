@@ -276,11 +276,11 @@ theme = "glass"
 
 [glass]
 band = 16          # how far in from the edge it bends, logical px
-strength = 24      # how far past the edge the rim reaches for what it shows
-lens = 0.04        # 0 to 0.25: how much the middle magnifies
-chroma = 0.12      # red and blue bending apart
-rim = 0.7          # the lit edge
-frost = 0.5        # 0 is clear glass
+strength = 48      # how far past the edge the rim reaches for what it shows
+lens = 0.1         # 0 to 0.25: how much the middle magnifies
+chroma = 0.15      # red and blue bending apart
+rim = 1.2          # the lit edge
+frost = 0.25       # 0 is clear glass
 depth = 3          # 1 to 6: how far the frost reaches
 tint = 0.35        # 0 to 1: how much it takes the color behind it
 ink = "readable"   # "own", "invert" or "readable": grey text and symbols over glass
