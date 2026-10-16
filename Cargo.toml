@@ -68,6 +68,7 @@ toml = { version = "0.9", default-features = false, features = ["std", "parse", 
 softbuffer = { path = "vendor/softbuffer" }
 iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
 layershellev = { path = "vendor/layershellev" }
+wgpu-hal = { path = "vendor/wgpu-hal" }
 
 [profile.release]
 lto = "thin"

@@ -1265,6 +1265,12 @@ fn generate(dir: &Path, eave_dir: &Path, plugins: &[Plugin]) -> Result<()> {
     if layershellev.is_dir() {
         manifest += &format!("layershellev = {{ path = {} }}\n", quote(&layershellev));
     }
+    // And its patched wgpu-hal, whose GL resolve isn't cut by a stale scissor (D-120). Only if it
+    // has one.
+    let wgpu_hal = eave_dir.join("vendor/wgpu-hal");
+    if wgpu_hal.is_dir() {
+        manifest += &format!("wgpu-hal = {{ path = {} }}\n", quote(&wgpu_hal));
+    }
     // Same profile as eave's own release builds (D-10).
     manifest += "\n[profile.release]\nlto = \"thin\"\ncodegen-units = 1\nstrip = true\npanic = \"abort\"\n\n\
                  # Standalone: never part of an enclosing workspace.\n[workspace]\n";

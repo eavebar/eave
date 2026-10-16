@@ -2832,7 +2832,7 @@ The rooms come out within 0.015 px of before. Working out one island's rooms too
 
 ## D-120: Anti-aliased canvas paths on the GPU (4× MSAA)
 
-**Status:** accepted (2026-10-16). The user judged the morph "much better" with it.
+**Status:** accepted (2026-10-16). The user judged the morph "much better" with it. Amended the same day: on GL it garbled the bar until wgpu-hal was patched (*The bug* below).
 
 **Problem:** on wgpu, the islands' outlines and D-118's body looked jagged, most of all while morphing, when the stair-steps crawl along the moving edge. iced_wgpu draws canvas paths as plain triangles and smooths them only with MSAA, and iced_layershell's `Settings::antialiasing` defaults to off. Quads and text smooth themselves, and tiny-skia always anti-aliases paths, so only the GPU renderer's paths were affected.
 
@@ -2856,3 +2856,9 @@ The rooms come out within 0.015 px of before. Working out one island's rooms too
 - **Leave it off:** cheapest, but the morph looks jagged on every GPU.
 - **Our own edge fringe:** tessellate a half-pixel alpha ramp along each island outline ourselves. No extra targets and no resolve, but code of ours to maintain inside `island.rs`, and only for the shapes we draw.
 - **Vulkan on Asahi** (D-119's item 2) might make MSAA cheap here too.
+
+**The bug: magenta and missing icons.** Once merged, the user's bar went magenta over half its width, with speckled noise around the notch and no icons on the right island. The tests above had been watched only in dark, and the earlier test bar was judged on its morphs. The user narrowed it down on side-by-side test bars: dark and glass alike broke on the GPU with MSAA, glass on tiny-skia was fine, and so was the GPU without MSAA, with or without eave-claude and eave-notifications.
+- **Cause.** On GL, wgpu-hal resolves a multisampled attachment at the end of a pass with `glBlitFramebuffer`, and a blit is cut by the scissor test. The pass's last draw left the scissor at its own rect (iced scissors each mesh layer to its bounds), so only that rect of the resolve texture was written. The rest kept what it held: uninitialised memory at first (the magenta and the noise), stale shapes later. iced then draws the whole resolve texture over the frame, covering what was drawn before it, icons included. On Vulkan the resolve is part of the render pass, so this is a GL-only bug.
+- **Fix.** `vendor/wgpu-hal` is wgpu-hal 27.0.4 with one line: `ResolveAttachment` turns the scissor test off before its blit. The next pass sets its own scissor again, so nothing else changes. `eave-build` patches it in, like the other vendored crates. The user confirmed it on test bars in dark and glass.
+- **When to drop it:** when a wgpu-hal release disables the scissor before that blit, or when eave runs on Vulkan everywhere.
+- **Not re-measured:** the CPU figures above are from before the fix. The fix only widens the blit, so they should still hold.

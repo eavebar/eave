@@ -218,6 +218,7 @@ hypr-eave/                the Hyprland plugin that draws glass and puts the poin
 protocol/                 eave-glass-v1.xml, the protocol between eave and hypr-eave (D-112)
 vendor/softbuffer/         softbuffer 0.4.8 with an alpha-carrying Wayland buffer (D-25)
 vendor/iced_tiny_skia/     iced_tiny_skia 0.14.1: lazy clip mask, damage-aware present, EAVE_FRAMES (D-66)
+vendor/wgpu-hal/           wgpu-hal 27.0.4: the GL resolve blit ignores the scissor (D-120)
 dist/systemd/              user units: the bar, the rebuild-on-config.toml pair, and the update and check
 dist/config.toml           the starter config `eave-build init` writes
 install.sh                 the curl | sh installer
