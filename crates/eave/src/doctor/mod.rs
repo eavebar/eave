@@ -1,12 +1,13 @@
 //! `eave doctor` (D-96): checks what the bar depends on and says what's wrong, and what to do
-//! about it. config.toml, the widgets it names, their keys, the screen, hypr-eave, and the
-//! systemd units.
+//! about it. config.toml, the widgets it names, their keys, the screen, hypr-eave, Hyprland's
+//! layer animation, and the systemd units.
 //! Runs without a bar, so it helps most when the bar won't start. The `essential` plugin's Check
 //! health runs it with `--report` and shows what it wrote.
 
 pub mod report;
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use eave_api::Registry;
 use eave_api::erased::ErasedWidget;
@@ -72,6 +73,9 @@ async fn checks(registry: &Registry) -> Vec<Check> {
             .as_ref()
             .is_some_and(|config| config.theme == Theme::Glass);
         checks.push(plugin_check(hypr_eave().await, glass));
+        if let Ok(lasting) = eave_hyprland::animation("layersIn").await {
+            checks.push(layers_animation_check(lasting));
+        }
     }
     checks.extend(systemd_checks().await);
     checks
@@ -358,6 +362,29 @@ fn plugin_check(hypr_eave: HyprEave, glass: bool) -> Check {
     }
 }
 
+/// Whether Hyprland animates a layer surface's size, which squeezes the bar each time a popover
+/// opens or closes (D-123). `lasting` is how long `layersIn` takes, `None` when it's off.
+fn layers_animation_check(lasting: Option<Duration>) -> Check {
+    match lasting {
+        None => Check::good(
+            "Hyprland doesn't animate the bar's size",
+            "layersIn is off.",
+        ),
+        Some(lasting) => Check::warning(
+            "Hyprland animates the bar's size, so popovers squeeze it",
+            format!(
+                "Hyprland's layersIn animation also moves a layer's box when it resizes: each \
+                 time a popover opens or closes, the bar is squeezed or stretched into a box \
+                 sliding to its new height over {} ms. Turn it off: \
+                 hl.animation({{ leaf = \"layersIn\", enabled = false }}) in hyprland.lua, or \
+                 animation = layersIn, 0 in hyprland.conf. Layers still fade in (fadeLayersIn); \
+                 only their slide or pop-in goes.",
+                lasting.as_millis()
+            ),
+        ),
+    }
+}
+
 /// The units that run the bar and rebuild and update it (running.md), and the environment the
 /// bar needs from systemd. Asked over D-Bus.
 async fn systemd_checks() -> Vec<Check> {
@@ -607,6 +634,19 @@ mod tests {
         );
         assert_eq!(level(HyprEave::None, false), Level::Good);
         assert_eq!(level(HyprEave::None, true), Level::Warning);
+    }
+
+    #[test]
+    fn an_animated_layer_size_is_a_warning() {
+        assert_eq!(layers_animation_check(None).level, Level::Good);
+        let animated = layers_animation_check(Some(Duration::from_millis(400)));
+        assert_eq!(animated.level, Level::Warning);
+        assert!(animated.detail.contains("400 ms"));
+        assert!(
+            animated
+                .detail
+                .contains("leaf = \"layersIn\", enabled = false")
+        );
     }
 
     #[test]

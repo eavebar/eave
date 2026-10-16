@@ -2924,3 +2924,23 @@ The cause underneath: the dialog is a second solid shape, drawn by the island in
 - **An exact squircle distance:** the squircle has no closed form. The flattened outline is exact to 0.05 px and costs a few runs.
 
 **Cost:** nothing at rest, or for any shape not asked to join. While joined, the island's fill isn't cached. A dialog of 140 × 90 overlapping an 80 × 32 island takes about 150 µs a frame in release on the M1 (`join::tests::timing`), for about 1500 distances. Landed, the blend and the reach shrink to nothing.
+
+## D-123: Hyprland's `layersIn` animation squeezes the bar; `eave doctor` warns
+
+**Status:** accepted (2026-10-16).
+
+**Problem:** opening a popover, claude's above all, flattened the whole bar, notch included, to a few pixels for a moment. Closing one stretched it and seemed to push it down. It came and went, and it predated the glass.
+
+**Cause:** Hyprland gives a layer surface's size an animated box (`m_realSize`) with the `layersIn` animation's config. When a commit changes the layer's size while that box counts as animating, Hyprland slides the box to the new size instead of jumping, and draws the surface into it, scaled. The bar's surface resizes for every popover, so a 271 px frame was drawn into a box growing from 49 px (the flattening), and on closing a 49 px frame into one shrinking from 280 px over ~300 ms (the stretch). Found by logging, from inside hypr-eave, the box and the buffer Hyprland drew each frame: the box eased across ~35 frames while the buffer jumped at once.
+
+**Why turning off `layers` didn't help:** `layersIn` inherits from `layers` only while it's not set itself. The user's config set it, with style `fade`, so it stayed on. With style `fade` it shows nothing else; the layers' fade is `fadeLayersIn`.
+
+**Decision:** document it (running.md, *Hyprland's layer animation*): turn `layersIn` off. `eave doctor` asks Hyprland for its animations and warns while `layersIn`, following what it inherits, is on, with the line to add. The user's bar stopped squeezing with it off.
+
+**Alternatives:**
+- **A layer rule for eave's namespace** (`noanim`): would leave other layers' animations alone, but also drops the bar's fade, and wasn't tried.
+- **Changing it from eave over IPC:** eave would be rewriting the user's compositor config behind their back, and a reload would undo it (D-91 made the same call for global binds).
+- **Never resizing the surface:** keep it as tall as the tallest popover. A full-width ~900 px surface for a 49 px bar, against the lightweight rule.
+- **Cropping the old frame during a shrink** (`wp_viewport` in layershellev, tried first): aimed at a one-frame gap between the new size and its buffer, which is real but wasn't what the user saw. It didn't help, and the glass needed a matching change. Dropped.
+- **Fix it in Hyprland:** a client resize shouldn't animate a layer's box. Worth reporting upstream.
+
