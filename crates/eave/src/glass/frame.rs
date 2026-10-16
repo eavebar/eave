@@ -46,6 +46,14 @@ pub fn gather(on: bool) {
     }
 }
 
+/// Draws without gathering: what's drawn isn't on screen, like a picture being taken of it.
+pub fn hushed<R>(draw: impl FnOnce() -> R) -> R {
+    let before = ON.with(|cell| cell.replace(false));
+    let out = draw();
+    ON.with(|cell| cell.set(before));
+    out
+}
+
 fn push(record: Record) {
     if ON.with(Cell::get) {
         RECORDS.with(|records| records.borrow_mut().push(record));

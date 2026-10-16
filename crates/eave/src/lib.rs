@@ -39,6 +39,7 @@ mod pour;
 mod shortcut;
 mod slider;
 mod slot;
+mod snapshot;
 mod spring;
 mod sprite;
 mod squircle;
