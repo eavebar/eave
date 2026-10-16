@@ -25,6 +25,8 @@ pub struct Field<'a, M> {
     eager: bool,
     /// Told when it gets the focus, or loses it.
     on_focus: Option<Box<dyn Fn(bool) -> M + 'a>>,
+    /// Its corner, nested in what it's in (D-125).
+    radius: f32,
 }
 
 impl<'a, M> Field<'a, M> {
@@ -35,7 +37,14 @@ impl<'a, M> Field<'a, M> {
             grows: false,
             eager: true,
             on_focus: None,
+            radius: theme::BUTTON_RADIUS,
         }
+    }
+
+    /// Rounds its corners `radius`.
+    pub fn radius(mut self, radius: f32) -> Self {
+        self.radius = radius;
+        self
     }
 
     /// As tall as what it holds, for a text area.
@@ -173,7 +182,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Field<'_, M> {
                 border: Border {
                     color: edge,
                     width: 1.0,
-                    radius: theme::BUTTON_RADIUS.into(),
+                    radius: self.radius.into(),
                 },
                 ..renderer::Quad::default()
             },

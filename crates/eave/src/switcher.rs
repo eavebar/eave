@@ -14,13 +14,16 @@ pub struct Switcher<'a, M> {
     /// A row with one child per option.
     content: Element<'a, M>,
     current: Option<usize>,
+    /// The mark's corner, nested in what it's in (D-125).
+    radius: f32,
 }
 
 impl<'a, M> Switcher<'a, M> {
-    pub fn new(content: impl Into<Element<'a, M>>, current: Option<usize>) -> Self {
+    pub fn new(content: impl Into<Element<'a, M>>, current: Option<usize>, radius: f32) -> Self {
         Self {
             content: content.into(),
             current,
+            radius,
         }
     }
 
@@ -145,7 +148,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Switcher<'_, M> {
             renderer.fill_quad(
                 renderer::Quad {
                     bounds: shown + Vector::new(origin.x, origin.y),
-                    border: Border::default().rounded(theme::BUTTON_RADIUS),
+                    border: Border::default().rounded(self.radius),
                     ..renderer::Quad::default()
                 },
                 p.switcher_mark,

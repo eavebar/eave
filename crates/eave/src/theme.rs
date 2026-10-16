@@ -293,7 +293,21 @@ pub const ISLAND_SPACING: u32 = EDGE_GAP as u32;
 pub const PANEL_PADDING: u16 = 12;
 pub const SPACING: u32 = 8;
 pub const GRID_CELL: f32 = 28.0;
+/// A small rounded box's corner, where nothing it sits in sets one: a code block on a card.
 pub const BUTTON_RADIUS: f32 = 6.0;
+
+/// A corner inside another, `inset` in from it, sharing its center (D-125): the outer one's
+/// radius less the inset, and never squarer than `MIN_ISLAND_RADIUS`. A popover's corner is the
+/// island's grown by `PANEL_PADDING`, so a control at the padding has the island's corner, a
+/// mark inset in a control the control's less the inset, and so on down.
+pub fn nested(radius: f32, inset: f32) -> f32 {
+    (radius - inset).max(MIN_ISLAND_RADIUS)
+}
+
+/// A popover's corner, grown out of the island's by the padding between them (D-125).
+pub fn panel_corner(island: f32) -> f32 {
+    island + f32::from(PANEL_PADDING)
+}
 
 /// Every popover is this wide, padding included, so rows can push things to their far end and
 /// moving between a popover's pages only changes its height (D-40).
@@ -375,6 +389,9 @@ pub const ICON_BUTTON: f32 = 28.0;
 /// A prominent icon button (play and pause): a disc this wide, in the accent fill.
 pub const PROMINENT_BUTTON: f32 = 36.0;
 pub const BUTTON_HEIGHT: f32 = 30.0;
+/// About how far a button in the bar sits in from its island's top and bottom: its corner is the
+/// island's less this, so it nests in it (D-125).
+pub const BAR_BUTTON_INSET: f32 = 3.0;
 /// A slider is a line with no knob: this thick at rest, `SLIDER_RAIL_HOVER` under the pointer or
 /// while dragged, easing between the two over `SLIDER_GROW`. `SLIDER_HEIGHT` is the room it takes,
 /// and what the pointer can grab. A click eases the fill over `SLIDER_EASE`.

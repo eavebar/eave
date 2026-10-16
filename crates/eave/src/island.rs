@@ -662,24 +662,23 @@ impl Edges {
 
     /// How far, from 0 to 1, the shape has come from `from` toward `to`.
     fn progress(&self, from: Rectangle, to: Rectangle) -> f32 {
-        let distance = |a: Rectangle, b: [f32; 4]| {
-            (a.x - b[0]).abs()
-                + (a.y - b[1]).abs()
-                + (a.x + a.width - b[2]).abs()
-                + (a.y + a.height - b[3]).abs()
-        };
-        let total = distance(from, edges_of(to));
-        if total < 1.0 {
-            return 1.0;
-        }
-        let now = [
-            self.left.value,
-            self.top.value,
-            self.right.value,
-            self.bottom.value,
-        ];
-        (1.0 - distance(to, now) / total).clamp(0.0, 1.0)
+        share(self.rect(), from, to)
     }
+}
+
+/// How far, from 0 to 1, `at` has come from `from` toward `to`, by its edges.
+fn share(at: Rectangle, from: Rectangle, to: Rectangle) -> f32 {
+    let distance = |a: Rectangle, b: [f32; 4]| {
+        (a.x - b[0]).abs()
+            + (a.y - b[1]).abs()
+            + (a.x + a.width - b[2]).abs()
+            + (a.y + a.height - b[3]).abs()
+    };
+    let total = distance(from, edges_of(to));
+    if total < 1.0 {
+        return 1.0;
+    }
+    (1.0 - distance(to, edges_of(at)) / total).clamp(0.0, 1.0)
 }
 
 fn edges_of(rect: Rectangle) -> [f32; 4] {
@@ -1404,12 +1403,30 @@ impl Motion {
         self.body.aim(goal, self.corners_at(goal));
     }
 
-    /// The corners the shape has at `rect`: a drop's, or its own.
+    /// The corners the shape has at `rect`: a drop's, or its own, grown toward the panel's.
     fn corners_at(&self, rect: Rectangle) -> [CornerShape; 4] {
         match self.drop {
             Some(_) => [self.drop_corner(rect); 4],
-            None => self.corners,
+            None => self.grown(self.corners, rect),
         }
+    }
+
+    /// `corners`, grown into the panel's as `rect` gets away from where the shape rests toward
+    /// its popover's panel: a panel's corners are the island's and its padding, so what's in it
+    /// is concentric with it (D-125). Only the way out of the island counts, so a panel that
+    /// grows or shrinks keeps its corners.
+    fn grown(&self, corners: [CornerShape; 4], rect: Rectangle) -> [CornerShape; 4] {
+        let (Some(island), Some(panel)) = (self.island, self.popover.fitted.or(self.popover.rect))
+        else {
+            return corners;
+        };
+        if !self.popover.present {
+            return corners;
+        }
+        let home = self.home(island);
+        let away = 1.0 - share(rect, panel, home);
+        let grown = away * f32::from(theme::PANEL_PADDING);
+        corners.map(|corner| CornerShape::new(corner.radius + grown, corner.smoothing))
     }
 
     /// Where the shape rests: the island, or for a drop, a dot where it comes out, or the other
@@ -1486,7 +1503,11 @@ impl Motion {
     /// A drop's corners, drawn `shape`: a ball's, rounding off into the island's as it unfolds
     /// into the panel.
     fn drop_corner(&self, shape: Rectangle) -> CornerShape {
-        let (round, corner) = (self.roundness(), self.corner);
+        let round = self.roundness();
+        let corner = CornerShape::new(
+            theme::panel_corner(self.corner.radius),
+            self.corner.smoothing,
+        );
         let half = shape.width.min(shape.height) / 2.0;
         CornerShape::new(
             corner.radius + (half - corner.radius).max(0.0) * round,
@@ -2250,7 +2271,7 @@ fn draw_island<M>(
     // A drop is a ball, and rounds off into the panel's corners as it unfolds (D-86).
     let corners = match motion.drop {
         Some(_) => [motion.drop_corner(shape); 4],
-        None => own_corners,
+        None => motion.grown(own_corners, shape),
     };
     if state.shape_corners.replace(corners) != corners {
         state.shape.clear();
@@ -3662,6 +3683,64 @@ mod tests {
         assert_eq!(rect.x, ((1000.0 - 600.0 - padding) / 2.0).round());
         assert_eq!(rect.y, ((1000.0 - 400.0 - padding) / 2.0).round());
         assert_eq!(middle(panel, 1000.0, 300.0, 40.0).y, 40.0);
+    }
+
+    #[test]
+    fn a_panels_corners_are_the_islands_grown_by_its_padding_and_morph_there() {
+        let island = rect(100.0, 120.0);
+        let corner = CornerShape::new(theme::ISLAND_RADIUS, theme::ISLAND_SMOOTHING);
+        let mut motion = Motion {
+            corners: [corner; 4],
+            ..Motion::default()
+        };
+        motion.arrange(island, [(1, 110.0)].into_iter(), None);
+        run(&mut motion, Instant::now(), |_| {});
+        let radius = |motion: &Motion| motion.corners_at(motion.edges.rect())[0].radius;
+        assert_eq!(
+            radius(&motion),
+            theme::ISLAND_RADIUS,
+            "an island has its own"
+        );
+
+        let panel = Rectangle::new(Point::new(10.0, 60.0), Size::new(300.0, 200.0));
+        popover(&mut motion, true, panel, true);
+        let grown = theme::panel_corner(theme::ISLAND_RADIUS);
+        let mut between = false;
+        run(&mut motion, Instant::now(), |motion| {
+            let now = radius(motion);
+            between |= now > theme::ISLAND_RADIUS + 1.0 && now < grown - 1.0;
+        });
+        assert!(between, "the corners grow as the shape does");
+        assert_eq!(
+            radius(&motion),
+            grown,
+            "a panel's are the island's and its padding"
+        );
+        assert_eq!(
+            motion.corners_at(panel)[0].radius,
+            grown,
+            "and the body aims there"
+        );
+        assert_eq!(
+            motion.corners_at(panel)[0].smoothing,
+            theme::ISLAND_SMOOTHING
+        );
+
+        popover(&mut motion, false, panel, true);
+        run(&mut motion, Instant::now(), |_| {});
+        assert_eq!(
+            radius(&motion),
+            theme::ISLAND_RADIUS,
+            "back home, its own again"
+        );
+    }
+
+    #[test]
+    fn nested_corners_share_a_center_until_the_least() {
+        assert_eq!(theme::panel_corner(14.0), 26.0);
+        assert_eq!(theme::nested(26.0, f32::from(theme::PANEL_PADDING)), 14.0);
+        assert_eq!(theme::nested(14.0, 3.0), 11.0);
+        assert_eq!(theme::nested(6.0, 8.0), theme::MIN_ISLAND_RADIUS);
     }
 
     #[test]
