@@ -2778,3 +2778,46 @@ Tuning those numbers couldn't fix it. For a morph to flow, the outline itself ha
 
 **Cost:** no dependency. While a shape morphs, 112 points stepped at 480 Hz (four substeps a frame at 120 Hz), and a path of 112 cubics, instead of the tongue's ~170 rows of bisections: about 6.5 µs a frame for both in release on the M1 Pro, against ~80 µs for the tongue's fillet. At rest nothing new runs. **Measured** (Asahi aarch64, release, tiny-skia, the user's config, each alone on a session bus of its own, 10 s idle after 10 s, against main built in the same session): binary 21,000,200 bytes (main 21,000,216). RSS 23.8 MB (main 23.7). Idle CPU 40 ticks in 10 s on both, the same desktop noise D-116 saw. Tessellating and filling the body's path while it moves wasn't measured end to end. x86_64 wasn't built; nothing here is arch-specific.
 
+
+---
+
+## D-119: Where a morph's frame goes (measured, no change)
+
+**Status:** measurement (2026-10-16). Nothing changed; it does D-99's next step and finds a stall.
+
+**Question:** D-99 found that every GPU frame costs ~1.5 ms of eave's CPU and ~1.3 ms of Hyprland's, whatever moves, but not where it goes. D-118's body costs ~30 µs a frame (6.5 µs stepping, ~25 µs tessellating its path), so the room to optimise morphs, if any, is elsewhere.
+
+**How:** a bench-only branch (`bench-morph`) added `EAVE_BENCH_MORPH=<widget>:<ms>`, which opens and closes that widget's popover on a timer, and `EAVE_BENCH_WALL`, which logs each time an island works out its room to the walls. A second bar from the user's config (dark, on a session bus of its own) toggled `volume`'s popover every 700 ms, so something was morphing nearly all the time (~108 frames a second, from `EAVE_FRAMES` on tiny-skia). Each run: 10 s warm-up, 30 s measured, eave's and Hyprland's CPU from `/proc/<pid>/stat`, and samply at 500 Hz on eave's main thread and on Hyprland. The user's own bar, in glass, kept running, untouched. Asahi, M1 Pro, 120 Hz, scale 2, the user away. samply 0.13.1 assumes 4 KiB pages and panics on Asahi's 16 KiB ones, so it was patched locally (page size, smaller ring buffers to fit the mlock limit).
+
+**Measured** (% of one core, two sets of runs agreeing within ~5%):
+
+| Run | eave | Hyprland |
+|---|---|---|
+| Hyprland alone, nothing moving | | 5.9 |
+| GPU, dark, morphing | 27.5–28.9 | 24.1–25.5 |
+| GPU, glass, morphing | 25.2–25.7 | 30.3–30.5 |
+| tiny-skia, dark, morphing | 36.4–37.9 | 26.4–27.0 |
+
+**Where eave's time goes** (main thread, GPU, dark; per frame at ~108 fps):
+
+| What | Share | Per frame |
+|---|---|---|
+| `wall::room` → `squircle::clearance` (see below) | 36.5% | not per frame: ~65 ms at each open and close |
+| `iced_wgpu` present: `queue.submit` 24%, encoding 5.5%, `eglSwapBuffers` 4.9% | 35.2% | ~0.85 ms |
+| layout | 10.6% | ~0.26 ms |
+| drawing the tree, of which tessellating canvas paths 5.8% | 8.4% | ~0.2 ms |
+| events, `update`, the rest | ~9% | ~0.2 ms |
+
+Without the stall, a frame is ~1.55 ms, D-99's figure. On tiny-skia the stall is the same 26%, and the rest is rasterizing (fills 46%, text 13%).
+
+**Findings:**
+- **A 60–70 ms stall at the start of every popover open and close.** In the user's config, the right island moves by a third of a pixel when its popover opens (x 1331.0 ↔ 1331.336) and back when it closes. `Motion::wall` caches its rooms by the island's exact rect, so each move recomputes them. `wall::room` walks the island toward each wall in 0.5 px steps near the screen's corners, and each step runs `squircle::clearance`: every flattened point of the island against every segment of the screen's outline, with a `hypot` each. That's 60–70 ms on the UI thread: about eight frames dropped at 120 Hz, right where a morph starts. Startup pays ~14 ms per island once. This is a smoothness bug, not just cost.
+- **wgpu runs on GLES**, through EGL and Mesa's gallium. No Vulkan driver is installed (`/usr/share/vulkan/icd.d` doesn't exist), so wgpu falls back. Submitting and presenting is about half of what's left of a frame, including a GL fence each submit (4.7%).
+- **In Hyprland, hypr-eave's glass is about half the frame**: `CGlassElement::draw` 44% of Hyprland's samples with only the user's bar in glass, 58% with both bars. Nearly all of it is `takeBackdrop`, inside Mesa (no symbols), likely the tiler splitting its render pass to copy the framebuffer mid-frame. It runs every frame Hyprland draws, though what's under the bar didn't change: only the bar did.
+- **The morph itself is small:** the body plus every canvas path is ~0.14 ms a frame.
+
+**What could be done**, by what it would save:
+1. **Fix the wall stall.** Make `clearance` cheap: compare squared distances and take one root at the end, and skip the screen's segments whose bounding box is further than the closest so far (only its top corners are ever near). That's likely 10–100× less, which brings 65 ms under a frame. Separately, find why the island moves by a third of a pixel when its popover opens. Cost: small, in `squircle.rs`, `wall.rs` and the island's layout; `wall.rs` has tests to keep.
+2. **Try Vulkan on Asahi.** Install Mesa's Asahi Vulkan driver and measure again. It may cut part of the ~0.85 ms of submit and present, or not: Asahi's GL is mature. Cost: none in code. If it helps, `docs/platform.md` says to install it. CachyOS likely has Vulkan already.
+3. **Reuse the frosted backdrop in hypr-eave** while nothing under the bar is damaged. This could save up to about half of Hyprland's frame while only the bar moves. Cost: the plugin has to tell damage under its surface from damage on it. This is the hardest of the four.
+4. **Layout and tessellation** (~0.4 ms together): leave them. They're small, and cutting them means caching inside iced.
