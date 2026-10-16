@@ -79,6 +79,12 @@ pub const MIN_ISLAND_RADIUS: f32 = 4.0;
 pub const LIVE_ISLAND_PADDING: u16 = 4;
 /// How far each side of a pressed island moves in, in logical pixels.
 pub const PRESS_INSET: f32 = 1.5;
+/// How far each side of a pressed control moves in, at a size between its width and height, on
+/// `HAND` (D-127): a few pixels whatever its size, and never more than a tenth.
+pub const CONTROL_PRESS_INSET: f32 = 2.0;
+/// How far across from the finger a pressed control squeezes about, as a share of the way from
+/// its center to its edge: the side the finger is on gives most.
+pub const CONTROL_PRESS_LEAN: f32 = 0.6;
 /// The most the part of a dragged island under the pointer moves, sideways and up or down. It only
 /// approaches these: the further the pointer goes, the harder it pulls back.
 pub const DRAG_LIMIT_X: f32 = 10.0;
@@ -400,6 +406,12 @@ pub const SLIDER_RAIL_HOVER: f32 = 4.0;
 pub const SLIDER_HEIGHT: f32 = 16.0;
 pub const SLIDER_GROW: Duration = Duration::from_millis(180);
 pub const SLIDER_EASE: Duration = Duration::from_millis(220);
+/// In a popover a slider is a groove instead (D-127): a capsule this tall, filled up to the
+/// value, a little brighter under the pointer.
+pub const SLIDER_GROOVE: f32 = 28.0;
+/// How far a slider's end stretches, at most, under a drag past it. It gives less and less on
+/// the way there, and springs back on `HAND` when let go.
+pub const SLIDER_STRETCH: f32 = 16.0;
 pub const METER_HEIGHT: f32 = 6.0;
 /// How long a meter takes to ease to a new value.
 pub const METER_EASE: Duration = Duration::from_millis(400);
@@ -454,8 +466,6 @@ pub const ALTERNATE_SLIDE_Y: f32 = 4.0;
 pub const HOVER_REST: Duration = Duration::from_millis(200);
 /// How long a counter takes to count to a new number, through every one in between.
 pub const COUNTER_COUNT: Duration = Duration::from_millis(320);
-/// How long a switcher's mark takes to reach a newly current option.
-pub const SWITCHER_SLIDE: Duration = Duration::from_millis(180);
 /// While charging, the battery gulps like a bottle being poured: a few gulps, then a long rest
 /// with no frames at all. One gulp, and the time from one burst of gulps to the next.
 pub const BATTERY_GULP: Duration = Duration::from_millis(380);

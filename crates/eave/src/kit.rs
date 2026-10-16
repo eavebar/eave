@@ -35,6 +35,7 @@ use crate::markdown;
 use crate::meter::Meter;
 use crate::page::Page;
 use crate::pip::Pip;
+use crate::press::Press;
 use crate::shortcut;
 use crate::slider::Slider;
 use crate::slot::Slot;
@@ -756,7 +757,7 @@ fn answer_button<'a>(
     let fill = prominent.then(|| ctx.fill());
     let enabled = message.is_some();
     let radius = ctx.radius;
-    button(container(content).center_x(width).center_y(Length::Fill))
+    let button = button(container(content).center_x(width).center_y(Length::Fill))
         .on_press_maybe(message)
         .width(width)
         .height(theme::BUTTON_HEIGHT)
@@ -774,8 +775,8 @@ fn answer_button<'a>(
                     ..style
                 }
             }
-        })
-        .into()
+        });
+    Press::new(button).into()
 }
 
 /// How far a choice's check box sits in from its row's top: its corner nests in the row's.
@@ -850,12 +851,14 @@ fn choice<'a>(
         .push(words)
         .spacing(10)
         .align_y(alignment::Vertical::Top);
-    button(content)
-        .on_press(option.on_pick)
-        .width(Length::Fill)
-        .padding([CHOICE_INSET as u16, 6])
-        .style(move |theme: &Theme, status| row_style(theme, status, picked, radius))
-        .into()
+    Press::new(
+        button(content)
+            .on_press(option.on_pick)
+            .width(Length::Fill)
+            .padding([CHOICE_INSET as u16, 6])
+            .style(move |theme: &Theme, status| row_style(theme, status, picked, radius)),
+    )
+    .into()
 }
 
 /// A hash of what `node` says: its kinds and its text. Two nodes that read the same hash the
@@ -1316,6 +1319,7 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
                         text_button_style(theme, status, fill, ctx.radius)
                     })
             };
+            let button = Press::new(button).squeezes(ctx.panel());
             match on_secondary {
                 Some(message) => mouse_area(button).on_right_press(message).into(),
                 None => button.into(),
@@ -1525,14 +1529,17 @@ fn render<'a>(node: Node<AnyMessage>, ctx: Ctx, icons: &Icons) -> Element<'a, An
             step,
             on_change,
             on_release,
-        } => Slider::new(value, range, step, on_change, on_release, ctx.fill())
-            .width(if ctx.panel() {
-                Length::Fill
+        } => {
+            let slider = Slider::new(value, range, step, on_change, on_release, ctx.fill());
+            if ctx.panel() {
+                slider.width(Length::Fill).groove(ctx.radius).into()
             } else {
-                Length::Fixed(80.0)
-            })
+                slider.width(Length::Fixed(80.0)).into()
+            }
+        }
+        Kind::Toggle { on, on_toggle } => Press::new(Toggle::new(on, on_toggle))
+            .squeezes(ctx.panel())
             .into(),
-        Kind::Toggle { on, on_toggle } => Toggle::new(on, on_toggle).into(),
         Kind::Meter {
             fraction,
             limit,
@@ -1830,13 +1837,16 @@ fn list_item<'a>(item: ListItem, ctx: Ctx, icons: &Icons) -> Element<'a, AnyMess
         left: 8.0,
     };
     let row: Element<'a, AnyMessage> = match item.on_press {
-        Some(message) => button(container(content).center_y(Length::Fill))
-            .on_press(message)
-            .width(Length::Fill)
-            .height(height)
-            .padding(padding)
-            .style(move |theme: &Theme, status| row_style(theme, status, selected, radius))
-            .into(),
+        Some(message) => Press::new(
+            button(container(content).center_y(Length::Fill))
+                .on_press(message)
+                .width(Length::Fill)
+                .height(height)
+                .padding(padding)
+                .style(move |theme: &Theme, status| row_style(theme, status, selected, radius)),
+        )
+        .squeezes(ctx.panel())
+        .into(),
         None => container(content)
             .center_y(Length::Fixed(height))
             .width(Length::Fill)

@@ -8,6 +8,7 @@ use iced::advanced::widget::{Operation, Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::{Border, Element, Event, Length, Point, Rectangle, Size, Vector, window};
 
+use crate::spring::{Feel, MAX_FRAME, MORPH, Spring};
 use crate::theme;
 
 pub struct Switcher<'a, M> {
@@ -41,13 +42,18 @@ impl<'a, M> Switcher<'a, M> {
 }
 
 /// The mark's motion. Positions are relative to the switcher. Tabs slide their mark with it too.
+///
+/// Each edge springs on `MORPH` (D-127): the one going ahead in `BODY_LEAD` of its time and the
+/// one coming behind in `BODY_LAG` of it, as the body's sides do, so the mark stretches across
+/// and draws in after itself.
 #[derive(Debug, Default)]
 pub(crate) struct Motion {
     /// Where the mark is drawn this frame.
     pub(crate) shown: Option<Rectangle>,
-    from: Rectangle,
+    /// Left, top, right and bottom.
+    edges: Option<[Spring; 4]>,
     to: Option<Rectangle>,
-    start: Option<Instant>,
+    last: Option<Instant>,
 }
 
 impl Motion {
@@ -57,48 +63,63 @@ impl Motion {
             *self = Self::default();
             return false;
         };
-        match self.to {
+        let goal = [
+            target.x,
+            target.y,
+            target.x + target.width,
+            target.y + target.height,
+        ];
+        let Some(edges) = &mut self.edges else {
             // First appearance: no slide in from nowhere.
-            None => {
-                self.shown = Some(target);
-                self.to = Some(target);
-                self.start = None;
-            }
-            Some(to) if to != target => {
-                self.from = self.shown.unwrap_or(target);
-                self.to = Some(target);
-                self.start = Some(now);
-            }
-            Some(_) => {}
-        }
-
-        let Some(start) = self.start else {
+            self.edges = Some(goal.map(|edge| Spring::new(edge, MORPH)));
+            self.shown = Some(target);
+            self.to = Some(target);
             return false;
         };
-        let progress =
-            now.duration_since(start).as_secs_f32() / theme::SWITCHER_SLIDE.as_secs_f32();
-        if progress >= 1.0 {
-            self.shown = Some(target);
-            self.start = None;
-            false
-        } else {
-            self.shown = Some(lerp(self.from, target, ease_out(progress)));
-            true
+        if self.to != Some(target) {
+            self.to = Some(target);
+            let now_at = [0, 1, 2, 3].map(|i| edges[i].value);
+            // Which way it goes, across and down: the edges on that side lead.
+            let way = [
+                (goal[0] + goal[2]) - (now_at[0] + now_at[2]),
+                (goal[1] + goal[3]) - (now_at[1] + now_at[3]),
+            ];
+            for (i, edge) in edges.iter_mut().enumerate() {
+                let (way, far) = (way[i % 2], i >= 2);
+                let tempo = if way.abs() < 0.5 {
+                    1.0
+                } else if (way > 0.0) == far {
+                    theme::BODY_LEAD
+                } else {
+                    theme::BODY_LAG
+                };
+                edge.feel = Feel::new(theme::MORPH_RESPONSE * tempo, theme::MORPH_DAMPING);
+                edge.target = goal[i];
+            }
         }
-    }
-}
-
-fn ease_out(t: f32) -> f32 {
-    1.0 - (1.0 - t).powi(3)
-}
-
-fn lerp(a: Rectangle, b: Rectangle, t: f32) -> Rectangle {
-    let mix = |a: f32, b: f32| a + (b - a) * t;
-    Rectangle {
-        x: mix(a.x, b.x),
-        y: mix(a.y, b.y),
-        width: mix(a.width, b.width),
-        height: mix(a.height, b.height),
+        let seconds = self.last.map_or(0.0, |last| {
+            now.saturating_duration_since(last)
+                .min(MAX_FRAME)
+                .as_secs_f32()
+        });
+        let mut moving = false;
+        for edge in edges.iter_mut() {
+            edge.advance(seconds);
+            if edge.at_rest() {
+                edge.settle();
+            } else {
+                moving = true;
+            }
+        }
+        let [left, top, right, bottom] = edges.map(|edge| edge.value);
+        self.shown = Some(Rectangle {
+            x: left,
+            y: top,
+            width: (right - left).max(0.0),
+            height: (bottom - top).max(0.0),
+        });
+        self.last = moving.then_some(now);
+        moving
     }
 }
 
@@ -278,6 +299,24 @@ mod tests {
         Some(Rectangle::new(Point::new(x, 0.0), Size::new(20.0, 24.0)))
     }
 
+    /// Steps `motion` toward `target` until it rests, calling `each` after every frame.
+    fn run(
+        motion: &mut Motion,
+        target: Option<Rectangle>,
+        mut now: Instant,
+        mut each: impl FnMut(&Motion),
+    ) {
+        for _ in 0..1000 {
+            now += Duration::from_millis(8);
+            let moving = motion.step(target, now);
+            each(motion);
+            if !moving {
+                return;
+            }
+        }
+        panic!("it never came to rest");
+    }
+
     #[test]
     fn appears_in_place_then_slides() {
         let start = Instant::now();
@@ -288,15 +327,32 @@ mod tests {
         assert!(motion.step(at(100.0), start));
         assert_eq!(motion.shown, at(0.0));
 
-        assert!(motion.step(at(100.0), start + theme::SWITCHER_SLIDE / 2));
-        let middle = motion.shown.unwrap().x;
-        assert!(
-            middle > 50.0 && middle < 100.0,
-            "eased, ahead of linear: {middle}"
-        );
-
-        assert!(!motion.step(at(100.0), start + theme::SWITCHER_SLIDE));
+        run(&mut motion, at(100.0), start, |_| {});
         assert_eq!(motion.shown, at(100.0));
+        assert!(!motion.step(at(100.0), start), "there, it asks for nothing");
+    }
+
+    #[test]
+    fn the_leading_edge_goes_ahead_and_the_mark_stretches_across() {
+        let start = Instant::now();
+        let mut motion = Motion::default();
+        motion.step(at(0.0), start);
+        motion.step(at(100.0), start);
+        let mut widest: f32 = 0.0;
+        run(&mut motion, at(100.0), start, |motion| {
+            widest = widest.max(motion.shown.unwrap().width);
+        });
+        assert!(widest > 40.0, "it stretches: {widest}");
+        assert_eq!(motion.shown, at(100.0), "and draws in after itself");
+
+        // Back the other way, the left edge leads.
+        motion.step(at(0.0), start);
+        let mut led = false;
+        run(&mut motion, at(0.0), start, |motion| {
+            let shown = motion.shown.unwrap();
+            led |= 100.0 - shown.x > 120.0 - (shown.x + shown.width) + 10.0;
+        });
+        assert!(led, "the left edge goes ahead going left");
     }
 
     #[test]
@@ -305,11 +361,17 @@ mod tests {
         let mut motion = Motion::default();
         motion.step(at(0.0), start);
         motion.step(at(100.0), start);
-        let half = start + theme::SWITCHER_SLIDE / 2;
-        motion.step(at(100.0), half);
-        let there = motion.shown;
-        motion.step(at(0.0), half + Duration::from_millis(1));
-        assert_eq!(motion.from, there.unwrap());
+        motion.step(at(100.0), start + Duration::from_millis(80));
+        let there = motion.shown.unwrap();
+        assert!(there.x > 0.0 && there.x < 100.0);
+        motion.step(at(0.0), start + Duration::from_millis(81));
+        let next = motion.shown.unwrap();
+        assert!(
+            (next.x - there.x).abs() < 2.0,
+            "no jump: {} to {}",
+            there.x,
+            next.x
+        );
     }
 
     #[test]
