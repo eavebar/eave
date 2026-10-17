@@ -34,7 +34,7 @@ namespace Glass {
     struct SGlassProgram {
         GLuint id = 0;
         GLint  mask, surfSize, fbOrigin, toFb, toSurf, backdrop, bdOrigin, bdScale, bdLimit, wide, wideScale, wideLimit, wideSize, field, fieldScale, fieldLimit, fieldStep, sigma, band,
-            fade, thickness, gap, chroma, rim, tint, ink, contrast, margin, count, boxes, fills, chans, bevels, fbSize, rect, reliefs, reliefCount, unit;
+            fade, thickness, gap, chroma, rim, tint, ink, contrast, margin, count, boxes, fills, chans, bevels, fbSize, rect, reliefs, reliefCount, unit, pictureCount, pictures, pictureShapes;
     };
     static SGlassProgram g_glass[2];
     // The reliefs' data texture: RELIEF_TEXELS float texels a relief, a row each (D-126).
@@ -175,6 +175,9 @@ namespace Glass {
         p.reliefs     = at("reliefs");
         p.reliefCount = at("reliefCount");
         p.unit        = at("unit");
+        p.pictureCount  = at("pictureCount");
+        p.pictures      = at("pictures");
+        p.pictureShapes = at("pictureShapes");
         ensureQuad();
         return &p;
     }
@@ -465,6 +468,20 @@ namespace Glass {
             t[12]    = r.lit;
             t[13] = t[14] = t[15] = 0.F;
         }
+
+        // The pictures (D-129): the box (x0, y0, x1, y1), and the corner and the opacity.
+        job.pictureCount = 0;
+        for (auto const& p : job.state.pictures) {
+            if (job.pictureCount >= sc<int>(MAX_PICTURES))
+                break;
+            const int i                  = job.pictureCount++;
+            job.pictureBoxes[i * 4 + 0]  = p.x * k;
+            job.pictureBoxes[i * 4 + 1]  = p.y * k;
+            job.pictureBoxes[i * 4 + 2]  = (p.x + p.w) * k;
+            job.pictureBoxes[i * 4 + 3]  = (p.y + p.h) * k;
+            job.pictureShapes[i * 2 + 0] = p.radius * k;
+            job.pictureShapes[i * 2 + 1] = p.opacity;
+        }
     }
 
     // The reliefs' rows, on texture unit 4.
@@ -705,6 +722,9 @@ namespace Glass {
         glUniform4fv(prog->fills, MAX_REGIONS, job.fills.data());
         glUniform1iv(prog->chans, MAX_REGIONS, job.chans.data());
         glUniform1fv(prog->bevels, MAX_REGIONS, job.bevels.data());
+        glUniform1i(prog->pictureCount, job.pictureCount);
+        glUniform4fv(prog->pictures, MAX_PICTURES, job.pictureBoxes.data());
+        glUniform2fv(prog->pictureShapes, MAX_PICTURES, job.pictureShapes.data());
         glUniform2f(prog->fbSize, fbSize.x, fbSize.y);
         glUniform4f(prog->rect, job.fbBox.x, job.fbBox.y, job.fbBox.w, job.fbBox.h);
 

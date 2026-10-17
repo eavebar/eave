@@ -1,7 +1,7 @@
 //! What a frame says about glass, gathered while it's drawn: the islands that may turn to glass,
-//! with their fill and which way their ink goes, and the pictures over them that never do; and in
-//! every theme, where the notch and the grown edge are, which the pointer goes under (D-113). Sent
-//! when the frame is ([`super::Present`]), so it lands with that frame's buffer. With glass, the
+//! with their fill and which way their ink goes, and the pictures over them, kept as drawn inside
+//! their rounded corners (D-129); and in every theme, where the notch and the grown edge are,
+//! which the pointer goes under (D-113). Sent when the frame is ([`super::Present`]), so it lands with that frame's buffer. With glass, the
 //! controls drawn on islands are gathered too, as reliefs cut into the glass or standing out of
 //! it (D-126).
 
@@ -61,6 +61,7 @@ pub struct Relief {
 thread_local! {
     static RECORDS: RefCell<Vec<Record>> = const { RefCell::new(Vec::new()) };
     static RELIEFS: RefCell<Vec<Relief>> = const { RefCell::new(Vec::new()) };
+    static PICTURES: RefCell<Vec<Picture>> = const { RefCell::new(Vec::new()) };
     static ON: Cell<bool> = const { Cell::new(false) };
     /// How far what's being drawn is moved from its layout, as far as the islands say.
     static OFFSET: Cell<Vector> = const { Cell::new(Vector::new(0.0, 0.0)) };
@@ -78,6 +79,7 @@ pub fn gather(on: bool) {
     if !on {
         RECORDS.with(|records| records.borrow_mut().clear());
         RELIEFS.with(|reliefs| reliefs.borrow_mut().clear());
+        PICTURES.with(|pictures| pictures.borrow_mut().clear());
     }
 }
 
@@ -129,23 +131,51 @@ pub fn bezel(rect: Rectangle) {
     });
 }
 
-/// A picture drawn at `bounds` in its layout, with the `viewport` it was given: never glass.
-pub fn solid(bounds: Rectangle, viewport: &Rectangle) {
-    if !ON.with(Cell::get) {
-        return;
-    }
-    // Only what shows: a long list draws pictures scrolled far out of it too.
-    let Some(shown) = bounds.intersection(viewport) else {
-        return;
-    };
+/// A picture on an island, as the glass sees it: a rounded rectangle kept as drawn, with the glass
+/// showing through its corners (D-129).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Picture {
+    /// Surface coordinates, logical px.
+    pub rect: Rectangle,
+    /// Its corners' radius, circular.
+    pub radius: f32,
+    /// How opaque it's drawn, 0 to 1.
+    pub opacity: f32,
+}
+
+/// Where what's drawn at `at` in its layout, with the `viewport` it was given, is on the surface:
+/// moved as the islands say, scrolled, and squeezed with its island, about the island's center
+/// and inside the island's own move. And by how much it's squeezed.
+fn placer(viewport: &Rectangle) -> (impl Fn(Point) -> Point, f32) {
     let scrolled = SCROLL
         .with(Cell::get)
         .map_or(Vector::ZERO, |origin| origin - viewport.position());
-    // A pixel more all round: an island's squeeze moves it a little.
-    push(Record {
-        rect: (shown + OFFSET.with(Cell::get) + scrolled).expand(1.0),
-        kind: Kind::Solid,
-    });
+    let by = OFFSET.with(Cell::get) + scrolled;
+    let squeeze = SQUEEZE.with(Cell::get);
+    let place = move |at: Point| match squeeze {
+        Some((center, scale, outer)) => {
+            let inner = at + (by - outer);
+            center + (inner - center) * scale + outer
+        }
+        None => at + by,
+    };
+    (place, squeeze.map_or(1.0, |(_, scale, _)| scale))
+}
+
+/// A picture drawn at `bounds` in its layout, with the `viewport` it was given, its corners
+/// rounded by `radius` and faded to `opacity`: never glass where it's drawn. Only what shows: a
+/// long list draws pictures scrolled far out of it too.
+pub fn picture(bounds: Rectangle, viewport: &Rectangle, radius: f32, opacity: f32) {
+    if !on() || bounds.intersection(viewport).is_none() {
+        return;
+    }
+    let (place, scale) = placer(viewport);
+    let picture = Picture {
+        rect: Rectangle::new(place(bounds.position()), bounds.size() * scale),
+        radius: radius * scale,
+        opacity,
+    };
+    PICTURES.with(|pictures| pictures.borrow_mut().push(picture));
 }
 
 /// A control drawn at `relief.rect` in its layout, with the `viewport` it was given: only what
@@ -157,20 +187,7 @@ pub fn relief(relief: Relief, viewport: &Rectangle) {
     let Some(shown) = relief.rect.intersection(viewport) else {
         return;
     };
-    let scrolled = SCROLL
-        .with(Cell::get)
-        .map_or(Vector::ZERO, |origin| origin - viewport.position());
-    let by = OFFSET.with(Cell::get) + scrolled;
-    // Squeezed with its island: about the island's center, inside the island's own move.
-    let squeeze = SQUEEZE.with(Cell::get);
-    let place = |at: Point| match squeeze {
-        Some((center, scale, outer)) => {
-            let inner = at + (by - outer);
-            center + (inner - center) * scale + outer
-        }
-        None => at + by,
-    };
-    let scale = squeeze.map_or(1.0, |(_, scale, _)| scale);
+    let (place, scale) = placer(viewport);
     RELIEFS.with(|reliefs| {
         reliefs.borrow_mut().push(Relief {
             rect: Rectangle::new(place(shown.position()), shown.size() * scale),
@@ -217,6 +234,67 @@ pub fn take_reliefs() -> Vec<Relief> {
     RELIEFS.with(|reliefs| std::mem::take(&mut *reliefs.borrow_mut()))
 }
 
+/// This frame's pictures so far, leaving none.
+pub fn take_pictures() -> Vec<Picture> {
+    PICTURES.with(|pictures| std::mem::take(&mut *pictures.borrow_mut()))
+}
+
+/// The pictures as solid records, for a compositor from before pictures (version 4): their whole
+/// box, a pixel more all round, as it was.
+pub fn solids(pictures: &[Picture]) -> impl Iterator<Item = Record> + '_ {
+    pictures.iter().map(|picture| Record {
+        rect: picture.rect.expand(1.0),
+        kind: Kind::Solid,
+    })
+}
+
+/// What of `pictures` the compositor hears: those on an island of `records`, at most
+/// [`theme::GLASS_MAX_PICTURES`], largest first.
+pub fn fit_pictures(mut pictures: Vec<Picture>, records: &[Record]) -> Vec<Picture> {
+    pictures.retain(|picture| {
+        picture.rect.width >= 1.0
+            && picture.rect.height >= 1.0
+            && records.iter().any(|record| {
+                matches!(record.kind, Kind::Glass { .. })
+                    && record
+                        .rect
+                        .expand(theme::GLASS_MARGIN)
+                        .intersection(&picture.rect)
+                        .is_some()
+            })
+    });
+    pictures.sort_by(|a, b| b.rect.area().total_cmp(&a.rect.area()));
+    pictures.truncate(theme::GLASS_MAX_PICTURES);
+    pictures
+}
+
+/// The pictures as `set_pictures` takes them: six native-endian i32 each, lengths in 24.8 fixed
+/// point.
+pub fn encode_pictures(pictures: &[Picture]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pictures.len() * 24);
+    for picture in pictures {
+        let rect = picture.rect;
+        for value in [
+            fixed(rect.x),
+            fixed(rect.y),
+            fixed(rect.width),
+            fixed(rect.height),
+            fixed(picture.radius.min(rect.width.min(rect.height) / 2.0)),
+            (picture.opacity.clamp(0.0, 1.0) * 255.0).round() as i32,
+        ] {
+            out.extend_from_slice(&value.to_ne_bytes());
+        }
+    }
+    out
+}
+
+/// A length in 24.8 fixed point.
+fn fixed(value: f32) -> i32 {
+    (value * 256.0)
+        .round()
+        .clamp(i32::MIN as f32, i32::MAX as f32) as i32
+}
+
 /// What of `reliefs` the compositor hears: those on an island of `records`, at most
 /// [`theme::GLASS_MAX_RELIEFS`], in the order they were drawn.
 pub fn fit_reliefs(mut reliefs: Vec<Relief>, records: &[Record]) -> Vec<Relief> {
@@ -235,11 +313,6 @@ pub fn fit_reliefs(mut reliefs: Vec<Relief>, records: &[Record]) -> Vec<Relief> 
 /// The reliefs as `set_reliefs` takes them: thirteen native-endian i32 each, lengths in 24.8
 /// fixed point.
 pub fn encode_reliefs(reliefs: &[Relief]) -> Vec<u8> {
-    let fixed = |value: f32| {
-        (value * 256.0)
-            .round()
-            .clamp(i32::MIN as f32, i32::MAX as f32) as i32
-    };
     let byte = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as i32;
     let mut out = Vec::with_capacity(reliefs.len() * 52);
     for relief in reliefs {
@@ -406,14 +479,30 @@ mod tests {
         translated(Vector::new(5.0, 0.0), || {
             scrolled(Point::new(0.0, 50.0), || {
                 let viewport = Rectangle::new(Point::new(0.0, 80.0), Size::new(100.0, 100.0));
-                solid(picture, &viewport);
+                super::picture(picture, &viewport, 2.0, 0.5);
             })
         });
-        let records = take();
+        // Squeezed to half about (0, 0) inside an island moved 10 across.
+        translated(Vector::new(10.0, 0.0), || {
+            squeezed(Point::ORIGIN, 0.5, || {
+                super::picture(picture, &Rectangle::INFINITE, 2.0, 1.0)
+            })
+        });
+        let pictures = take_pictures();
         assert_eq!(
-            records[0].rect,
-            Rectangle::new(Point::new(14.0, 69.0), Size::new(6.0, 6.0))
+            pictures[0],
+            Picture {
+                rect: Rectangle::new(Point::new(15.0, 70.0), Size::new(4.0, 4.0)),
+                radius: 2.0,
+                opacity: 0.5,
+            }
         );
+        assert_eq!(
+            pictures[1].rect,
+            Rectangle::new(Point::new(15.0, 50.0), Size::new(2.0, 2.0))
+        );
+        assert_eq!(pictures[1].radius, 1.0);
+        assert!(take().is_empty(), "not records");
         gather(false);
     }
 
@@ -421,12 +510,60 @@ mod tests {
     fn pictures_scrolled_out_of_view_are_not_recorded() {
         gather(true);
         let viewport = Rectangle::new(Point::new(0.0, 80.0), Size::new(100.0, 100.0));
-        solid(
+        super::picture(
             Rectangle::new(Point::new(10.0, 10.0), Size::new(4.0, 4.0)),
             &viewport,
+            0.0,
+            1.0,
         );
-        assert!(take().is_empty());
+        assert!(take_pictures().is_empty());
         gather(false);
+    }
+
+    #[test]
+    fn pictures_go_out_in_fixed_point_with_their_radius_and_opacity() {
+        let picture = Picture {
+            rect: Rectangle::new(Point::new(1.5, 2.0), Size::new(128.0, 64.0)),
+            radius: 40.0,
+            opacity: 1.0,
+        };
+        assert_eq!(
+            words(&encode_pictures(&[picture])),
+            vec![384, 512, 32768, 16384, 8192, 255],
+            "a radius no more than half the shorter side"
+        );
+    }
+
+    #[test]
+    fn pictures_off_every_island_are_left_out_and_the_rest_fit_or_go_as_solids() {
+        let island = Record {
+            rect: Rectangle::new(Point::new(0.0, 0.0), Size::new(320.0, 400.0)),
+            kind: Kind::Glass {
+                fill: Color::BLACK,
+                darker: 0.0,
+            },
+        };
+        let picture = |x: f32, size: f32| Picture {
+            rect: Rectangle::new(Point::new(x, 5.0), Size::new(size, size)),
+            radius: 3.0,
+            opacity: 1.0,
+        };
+        let mut pictures: Vec<Picture> = (0..200).map(|i| picture(i as f32, 8.0)).collect();
+        pictures.push(picture(1000.0, 50.0));
+        pictures.push(picture(10.0, 128.0));
+        let fitted = fit_pictures(pictures, &[island]);
+        assert_eq!(fitted.len(), theme::GLASS_MAX_PICTURES);
+        assert_eq!(fitted[0], picture(10.0, 128.0), "largest first");
+        assert!(fitted.iter().all(|picture| picture.rect.x < 1000.0));
+        assert!(8 + 4 + encode_pictures(&fitted).len() <= 4096);
+        // Before pictures, their whole box, a pixel more all round.
+        assert_eq!(
+            solids(&[picture(10.0, 4.0)]).collect::<Vec<_>>(),
+            vec![Record {
+                rect: Rectangle::new(Point::new(9.0, 4.0), Size::new(6.0, 6.0)),
+                kind: Kind::Solid,
+            }]
+        );
     }
 
     fn well(x: f32) -> Relief {

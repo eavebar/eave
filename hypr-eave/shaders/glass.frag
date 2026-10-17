@@ -59,6 +59,16 @@ uniform highp sampler2D reliefs;
 uniform int   reliefCount;
 uniform float unit;
 
+// The pictures on the islands (D-129): boxes in s px (x0, y0, x1, y1), and each one's corner
+// radius, s px, and how opaque it's drawn. Inside one the pixel is kept as drawn; on its rounded
+// edge, or where it's faded, it's laid over the glass by as much as eave laid it over the fill.
+const int MAX_PICTURES = 32;
+uniform int  pictureCount;
+uniform vec4 pictures[MAX_PICTURES];
+uniform vec2 pictureShapes[MAX_PICTURES];
+// How much of this pixel they cover: `kept`, worked out once in main.
+float keep = 0.0;
+
 out vec4 fragColor;
 
 const vec3 W = vec3(0.2126, 0.7152, 0.0722); // relative luminance, of linear light
@@ -190,6 +200,24 @@ vec3 wideLook(vec2 s) {
     return sum / 9.0;
 }
 
+// How much of s the pictures cover, the most of any: 1 well inside one, 0 outside them all, the
+// rounded corner's coverage on its edge, times how opaque the picture is drawn. The same circle
+// eave rounds them with, so the edge matches its alpha.
+float kept(vec2 s) {
+    float most = 0.0;
+    for (int i = 0; i < MAX_PICTURES; i++) {
+        if (i >= pictureCount)
+            break;
+        vec4  b      = pictures[i];
+        float r      = pictureShapes[i].x;
+        vec2  center = (b.xy + b.zw) * 0.5;
+        vec2  q      = abs(s - center) - ((b.zw - b.xy) * 0.5 - vec2(r));
+        float sdf    = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - r;
+        most         = max(most, clamp(0.5 - sdf, 0.0, 1.0) * pictureShapes[i].y);
+    }
+    return most;
+}
+
 // Which island s belongs to: the nearest one eave said may turn to glass, within `margin` of it
 // (an island's jelly and squish reach a little past the shape it reports), and of those it's
 // inside, the smallest; with its fill, which way its ink goes, its channel of the field and its
@@ -273,8 +301,7 @@ vec3 body(vec3 glass) {
 // way is the island's (eave decides it over what's behind the whole island, with hysteresis), never
 // the pixel's, so it can't flip partway through a letter; the glass gives way instead, so the ink
 // can always reach it.
-vec3 shade(vec2 s, vec3 glass, vec3 fill, bool lighterInk, float milk, float lit, float tone) {
-    vec4 t      = layer(s);
+vec3 shade(vec2 s, vec4 t, vec3 glass, vec3 fill, bool lighterInk, float milk, float lit, float tone) {
     vec3 c      = t.rgb / max(t.a, 1e-4);
     // Grey ink follows the glass; colored content keeps its colors.
     float grey  = 1.0 - smoothstep(0.08, 0.25, chromaOf(c));
@@ -323,18 +350,29 @@ vec3 shade(vec2 s, vec3 glass, vec3 fill, bool lighterInk, float milk, float lit
     return col;
 }
 
-// Replaces the surface's pixel: shaded once, or both ways while the island's ink turns.
+// The surface's pixel `t` shaded, once or both ways while the island's ink turns.
+vec3 shaded(vec2 s, vec4 t, vec3 glass, vec3 fill, float darker, float milk, float lit, float tone) {
+    if (darker <= 0.0)
+        return shade(s, t, glass, fill, true, milk, lit, tone);
+    if (darker >= 1.0)
+        return shade(s, t, glass, fill, false, milk, lit, tone);
+    return mix(shade(s, t, glass, fill, true, milk, lit, tone), shade(s, t, glass, fill, false, milk, lit, tone), darker);
+}
+
+// Replaces the surface's pixel: shaded, or where a picture covers it by `keep`, the picture laid
+// over the glass by as much. eave drew it over the fill that way, `fill·(1−keep) + picture·keep`,
+// so the fill's share becomes the glass under a bare fill pixel instead (D-129).
 void put(vec2 s, vec3 glass, float a, vec3 fill, float darker, float milk, float lit, float tone) {
     // Its own ink goes the way it's drawn.
     if (ink == 0)
         darker = luma(fill) >= 0.5 ? 1.0 : 0.0;
+    vec4 t = layer(s);
     vec3 col;
-    if (darker <= 0.0)
-        col = shade(s, glass, fill, true, milk, lit, tone);
-    else if (darker >= 1.0)
-        col = shade(s, glass, fill, false, milk, lit, tone);
-    else
-        col = mix(shade(s, glass, fill, true, milk, lit, tone), shade(s, glass, fill, false, milk, lit, tone), darker);
+    if (keep > 0.0) {
+        vec3 under = shaded(s, vec4(fill, 1.0), glass, fill, darker, milk, lit, tone);
+        col        = clamp(t.rgb / max(t.a, 1e-4) + (under - fill) * (1.0 - keep), 0.0, 1.0);
+    } else
+        col = shaded(s, t, glass, fill, darker, milk, lit, tone);
     a *= fade;
     fragColor = vec4(col * a, a);
 }
@@ -398,6 +436,9 @@ void main() {
     float a = cover(s);
     if (a <= 0.0)
         discard;
+    keep = kept(s);
+    if (keep >= 1.0)
+        discard; // inside a picture, kept as drawn however dark it is
     vec3  fill;
     float darker;
     vec4  chan;

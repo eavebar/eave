@@ -87,6 +87,9 @@ echo "ok: $regions regions (glass, solid)"
 reliefs=$(ctl hypreave | sed -n 's/.* \([0-9]*\) reliefs;.*/\1/p' | head -1)
 [ -n "$reliefs" ] && [ "$reliefs" -le 64 ] || fail "more reliefs than fit: $reliefs"
 echo "ok: $reliefs reliefs (D-126)"
+pictures=$(ctl hypreave | sed -n 's/.* \([0-9]*\) pictures,.*/\1/p' | head -1)
+[ -n "$pictures" ] && [ "$pictures" -le 32 ] || fail "more pictures than fit: $pictures"
+echo "ok: $pictures pictures (D-129)"
 ctl hypreave | grep -q "[1-9][0-9]* bezel" || fail "eave sent no bezel records (D-113)"
 echo "ok: the notch and the edge are told"
 

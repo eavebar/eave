@@ -1875,7 +1875,7 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 
 ## D-88: The bar shows on hover or hides over fullscreen windows, and notifications wait
 
-**Status:** accepted (2026-10-14). Amends roadmap step 0 (the bar always on the `top` layer, always keeping its exclusive zone) and [D-47](#d-47-notices-plugins-list-notifications-the-right-island-turns-into-them) (notices show as soon as they come).
+**Status:** accepted (2026-10-14). Amends roadmap step 0 (the bar always on the `top` layer, always keeping its exclusive zone) and [D-47](#d-47-notices-plugins-list-notifications-the-right-island-turns-into-them) (notices show as soon as they come). Amended by [D-130](#d-130-the-notch-and-the-edge-never-hide): with a notch or a grown edge, a bar hidden on purpose over a fullscreen window stays on `overlay`, hidden but for them.
 
 **What:**
 - Two new tables in config.toml, one per thing they're about, in the style of `notch`, `screen` and `islands`:
@@ -1897,7 +1897,7 @@ Compared with before D-83, everything moves quicker and settles sooner (a kick p
 - **Exclusive zone.** It is 0 when `bar.show = "hover"`, even while the bar is out, so windows never move as it comes and goes. In fullscreen it doesn't matter.
 - **Layer.** The surfaces go on `overlay` over a fullscreen window while the bar is out, or while `bar.fullscreen = "hover"` waits for the pointer. Otherwise they stay on `top`.
   - Going back to `top` waits for the slide away (`lift::slide_time`, the time `MORPH` takes to settle from a step).
-  - Hidden on purpose in fullscreen, the bar is under the window, not just transparent above it.
+  - Hidden on purpose in fullscreen, the bar is under the window, not just transparent above it. *(Superseded by [D-130](#d-130-the-notch-and-the-edge-never-hide) for a screen with a notch or a grown edge: the bar stays above the window, transparent but for them.)*
 - **Peeks** come from a workspace switch (with `peek = true`) and from any nudge, and only for a bar shown on hover. With `fullscreen = "hide"`, the bar stays hidden for those, and comes out only for a notification or the dormer.
 - **Held notifications.** In fullscreen, `Bar::held` keeps them out of `cards()`. A panel opens only for those that aren't held. A held notice keeps its place in `toasts`, its clock stopped, since only shown cards run. When fullscreen ends, it shows with its whole time left. Going fullscreen with uncritical ones on screen folds them away until it ends.
 
@@ -2365,11 +2365,11 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 
 ## D-106: The notch and the edge are the screen's, not the bar's
 
-**Status:** accepted (2026-10-15). Amends [D-86](#d-86-the-dormer-comes-out-as-a-drop), [D-88](#d-88-the-bar-shows-on-hover-or-hides-over-fullscreen-windows-and-notifications-wait) and [D-90](#d-90-widgets-dialogs-they-come-out-of-what-opened-them).
+**Status:** accepted (2026-10-15). Amends [D-86](#d-86-the-dormer-comes-out-as-a-drop), [D-88](#d-88-the-bar-shows-on-hover-or-hides-over-fullscreen-windows-and-notifications-wait) and [D-90](#d-90-widgets-dialogs-they-come-out-of-what-opened-them). Amended by [D-130](#d-130-the-notch-and-the-edge-never-hide): they stay over a fullscreen window and when a solid bar's band slides away too.
 
 **What:**
 - **The bezel.** The notch (D-75) and the grown top edge (D-81) are drawn by their own widget, `Bezel` (`bezel.rs`), under the islands. `Zones` keeps only the layout. The bezel also does the dormer's squish and writes the `Sag` (D-86).
-- **They stay when the bar hides.** The bezel has a `Lift` of its own that stays out. A solid bar's band is the bar, so it still slides away whole (D-89). Over a fullscreen window the bezel follows the bar, so it never draws over the window.
+- **They stay when the bar hides.** The bezel has a `Lift` of its own that stays out. A solid bar's band is the bar, so it still slides away whole (D-89). Over a fullscreen window the bezel follows the bar, so it never draws over the window. *(Superseded by [D-130](#d-130-the-notch-and-the-edge-never-hide): the bezel isn't lifted at all, it stays over a fullscreen window, and a solid bar's band slides away over a bezel that stays.)*
   - While the bar is hidden on hover, the input region adds the notch and the grown edge to the `REVEAL_EDGE` strip (`Bar::bezel_rects`). The bezel says how wide the surface is (`Width`), so the host knows where the notch is.
   - Only the top strip brings the bar out (`PointerAtTop`, a `CursorMoved` in its first `REVEAL_EDGE` rows). Coming onto the surface (`PointerEntered`) keeps a bar that's still out, but doesn't bring a hidden one out, so pointing at the notch doesn't.
 - **They take the hand,** as an island does (D-26), on `HAND`, with the rubber band and the stretch around the grab shared in `hand.rs`. A press captures the event, so it doesn't also close what's open.
@@ -2530,7 +2530,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
 
 ## D-112: Glass, drawn by a Hyprland plugin that eave tells what's glass
 
-**Status:** accepted (2026-10-15), experimental until the user signs off the look. Amended by [D-126](#d-126-controls-are-etched-into-the-glass): controls shape the glass too (protocol version 4). It amends [D-23](#d-23-core-plugins-depend-only-on-hyprland-and-the-kernel): an optional compositor plugin, built from this repository, is allowed, and [D-92](#d-92-light-and-dark-the-palette-mirrors): glass is a third theme. Without the plugin, nothing changes. Amended by [D-113](#d-113-the-pointer-slides-under-the-notch): the plugin also puts the pointer under the notch, so `eave-build` builds it in every theme, and eave talks to it in every theme. Amended (2026-10-16): the bend at the edges comes from a blurred field of the island's shape, no longer from rings of samples around each pixel (*The bend*, below). Amended again (2026-10-16): the edge is a glass bevel the backdrop refracts through, by Snell's law, floating a gap over it so its edge turns what's behind over, its rim lit by Fresnel reflection, and the frost is light (*The refraction*, below). Amended (2026-10-16): colored content on a dark island keeps its colors; only grey ink is screened onto the glass (*Ink*, below).
+**Status:** accepted (2026-10-15), experimental until the user signs off the look. Amended by [D-126](#d-126-controls-are-etched-into-the-glass): controls shape the glass too (protocol version 4). It amends [D-23](#d-23-core-plugins-depend-only-on-hyprland-and-the-kernel): an optional compositor plugin, built from this repository, is allowed, and [D-92](#d-92-light-and-dark-the-palette-mirrors): glass is a third theme. Without the plugin, nothing changes. Amended by [D-113](#d-113-the-pointer-slides-under-the-notch): the plugin also puts the pointer under the notch, so `eave-build` builds it in every theme, and eave talks to it in every theme. Amended (2026-10-16): the bend at the edges comes from a blurred field of the island's shape, no longer from rings of samples around each pixel (*The bend*, below). Amended again (2026-10-16): the edge is a glass bevel the backdrop refracts through, by Snell's law, floating a gap over it so its edge turns what's behind over, its rim lit by Fresnel reflection, and the frost is light (*The refraction*, below). Amended (2026-10-16): colored content on a dark island keeps its colors; only grey ink is screened onto the glass (*Ink*, below). Amended by [D-129](#d-129-pictures-on-glass-are-their-own-shape): pictures go with their rounded shape (protocol version 5), no longer as solid records.
 
 **What:** `theme = "glass"` in config.toml, next to dark, light and system. With the `hypr-eave` plugin loaded in Hyprland, the islands are liquid glass. What's behind them shows through, frosted, and is bent at their edges with a lit rim. eave still draws every island opaque, in its own fill, exactly as without the plugin. The plugin keys the glass in where an island is that fill, so fades, which cover content with the island's color, fade to glass for free.
 - **The plugin** (`hypr-eave/`, C++, Hyprland 0.56):
@@ -2540,7 +2540,7 @@ The binary grows 1.27 MB: 75 KB for `eave doctor`, about 565 KB for `essential` 
   - **Readback.** It reads back how bright it is behind the bar, with a pixel pack buffer and a fence, at most ten times a second. It sends a reading only when an island's average brightness moved by 16/255: text scrolling behind the bar moves single cells a lot and islands little.
 - **The channel:** `eave_glass_v1` (`protocol/eave-glass-v1.xml`), a private Wayland protocol on the bar's own connection. Its state is double-buffered and applied on `wl_surface.commit`, so what eave says lands with the frame it describes.
   - **eave → plugin, each frame:**
-    - `set_regions`: each island that may turn to glass, with its exact fill and which way its ink goes (a weight, 0 lighter to 255 darker), plus what never turns to glass: pictures, the notch, the grown edge, and islands attached to an edge or in a solid bar. At most 64 records (see *the crash* below).
+    - `set_regions`: each island that may turn to glass, with its exact fill and which way its ink goes (a weight, 0 lighter to 255 darker), plus what never turns to glass: pictures, the notch, the grown edge, and islands attached to an edge or in a solid bar. At most 64 records (see *the crash* below). *(From version 5, pictures go in `set_pictures` instead, rounded: [D-129](#d-129-pictures-on-glass-are-their-own-shape).)*
     - `set_look`: `[glass]` in config.toml.
     - `set_report`: the cell size of the brightness grid.
   - **plugin → eave:**
@@ -3067,3 +3067,40 @@ The cause underneath: the dialog is a second solid shape, drawn by the island in
 **Upstream:** both layershellev patches are worth offering. Drop `vendor/layershellev` once a release has hold gestures and frames in flight.
 
 **Cost:** no dependency. Binary unchanged (21,065,768 bytes either way, default build). A surface with something out is as tall as the screen, which costs nothing at rest: idle, the test bar drew 2 frames in 20 s, made about 5 wakeups a second and used about 0.15% CPU.
+
+---
+
+## D-129: Pictures on glass are their own shape
+
+**Status:** accepted (2026-10-17). Amends [D-112](#d-112-glass-drawn-by-a-hyprland-plugin-that-eave-tells-whats-glass): `eave_glass_v1` version 5.
+
+**Problem:** on glass, a cover (the media popover's art, the bar's small cover, a notification's picture) sat on a black square. Each picture went to hypr-eave as a solid record, and the glass is never drawn inside a solid box. A cover's corners are rounded in its own alpha (`cover.rs`, `rounded`), so they were the island's black fill, kept as drawn. The record was also a pixel bigger all round, since it ignored the press squeeze (D-127).
+
+**What:**
+- **`set_pictures`** (since version 5): each picture as a rounded rectangle, x, y, width, height and radius in 24.8 fixed point, plus how opaque it's drawn (0 to 255). At most 32, largest first (`theme::GLASS_MAX_PICTURES`, the plugin's `MAX_PICTURES`).
+- **eave.** `Picture` carries its corner radius: `COVER_RADIUS` or `COVER_ICON_RADIUS` for covers, scaled for a notification's picture, `NOTICE_IMAGE_RADIUS` for a wide one, 0 for an app icon. `frame::picture` records it moved, scrolled and squeezed exactly as a relief is (one `placer` for both), so it no longer needs the extra pixel.
+- **The glass.** `kept` works out how much of a pixel the pictures cover: a rounded rectangle's coverage, the same circle eave rounds them with, times the opacity. Where that's 1, the pixel is kept as drawn, as inside a solid. Where it's less, eave drew `fill·(1−k) + picture·k`, so the glass replaces the fill's share: `pixel + (under − fill)·(1−k)`, `under` being what a bare fill pixel turns into there. That's exact compositing of the picture over the glass: the rounded edge is smooth, and a faded picture fades into the glass rather than into black.
+- **Older plugins.** Against a version 4 plugin (one Hyprland loaded before this), eave turns pictures back into solid records, a pixel bigger, as before (`frame::solids`).
+
+**Why:**
+- **A new request, not a field in `set_regions`:** a region record is seven integers. A different size would make a stale plugin misread every record, as `set_gap` already avoided.
+- **A radius, not a mask:** every picture eave draws over an island is a rounded rectangle with circular corners. Its alpha is known exactly from the radius, so a few numbers describe it.
+
+**Not covered:** app icons (`AppIcon`) have arbitrary alpha shapes, which a rounded rectangle can't describe. They're still kept whole, a square of the fill around them on glass. Doing them would mean telling the plugin their alpha, or drawing islands with holes, and nothing here needs that yet.
+
+**Cost:** no dependency. Per glass pixel, one loop over the frame's pictures (usually one or two) for a rounded-rectangle distance. 64 more uniform vectors in the glass shader. A frame sends 24 bytes per picture, only when they change.
+
+---
+
+## D-130: The notch and the edge never hide
+
+**Status:** accepted (2026-10-17). Supersedes [D-106](#d-106-the-notch-and-the-edge-are-the-screens-not-the-bars)'s "over a fullscreen window the bezel follows the bar" and "a solid bar's band slides away whole", and amends [D-88](#d-88-the-bar-shows-on-hover-or-hides-over-fullscreen-windows-and-notifications-wait).
+
+**What:** the notch and the grown edge stand for physical parts of the screen, so they never hide, the user's rule.
+- **Not lifted.** The `Bezel` is no longer in a `Lift` at all.
+- **Over a fullscreen window** they stay, drawn over the window, where the screen's real border is anyway. While the screen has a notch or a grown edge (`Bar::has_bezel`), a bar hidden on purpose stays on the `overlay` layer, transparent but for them, instead of sinking under the window. `Bar::bezel_rects` keeps them in the input region, as with a bar hidden on hover, so the pointer goes under them (D-113) and a click on the notch brings the dormer out. Without a notch or edge, nothing is drawn, so the bar still sinks.
+- **A solid bar** draws two bezels. One is the notch and the edge, with the screen's corners, under everything. The other is the band, which is the bar (D-89), lifted with the islands. While the band is out it covers the first, and that one takes no hand (`Bezel::touchable`), so the band behaves as before. As the band slides away, the notch and the edge stay. D-106 turned down drawing the notch twice; here it isn't drawn twice, since the band never draws the notch, so nothing has to be kept in step.
+
+**Why:** the user saw the notch and the grown edge slide away over fullscreen windows (with `bar = { fullscreen = "hover" }`). They're the screen's border, and a border that comes and goes is what D-106 set out to stop.
+
+**Cost:** no dependency. On a screen with a notch or a grown edge, a fullscreen window always has the bar's surface above it, so Hyprland can't scan the window out directly, which costs a little GPU in fullscreen games and video. A plain screen is unchanged.
