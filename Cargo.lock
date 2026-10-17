@@ -772,6 +772,7 @@ dependencies = [
  "eave-keyboard",
  "eave-media",
  "eave-network",
+ "eave-power",
  "eave-update",
  "eave-volume",
  "eave-window",
@@ -985,6 +986,18 @@ dependencies = [
  "eave-iwd",
  "eave-net",
  "serde",
+ "toml",
+]
+
+[[package]]
+name = "eave-power"
+version = "0.1.0"
+dependencies = [
+ "eave-api",
+ "eave-dbus",
+ "eave-hyprland",
+ "serde",
+ "tokio",
  "toml",
 ]
 

@@ -85,6 +85,12 @@ pub enum Icon {
     Next,
     /// The Bluetooth rune, with a dot on each side while a device is connected.
     Bluetooth { connected: bool },
+    /// The power symbol: a circle broken at the top by a stroke. Turning off.
+    Power,
+    /// A crescent moon: sleep.
+    Sleep,
+    /// An arrow leaving a bracket: log out, or leave.
+    LogOut,
 }
 
 /// Where a [`step`] of a [`timeline`] stands. The host draws it as the step's mark on the line.

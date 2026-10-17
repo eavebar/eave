@@ -1,0 +1,16 @@
+# Has the next boot, only, start the GRUB entry named by the instance: the power plugin starts
+# eave-boot-grub@<entry>.service for a `{ grub = "<entry>" }` target, then reboots (D-131).
+# grub-reboot needs GRUB_DEFAULT=saved in /etc/default/grub (and grub-mkconfig run since).
+# Installed as root, with 50-eave-boot.rules.
+
+[Unit]
+Description=Boot GRUB's %I next time
+Documentation=https://github.com/eaveshell/eave/blob/main/docs/running.md#rebooting-into-another-system
+AssertPathExists=/usr/bin/grub-reboot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/grub-reboot %I
+NoNewPrivileges=yes
+PrivateNetwork=yes
+ProtectHome=yes

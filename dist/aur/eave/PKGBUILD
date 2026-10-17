@@ -14,7 +14,9 @@ license=(MIT)
 # pkg-config and xkbcommon.
 depends=(cargo git pkgconf libxkbcommon hyprland gcc-libs glibc)
 makedepends=(cargo)
-optdepends=('libnotify: notify-send when a rebuild fails')
+optdepends=('libnotify: notify-send when a rebuild fails'
+            'asahi-bless: Reboot to macOS on Apple Silicon'
+            'efibootmgr: rebooting into a firmware boot entry')
 install=eave.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')
@@ -44,4 +46,7 @@ package() {
 	install -Dm755 target/release/eave-build -t "$pkgdir/usr/bin"
 	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
 	install -Dm644 README.md docs/running.md -t "$pkgdir/usr/share/doc/$pkgname"
+	# The power plugin's boot helpers: they only pick what the next boot starts (D-131).
+	install -Dm644 dist/power/*.service -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 dist/power/50-eave-boot.rules -t "$pkgdir/usr/share/polkit-1/rules.d"
 }

@@ -35,6 +35,7 @@ The order follows two ideas: **prove the hardest property early** (smooth animat
 - [x] **6.10 The bar's own actions.** `eave doctor` checks the setup ([D-96](decisions.md)), `eave-build check` says what an update would move ([D-97](decisions.md)), and the `essential` and `update` plugins put calibrate, restart, health, check for updates and update in the dormer ([D-98](decisions.md)).
 
 - [x] **6.10 Bays and parts.** A widget can show inside another's popover, where it leaves room: Spotify's playlists in `media`, a headset's battery in `volume`. The user decides, in config.toml, whether a widget sits on its own or in another's bay ([D-109](decisions.md)).
+- [x] **6.11 Power.** `plugins/power`: lock, log out, suspend, hibernate, reboot and shut down through logind, and reboot into another system: systemd-boot entries through logind, macOS on Apple Silicon, GRUB and firmware entries through small boot helper units ([D-131](decisions.md)).
 
 ## Next
 

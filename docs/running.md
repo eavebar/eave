@@ -258,6 +258,29 @@ bind = SUPER, M, event, eave-action volume mute
 
 `eave popover <widget>` and `eave action <widget> <id>` do the same from a script or any other shortcut tool. `<widget>` is the name in `widget = "…"`, without its owner (`claude` for `fran/eave-claude`). The built-in widgets' action ids are listed in [plugins.md](plugins.md#action-ids).
 
+## Rebooting into another system
+
+The `power` widget reboots into the boot loader's other entries with no setup when logind knows them, as it does with systemd-boot. The rest need root to pick the next boot, so eave ships small system units that do only that, and a polkit rule that lets the user at the machine start them and nothing else ([D-131](decisions.md)):
+
+| Target | config.toml | Unit | Runs |
+|---|---|---|---|
+| macOS on Apple Silicon | nothing: found when the unit is installed | `eave-boot-macos.service` | `asahi-bless --next --set-boot-macos` |
+| a GRUB entry | `boot = [{ name = "Windows", grub = "Windows Boot Manager (on /dev/nvme0n1p1)" }]` | `eave-boot-grub@.service` | `grub-reboot <entry>` |
+| a firmware boot entry | `boot = [{ name = "Windows", efi = "Windows Boot Manager" }]` | `eave-boot-efi@.service` | `efibootmgr --bootnext <####>` |
+
+The AUR package installs them. With install.sh, install them from a checkout of eave:
+
+```sh
+sudo install -Dm644 dist/power/*.service -t /usr/lib/systemd/system
+sudo install -Dm644 dist/power/50-eave-boot.rules -t /usr/share/polkit-1/rules.d
+```
+
+Then open the power popover again: it looks for them each time it opens. A target whose unit isn't installed doesn't show, and the bar's log says so.
+
+- **GRUB** picks a one-time entry only with `GRUB_DEFAULT=saved` in `/etc/default/grub`, and `grub-mkconfig -o /boot/grub/grub.cfg` run since. An entry is its menu title (`sudo grep menuentry /boot/grub/grub.cfg`) or its id, and a submenu's with `>`: `"Advanced options>Arch Linux, with linux-lts"`.
+- **Firmware entries** are named by their description, as `efibootmgr` lists them. They work under any boot loader, Limine included, on machines whose firmware keeps its variables (not U-Boot on Apple Silicon).
+- If the helper fails, nothing reboots, and the row says why.
+
 ## Glass
 
 `theme = "glass"` makes the islands liquid glass: what's behind them shows through, lightly frosted and magnified, and bent at their edges ([D-112](decisions.md)). That takes `hypr-eave`, a Hyprland plugin in this repository. `eave-build` builds it against the Hyprland you have whenever Hyprland's headers are installed (`pkg-config hyprland`; on Arch they come with the `hyprland` package). It installs it as `~/.local/share/eave/hypr-eave.so`. Nothing loads it for you: add it to Hyprland's config. While Hyprland doesn't load it, every `eave-build` prints this line, and `eave doctor` warns:

@@ -13,6 +13,7 @@ fn main() -> Result<(), eave::Error> {
         eave_keyboard::register,
         eave_media::register,
         eave_network::register,
+        eave_power::register,
         eave_update::register,
         eave_volume::register,
         eave_window::register,

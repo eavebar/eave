@@ -288,6 +288,13 @@ impl Glyph {
                 pen.block(11.25, 3.0, 2.25, 10.0, 1.0);
             }
             Icon::Bluetooth { connected } => pen.bluetooth(connected),
+            Icon::Power => pen.power(),
+            Icon::Sleep => pen.moon(),
+            Icon::LogOut => {
+                pen.polyline(&[(7.5, 2.5), (3.0, 2.5), (3.0, 13.5), (7.5, 13.5)]);
+                pen.polyline(&[(6.75, 8.0), (13.5, 8.0)]);
+                pen.polyline(&[(10.75, 5.25), (13.5, 8.0), (10.75, 10.75)]);
+            }
         }
     }
 }
@@ -380,6 +387,13 @@ impl Pen<'_> {
         self.line(&Path::circle(Point::new(8.0, 8.0), 6.25), self.on);
         self.polyline(&[(8.0, 7.5), (8.0, 11.0)]);
         self.dot(8.0, 5.0, 0.9);
+    }
+
+    /// A circle open at the top, and a stroke down into the gap.
+    fn power(&mut self) {
+        let ring = arc(Point::new(8.0, 8.75), 5.5, 1.7 * PI, 3.3 * PI);
+        self.line(&ring, self.on);
+        self.polyline(&[(8.0, 1.75), (8.0, 7.25)]);
     }
 
     /// Most of a circle, and the arrowhead at its open end.

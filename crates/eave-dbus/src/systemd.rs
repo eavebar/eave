@@ -1,5 +1,6 @@
 //! The user's service manager, systemd, on the session bus: what `systemctl --user` asks, without
 //! running it. Starting and restarting units, their state, and the environment it gives them.
+//! [`system`] asks the system's manager, on the system bus, what polkit lets the user ask it.
 
 use futures_util::{StreamExt, stream};
 use zbus::message::Type as MessageType;
@@ -7,6 +8,8 @@ use zbus::zvariant::OwnedObjectPath;
 use zbus::{Connection, MatchRule, MessageStream};
 
 use crate::{Stream, properties, session};
+
+pub mod system;
 
 const SERVICE: &str = "org.freedesktop.systemd1";
 const PATH: &str = "/org/freedesktop/systemd1";
