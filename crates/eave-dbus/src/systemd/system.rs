@@ -29,7 +29,12 @@ pub async fn start(unit: &str) -> zbus::Result<()> {
         .member("JobRemoved")?
         .build();
     let mut signals = MessageStream::for_match_rule(rule, &connection, Some(16)).await?;
-    manager(&connection, "Subscribe", &()).await?;
+    // The shared connection may have subscribed already, which systemd answers with an error.
+    if let Err(error) = manager(&connection, "Subscribe", &()).await
+        && !already_subscribed(&error)
+    {
+        return Err(error);
+    }
     let reply = manager(&connection, "StartUnit", &(unit, "replace")).await?;
     let job: OwnedObjectPath = reply.body().deserialize()?;
     while let Some(message) = signals.next().await {
@@ -47,6 +52,11 @@ pub async fn start(unit: &str) -> zbus::Result<()> {
         }
     }
     Err(zbus::Error::Failure(format!("{unit}: lost the system bus")))
+}
+
+fn already_subscribed(error: &zbus::Error) -> bool {
+    matches!(error, zbus::Error::MethodError(name, ..)
+        if name.as_str() == "org.freedesktop.systemd1.AlreadySubscribed")
 }
 
 #[cfg(test)]
