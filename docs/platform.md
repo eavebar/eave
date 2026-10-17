@@ -23,6 +23,7 @@ Everything must build from source on both aarch64 and x86_64. In practice:
 - **GPU:** Asahi's Mesa drivers provide OpenGL and Vulkan, so wgpu works. The GPU renderer is the default, with the CPU one as a fallback and as `renderer = "cpu"` (see [decisions.md](decisions.md), D-67).
 - **HiDPI / fractional scaling:** the MacBook panel runs at a non-1 scale, so the bar must render crisp text at fractional scales. If text ever looks blurry, check whether the fractional-scale and viewporter protocols are being used.
 - **The notch:** by default Asahi hides the notch area, so the usable screen is just shorter. If it's enabled with the `appledrm.show_notch=1` kernel parameter (`apple_dcp.show_notch=1` on older kernels), the top-center of the display is physically missing. The bar finds it and splits its center zone around it ([D-69](decisions.md)). `eave calibrate` measures it, and the screen's rounded corners, pixel by pixel ([D-71](decisions.md)).
+- **Rebooting into macOS** is picked in Apple's NVRAM, not by a boot loader: `asahi-bless --next --set-boot-macos`, run as root by `eave-boot-macos.service` for the power plugin. GRUB, which Asahi boots Linux with, knows nothing of macOS ([D-131](decisions.md)).
 - **Battery and backlight** are read from `/sys/class/power_supply` and `/sys/class/backlight`. No Apple-specific code. `macsmc-battery` reports `charge_*` and `energy_*`, and its `capacity` is the firmware's rounded-up display value, so the percentage comes from the energy ratio instead ([D-23](decisions.md)).
 
 ### CachyOS specifics
@@ -38,6 +39,8 @@ The bar must run on any Hyprland machine without checking what else is installed
 - **For volume only:** a PulseAudio-protocol server, meaning `pipewire-pulse` or PulseAudio. If none is running, the widget hides ([D-19](decisions.md)).
 
 - **For setting brightness only:** a systemd-logind session, which lets the user's own session set its backlights without root. Without it the level still shows, but can't be changed ([D-80](decisions.md)).
+
+- **For power only:** systemd-logind, to lock, suspend, reboot and shut down. Locking needs something that answers logind's Lock, like hypridle with `lock_cmd`. Rebooting into macOS, a GRUB entry or a firmware entry needs eave's boot helper units and polkit rule, installed once as root ([D-131](decisions.md)).
 
 That's all. Battery, brightness and network read the kernel directly. The binary links only libc, and no plugin runs other programs. `eave-build` needs `cargo` and `git`, and uses `systemctl` only when systemd is there.
 

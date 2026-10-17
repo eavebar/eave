@@ -3104,3 +3104,37 @@ The cause underneath: the dialog is a second solid shape, drawn by the island in
 **Why:** the user saw the notch and the grown edge slide away over fullscreen windows (with `bar = { fullscreen = "hover" }`). They're the screen's border, and a border that comes and goes is what D-106 set out to stop.
 
 **Cost:** no dependency. On a screen with a notch or a grown edge, a fullscreen window always has the bar's surface above it, so Hyprland can't scan the window out directly, which costs a little GPU in fullscreen games and video. A plain screen is unchanged.
+
+---
+
+## D-131: Power through logind, and other systems through boot helper units
+
+**Status:** accepted (2026-10-17).
+
+**What:** a `power` widget: the power symbol (new `Icon::Power`, with `Icon::Sleep` and `Icon::LogOut`), a popover with what the machine can do, and each of those in the dormer.
+- **Lock** is logind's `Session.Lock` on the caller's session. logind sends the session its Lock signal, and whatever listens locks: hypridle runs its `lock_cmd`.
+- **Suspend, hibernate, reboot and shut down** are logind's `Manager` methods, shown only when its `Can*` answer is `yes` or `challenge`.
+- **Log out** is Hyprland's `exit` dispatcher.
+- **Another system.** Three ways, one list:
+  - The boot loader's entries, when it tells logind (systemd-boot and other loaders that follow the Boot Loader Interface): `BootLoaderEntries`, then `SetRebootToBootLoaderEntry` and `Reboot`. `auto-windows` and `auto-osx` are called Windows and macOS. systemd-boot's own `auto-*` entries and the running one (`LoaderEntrySelected`) are left out.
+  - macOS on Apple Silicon, when `asahi-bless` and `eave-boot-macos.service` are there.
+  - GRUB entries and firmware boot entries named in config.toml. A firmware entry's number comes from the `Boot####` variables, which anyone may read.
+  
+  The last two start a oneshot system unit over D-Bus (`eave-boot-macos.service`, `eave-boot-grub@<entry>.service`, `eave-boot-efi@<####>.service`, in `dist/power`). They wait for its job to end (`JobRemoved`), and reboot only if it was `done`. The units assert their tool exists, so a missing one fails the job instead of being skipped. A polkit rule lets an active, local user start exactly these units.
+- **Asking twice.** In the popover, log out, reboot, shut down and each system arm on the first press: the row turns critical and reads "Reboot now?", and a second press within 4 s does it. Closing the popover disarms. Lock, suspend and hibernate act at once, since nothing is lost. In the dormer, picking one does it: typing and choosing is asking already.
+- `eave-dbus` gains `systemd::system`: a system unit's state, and starting one and waiting for its job.
+
+**Why:**
+- **logind** is already how the session's user may reboot, power off and set the next boot entry without root, by polkit's default policy, and the bar already talks to it (D-80). Running `systemctl reboot` or `loginctl lock-session` would be running binaries.
+- **Lock through logind's signal**, not by starting a locker: the bar shouldn't pick or run the locker, and hypridle, which locks before sleep anyway, already answers it. The same signal locks on idle, on the lid and from `loginctl`.
+- **Units with a polkit rule** for what needs root. Picking macOS writes Apple's NVRAM (`/dev/mtd0`, root only), GRUB's next entry is in `/boot/grub/grubenv`, and the firmware's `BootNext` is a variable only root may write. A unit runs the system's own tool, which knows the format, and the rule limits the user to these units and to starting them. Each unit only picks what the next boot starts, and a user who may reboot could pick it at the boot menu anyway.
+- **Waiting for the job** before rebooting: a reboot that comes before the pick lands boots the default system, which looks like the feature doesn't work.
+- **Two presses, not a dialog:** a press on the wrong row of a short list is the mistake to catch. A second press where the first one was catches it, without a dialog to wait for.
+
+**Alternative:**
+- `pkexec` or `sudo` from the bar: runs binaries, and needs a polkit agent or a terminal for the password.
+- A root daemon of eave's: one more process always running, for something done a few times a month.
+- A udev rule giving the user `/dev/mtd0`: the user's every process could write Apple's NVRAM, which can stop the machine from booting.
+- Only systemd-boot through logind: no setup, but no macOS on Apple Silicon and no GRUB, which is what this MacBook runs.
+
+**Cost:** no new dependency; the plugin uses eave-api, eave-dbus, eave-hyprland and serde, all in the tree. Three units and a rule to install once as root, which the AUR package does. Nothing runs until the popover opens or an action is picked: logind is asked when the plugin starts and each time the popover opens, and nothing is polled.
