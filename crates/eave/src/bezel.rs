@@ -1,8 +1,8 @@
 //! The screen's black border, as the bar draws it: the notch (D-75) and the grown top edge (D-81).
 //! They stand for the screen's own black, whatever the theme (D-92), so they aren't part of the
-//! bar: a bar that hides on hover leaves them where they are (D-106). A solid bar's band is the
-//! bar, and goes with it (D-89). The dormer's drop squishes them, within what they're grown by
-//! (D-86).
+//! bar and never hide: not with a bar that hides on hover (D-106), not over a fullscreen window,
+//! and not when a solid bar's band, which is the bar (D-89), slides away over them (D-130). The
+//! dormer's drop squishes them, within what they're grown by (D-86).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -41,6 +41,8 @@ pub struct Bezel<M> {
     on_click: Option<M>,
     /// Sent with the surface's width whenever it's laid out at a new one.
     on_width: Option<Box<dyn Fn(f32) -> M>>,
+    /// Whether the hand can take hold of it: not while a solid bar's band covers it.
+    touchable: bool,
 }
 
 /// How far the middle of the bottom of what the dormer's drop comes out of is from where it
@@ -149,6 +151,7 @@ impl<M> Default for Bezel<M> {
             sag: None,
             on_click: None,
             on_width: None,
+            touchable: true,
         }
     }
 }
@@ -190,6 +193,12 @@ impl<M> Bezel<M> {
     /// Sends `message` on a click on the notch, or the middle of the top edge.
     pub fn on_click(mut self, message: M) -> Self {
         self.on_click = Some(message);
+        self
+    }
+
+    /// Whether the hand can take hold of it; it can unless told otherwise.
+    pub fn touchable(mut self, touchable: bool) -> Self {
+        self.touchable = touchable;
         self
     }
 
@@ -572,7 +581,9 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Bezel<M> {
             self.play(state, kick);
         }
         state.seen = Some(state.seen.map_or(number, |seen| seen.max(number)));
-        self.hand(state, event, bounds, cursor, shell);
+        if self.touchable || state.press.is_some() {
+            self.hand(state, event, bounds, cursor, shell);
+        }
         if let Event::Window(window::Event::RedrawRequested(now)) = event
             && !state.at_rest()
         {

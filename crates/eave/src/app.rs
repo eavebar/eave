@@ -1248,15 +1248,13 @@ impl Bar {
 
     /// Sizes a bar surface to fit its popovers, and lets the pointer through everywhere else: the
     /// bar itself takes input across its whole strip, a popover only over its shape.
-    /// Where the notch and the grown edge are on `window`, while they stay out with the bar
-    /// hidden: not over a fullscreen window, and not as a solid bar's band (D-106).
+    /// Where the notch and the grown edge are on `window`. They stand for the screen's own
+    /// border, so they never hide: not with the bar, not over a fullscreen window, and not when a
+    /// solid bar's band slides away (D-130).
     fn bezel_rects(&self, window: window::Id) -> Vec<Rectangle> {
         let Some(&width) = self.widths.get(&window) else {
             return Vec::new();
         };
-        if self.fullscreen || self.config.bar.style == Style::Solid {
-            return Vec::new();
-        }
         let edge = (self.screen.grow > 0.0)
             .then(|| Rectangle::new(Point::ORIGIN, Size::new(width, self.screen.grow)));
         let notch = self.screen.notch.map(|notch| {
@@ -1482,11 +1480,14 @@ impl Bar {
             self.shown = out;
             tasks.extend(self.windows.iter().map(|window| self.fit(*window)));
         }
-        let layer = if self.fullscreen && (out || self.showing() != Showing::Never) {
-            Layer::Overlay
-        } else {
-            Layer::Top
-        };
+        // The notch and the grown edge stay over the window too, so with either the bar stays
+        // on the overlay, hidden but for them (D-130).
+        let layer =
+            if self.fullscreen && (out || self.showing() != Showing::Never || self.has_bezel()) {
+                Layer::Overlay
+            } else {
+                Layer::Top
+            };
         if layer == self.layer {
             self.sinking = None;
         } else if layer == Layer::Top && self.fullscreen {
@@ -1502,6 +1503,11 @@ impl Bar {
             tasks.push(self.move_to(layer));
         }
         Task::batch(tasks)
+    }
+
+    /// Whether the bar draws a notch or a grown edge, which never hide (D-130).
+    fn has_bezel(&self) -> bool {
+        self.screen.notch.is_some() || self.screen.grow > 0.0
     }
 
     /// Puts every bar surface on `layer`.
@@ -2725,29 +2731,54 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         }
     };
     // The notch and the grown edge, from the surface's top, which is below what the bezel hides.
-    let bezel = Bezel::default()
-        .notch(
-            bar.screen.notch,
-            bar.screen.notch.map_or(0.0, |notch| {
-                bar.screen.notch_top(notch) - bar.screen.inset[0]
-            }),
-        )
-        .edge(
-            bar.screen.grow,
-            match (band, bar.config.bar.corners) {
-                (Some(_), BarCorners::Square) => [CornerShape::SQUARE; 2],
-                _ => [bar.screen.corners[0], bar.screen.corners[1]],
-            },
-        )
-        .solid(band.map(|bottom| bottom - bar.screen.grow))
-        .kick(
-            bar.notch_kick
-                .filter(|_| bar.toast_window() == Some(window)),
-        )
-        .sag((bar.toast_window() == Some(window)).then(|| bar.notch_sag.clone()))
-        // A click on the notch, or the middle of the top, brings the dormer out (D-106).
-        .on_click(Message::Dormer(dormer::Event::Click))
-        .on_width(move |width| Message::Width(window, width));
+    let notch_y = bar.screen.notch.map_or(0.0, |notch| {
+        bar.screen.notch_top(notch) - bar.screen.inset[0]
+    });
+    let screen_corners = [bar.screen.corners[0], bar.screen.corners[1]];
+    let kick = bar
+        .notch_kick
+        .filter(|_| bar.toast_window() == Some(window));
+    let sag = (bar.toast_window() == Some(window)).then(|| bar.notch_sag.clone());
+    // A click on the notch, or the middle of the top, brings the dormer out (D-106).
+    let click = Message::Dormer(dormer::Event::Click);
+    // They stand for the screen's border, so they never hide (D-130). A solid bar's band is the
+    // bar, and covers them: it slides away over them, which stay.
+    let (bezel, band_bezel): (Element<'_, Message>, Element<'_, Message>) = match band {
+        None => (
+            Bezel::default()
+                .notch(bar.screen.notch, notch_y)
+                .edge(bar.screen.grow, screen_corners)
+                .kick(kick)
+                .sag(sag)
+                .on_click(click)
+                .on_width(move |width| Message::Width(window, width))
+                .into(),
+            Space::new().into(),
+        ),
+        Some(bottom) => {
+            // Under the band while it's out: the band takes the hand there, as it always has.
+            let mut under = Bezel::default()
+                .notch(bar.screen.notch, notch_y)
+                .edge(bar.screen.grow, screen_corners)
+                .touchable(!bar.out())
+                .on_width(move |width| Message::Width(window, width));
+            if !bar.out() {
+                under = under.on_click(click.clone());
+            }
+            let corners = match bar.config.bar.corners {
+                BarCorners::Square => [CornerShape::SQUARE; 2],
+                _ => screen_corners,
+            };
+            let band = Bezel::default()
+                .notch(bar.screen.notch, notch_y)
+                .edge(bar.screen.grow, corners)
+                .solid(Some(bottom - bar.screen.grow))
+                .kick(kick)
+                .sag(sag)
+                .on_click(click);
+            (under.into(), band.into())
+        }
+    };
 
     // No background of its own: the surface is transparent around and between the islands, and
     // below them, where a dragged island has room to move and popovers grow.
@@ -2757,12 +2788,10 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         bottom: style::DRAG_ROOM.into(),
         left: f32::from(style::EDGE_GAP) + shift[0],
     });
-    // Lifted off the screen while the bar hides, far enough to clear it (D-88). The notch and the
-    // grown edge aren't the bar and stay, unless the bar is solid, when the band is the bar, or
-    // over a fullscreen window, which they'd draw over (D-106).
+    // Lifted off the screen while the bar hides, far enough to clear it (D-88), and a solid
+    // bar's band with it. The notch and the grown edge aren't the bar, and stay (D-130).
     let by = bar.surface_height() as f32;
-    let stays = band.is_none() && !bar.fullscreen;
-    let bezel = Lift::new(bezel, stays || bar.out(), by);
+    let band_bezel = Lift::new(band_bezel, bar.out(), by);
     let islands = Lift::new(islands, bar.out(), by);
     // Always a stack, so the islands' state stays put when the dormer comes and goes.
     // Last: what this frame says about glass goes out with it. The notch and the grown edge are
@@ -2776,7 +2805,14 @@ pub fn view(bar: &Bar, window: window::Id) -> Element<'_, Message> {
         .collect();
     let look = (bar.config.theme == config::Theme::Glass).then_some(bar.config.glass);
     let present = glass::Present::new(look, solid, rests, bar.toast_window() == Some(window));
-    stack![bezel, islands, center_view(bar, window), present].into()
+    stack![
+        bezel,
+        band_bezel,
+        islands,
+        center_view(bar, window),
+        present
+    ]
+    .into()
 }
 
 /// The island in the middle at the top, for the dormer or a widget's dialog: a dot where it comes
@@ -4090,9 +4126,26 @@ mod tests {
         assert!(bar.out());
         let _ = update(&mut bar, Message::PointerEntered);
         assert!(bar.out());
-        // Over a fullscreen window, they go with the bar.
+        // Over a fullscreen window they stay, and so does the overlay they're drawn on (D-130).
         fullscreen(&mut bar, true);
-        assert!(bar.bezel_rects(window).is_empty());
+        assert_eq!(bar.bezel_rects(window), rects);
+        assert_eq!(bar.layer, Layer::Overlay);
+        // A solid bar's band slides away, and they stay.
+        let mut bar = notifying_bar_with("bar = { show = \"hover\", style = \"solid\" }");
+        bar.screen.grow = 3.0;
+        let _ = update(&mut bar, Message::Width(window, 1000.0));
+        assert!(!bar.out());
+        assert!(!bar.bezel_rects(window).is_empty());
+    }
+
+    #[test]
+    fn over_a_fullscreen_window_a_hidden_bar_stays_on_the_overlay_for_the_notch() {
+        let mut bar = notifying_bar_with("");
+        bar.screen.notch = Some(Notch::default());
+        fullscreen(&mut bar, true);
+        assert!(!bar.out());
+        assert_eq!(bar.layer, Layer::Overlay);
+        assert!(bar.sinking.is_none(), "never goes under the window");
     }
 
     #[test]
