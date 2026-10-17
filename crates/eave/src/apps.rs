@@ -38,6 +38,7 @@ impl AppIcon {
             handle: self.0.clone(),
             opacity,
             size: Size::new(theme::ICON_SIZE, theme::ICON_SIZE),
+            radius: 0.0,
         })
     }
 }
@@ -48,6 +49,8 @@ pub struct Picture {
     pub handle: image::Handle,
     pub opacity: f32,
     pub size: Size,
+    /// How round its corners are drawn, for the glass to show through them (D-129).
+    pub radius: f32,
 }
 
 impl<M> Widget<M, iced::Theme, iced::Renderer> for Picture {
@@ -81,8 +84,8 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Picture {
 
         let squish = squish::current();
         let bounds = squish.rect(layout.bounds());
-        // Never glass, however dark it is.
-        crate::glass::frame::solid(bounds, viewport);
+        // Never glass where it's drawn, however dark it is (D-129).
+        crate::glass::frame::picture(bounds, viewport, self.radius, self.opacity);
         renderer.draw_image(
             iced::advanced::image::Image {
                 opacity: self.opacity,

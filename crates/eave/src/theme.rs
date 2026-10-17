@@ -53,6 +53,8 @@ pub const GLASS_MAX_REGIONS: usize = 64;
 /// The most controls told to hypr-eave as reliefs in a frame (D-126): 52 bytes each, so they fit
 /// in one message with room to spare, like the records.
 pub const GLASS_MAX_RELIEFS: usize = 64;
+/// The most pictures told to hypr-eave in a frame (D-129), as many as it reads (`MAX_PICTURES`).
+pub const GLASS_MAX_PICTURES: usize = 32;
 /// How far past an island's shape its pixels may reach while it moves, for hypr-eave
 /// (`ISLAND_MARGIN`): what's further from every island changes nothing.
 pub const GLASS_MARGIN: f32 = 12.0;

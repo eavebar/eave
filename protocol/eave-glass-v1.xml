@@ -43,11 +43,15 @@
     Since version 4 it can say where its controls are cut into the glass or
     stand out of it, so the glass bends at their walls too (set_reliefs).
 
+    Since version 5 it can say where its pictures are, rounded, so the glass
+    shows through their rounded corners and they're kept as drawn inside
+    them (set_pictures). Before it, pictures are solid records.
+
     When the global is absent the client draws as it would anyway: nothing
     depends on it.
   </description>
 
-  <interface name="eave_glass_manager_v1" version="4">
+  <interface name="eave_glass_manager_v1" version="5">
     <description summary="glass for eave's surfaces"/>
 
     <request name="destroy" type="destructor">
@@ -70,7 +74,7 @@
     </request>
   </interface>
 
-  <interface name="eave_glass_surface_v1" version="4">
+  <interface name="eave_glass_surface_v1" version="5">
     <description summary="the glass of one surface">
       All requests set double-buffered state, applied on the surface's next
       wl_surface.commit, so what they say lands with the frame it describes.
@@ -193,6 +197,30 @@
         request inside one Wayland message (4096 bytes).
       </description>
       <arg name="reliefs" type="array"/>
+    </request>
+
+    <request name="set_pictures" since="5">
+      <description summary="the pictures on the islands, and their shape">
+        An array of records, each six native-endian 32-bit integers.
+        Lengths and positions are 24.8 fixed point, in surface-local
+        logical pixels:
+
+        x, y, width, height and radius: a rounded rectangle with circular
+        corners, where the client drew a picture over an island's fill;
+        opacity: 0 to 255, how opaque it drew the picture.
+
+        Where a picture covers a pixel fully, the pixel is kept as drawn,
+        as in a solid record, however dark it is. Where it covers it partly
+        (its rounded corners' edge, or a faded picture), the pixel is the
+        picture laid over the glass by how much of it the picture covers:
+        the client drew it over the fill by as much. Outside the rounded
+        rectangle, the fill turns to glass as anywhere on the island.
+
+        A picture outside every glass record is ignored. The initial value
+        is empty. At most 32 records, the largest first: the compositor
+        ignores the rest.
+      </description>
+      <arg name="pictures" type="array"/>
     </request>
 
     <event name="backdrop">

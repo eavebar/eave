@@ -54,6 +54,8 @@ namespace Glass {
     constexpr size_t MAX_RELIEFS = 64;
     // Each relief goes to the shader as this many RGBA texels of its data texture.
     constexpr size_t RELIEF_TEXELS = 4;
+    // Pictures on the islands, rounded (set_pictures, version 5, D-129).
+    constexpr size_t MAX_PICTURES = 32; // few, so the glass shader's uniforms stay well inside what GLES drivers give
     // libwayland drops a connection that gets a message over 4096 bytes: and eave's is the bar's
     // own. A backdrop event is 24 bytes and its cells, padded to 4.
     constexpr size_t MAX_REPORT_CELLS = 4096 - 24 - 4;
@@ -80,12 +82,22 @@ namespace Glass {
         bool     operator==(const SRelief&) const = default;
     };
 
+    // A record of eave_glass_surface_v1.set_pictures: a picture on an island, kept as drawn inside
+    // its rounded corners, surface-local logical px.
+    struct SPicture {
+        float x = 0, y = 0, w = 0, h = 0, radius = 0;
+        float opacity = 1; // 0 to 1
+
+        bool  operator==(const SPicture&) const = default;
+    };
+
     // What eave said, double-buffered: requests set the pending one, the surface's commit makes it
     // current.
     struct SState {
         std::vector<SRegion> regions; // glass and solid
         std::vector<SRegion> bezel;   // the notch and the grown edge: the pointer goes under them
         std::vector<SRelief> reliefs; // controls cut into the glass, or standing out of it
+        std::vector<SPicture> pictures; // pictures on the islands, rounded
         SLook                look;
         uint32_t             reportCell = 0;
 
@@ -176,6 +188,11 @@ namespace Glass {
         // And the reliefs (`reliefs`), in s px, as the rows of the data texture the glass reads.
         int                                                  reliefCount = 0;
         std::array<float, MAX_RELIEFS * RELIEF_TEXELS * 4>   reliefData{};
+        // And the pictures (`pictures`), in s px: each one's box (x0, y0, x1, y1), and its radius
+        // and opacity.
+        int                                    pictureCount = 0;
+        std::array<float, MAX_PICTURES * 4>    pictureBoxes{};
+        std::array<float, MAX_PICTURES * 2>    pictureShapes{};
 
         // Filled by the backdrop step:
         CBox                     copy; // the part of the framebuffer the backdrop holds

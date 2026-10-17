@@ -55,6 +55,7 @@ impl Cover {
             handle: self.large.clone(),
             opacity,
             size: Size::new(size, size),
+            radius: theme::COVER_RADIUS * size / theme::COVER_SIZE,
         })
     }
 
@@ -66,20 +67,26 @@ impl Cover {
             handle: handle.clone(),
             opacity: 1.0,
             size: Size::new(width, (width * ratio).round()),
+            radius: theme::NOTICE_IMAGE_RADIUS,
         }))
     }
 
     /// At icon size, or [`theme::COVER_SIZE`] when `large`, faded to `opacity`.
     pub fn view<'a, M: 'a>(&self, large: bool, opacity: f32) -> Element<'a, M> {
-        let (handle, size) = if large {
-            (self.large.clone(), theme::COVER_SIZE)
+        let (handle, size, radius) = if large {
+            (self.large.clone(), theme::COVER_SIZE, theme::COVER_RADIUS)
         } else {
-            (self.small.clone(), theme::ICON_SIZE)
+            (
+                self.small.clone(),
+                theme::ICON_SIZE,
+                theme::COVER_ICON_RADIUS,
+            )
         };
         Element::new(Picture {
             handle,
             opacity,
             size: Size::new(size, size),
+            radius,
         })
     }
 }

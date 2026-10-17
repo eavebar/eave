@@ -46,6 +46,14 @@ pub fn reliefs() -> bool {
     RELIEFS.load(Ordering::Relaxed)
 }
 
+/// Whether the plugin takes pictures with their shape (version 5, D-129), as of the last frame
+/// told: before that, they're solid records.
+static PICTURES: AtomicBool = AtomicBool::new(false);
+
+pub fn pictures() -> bool {
+    PICTURES.load(Ordering::Relaxed)
+}
+
 struct Shared {
     queue: QueueHandle<State>,
     manager: Option<EaveGlassManagerV1>,
@@ -59,6 +67,8 @@ struct Attached {
     regions: Option<Vec<u8>>,
     /// The reliefs last sent (D-126).
     reliefs: Option<Vec<u8>>,
+    /// The pictures last sent (D-129).
+    pictures: Option<Vec<u8>>,
     look: Option<config::Glass>,
     report: Option<u32>,
 }
@@ -113,6 +123,7 @@ pub fn present(
     look: Option<&config::Glass>,
     records: Vec<super::frame::Record>,
     reliefs: Vec<super::frame::Relief>,
+    pictures: Vec<super::frame::Picture>,
 ) {
     let Some(surface) = layershellev::layer_surfaces()
         .into_iter()
@@ -148,15 +159,18 @@ pub fn present(
             object,
             regions: None,
             reliefs: None,
+            pictures: None,
             look: None,
             report: None,
         });
     }
     let Some(glass) = shared.glass.as_mut() else {
         RELIEFS.store(false, Ordering::Relaxed);
+        PICTURES.store(false, Ordering::Relaxed);
         return;
     };
     RELIEFS.store(glass.object.version() >= 4, Ordering::Relaxed);
+    PICTURES.store(glass.object.version() >= 5, Ordering::Relaxed);
     if let Some(look) = look
         && glass.look.as_ref() != Some(look)
     {
@@ -211,6 +225,16 @@ pub fn present(
         if glass.reliefs.as_ref() != Some(&reliefs) {
             glass.object.set_reliefs(reliefs.clone());
             glass.reliefs = Some(reliefs);
+        }
+    }
+    // Pictures keep their shape from version 5 (D-129); before it, they went as solid records.
+    if glass.object.version() >= 5 {
+        let pictures = super::frame::encode_pictures(
+            &pictures[..pictures.len().min(crate::theme::GLASS_MAX_PICTURES)],
+        );
+        if glass.pictures.as_ref() != Some(&pictures) {
+            glass.object.set_pictures(pictures.clone());
+            glass.pictures = Some(pictures);
         }
     }
 }
@@ -287,7 +311,7 @@ impl Dispatch<WlRegistry, GlobalListContents> for State {
                 version,
             } if interface == EaveGlassManagerV1::interface().name && state.name.is_none() => {
                 let manager =
-                    registry.bind::<EaveGlassManagerV1, _, _>(name, version.min(4), handle, ());
+                    registry.bind::<EaveGlassManagerV1, _, _>(name, version.min(5), handle, ());
                 state.name = Some(name);
                 if let Some(shared) = shared().as_mut() {
                     shared.glass = None;

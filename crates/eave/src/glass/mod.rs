@@ -122,10 +122,21 @@ impl<M> overlay::Overlay<M, iced::Theme, iced::Renderer> for Sender<'_> {
         for rect in self.bezel {
             frame::bezel(*rect);
         }
-        let records = frame::fit(frame::take());
+        let pictures = frame::take_pictures();
+        let mut records = frame::take();
+        // A compositor from before pictures (version 4) keeps them out of the glass as solids.
+        if !client::pictures() {
+            records.extend(frame::solids(&pictures));
+        }
+        let records = frame::fit(records);
         let reliefs = frame::fit_reliefs(frame::take_reliefs(), &records);
+        let pictures = if client::pictures() {
+            frame::fit_pictures(pictures, &records)
+        } else {
+            Vec::new()
+        };
         if self.primary {
-            client::present(self.look.as_ref(), records, reliefs);
+            client::present(self.look.as_ref(), records, reliefs, pictures);
         }
     }
 }
@@ -136,7 +147,7 @@ impl<'a, M: 'a> From<Present> for Element<'a, M> {
     }
 }
 
-/// A scrollable, so the pictures in it know how far it's scrolled ([`frame::solid`]).
+/// A scrollable, so the pictures in it know how far it's scrolled ([`frame::picture`]).
 pub struct Scrolled<'a, M> {
     content: Element<'a, M>,
 }
