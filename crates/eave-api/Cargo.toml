@@ -1,6 +1,6 @@
 [package]
 name = "eave-api"
-version = "0.1.10"
+version = "0.1.11"
 description = "Plugin API for the eave status bar"
 edition.workspace = true
 license.workspace = true
