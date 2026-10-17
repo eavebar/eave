@@ -59,6 +59,7 @@ eave-essential = { workspace = true, optional = true }
 eave-keyboard = { workspace = true, optional = true }
 eave-media = { workspace = true, optional = true }
 eave-network = { workspace = true, optional = true }
+eave-power = { workspace = true, optional = true }
 eave-update = { workspace = true, optional = true }
 eave-volume = { workspace = true, optional = true }
 eave-window = { workspace = true, optional = true }
@@ -77,6 +78,7 @@ builtin = [
     "dep:eave-keyboard",
     "dep:eave-media",
     "dep:eave-network",
+    "dep:eave-power",
     "dep:eave-update",
     "dep:eave-volume",
     "dep:eave-window",

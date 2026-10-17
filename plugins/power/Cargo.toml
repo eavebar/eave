@@ -1,0 +1,19 @@
+[package]
+name = "eave-power"
+version = "0.1.0"
+description = "Lock, log out, suspend, reboot, shut down, and reboot into another system, for eave"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+eave-api.workspace = true
+# logind on the system bus, and the system's systemd for the boot helpers (D-131).
+eave-dbus.workspace = true
+# Log out is Hyprland's exit.
+eave-hyprland.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt"] }
+toml.workspace = true
