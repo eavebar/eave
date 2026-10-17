@@ -1,0 +1,15 @@
+# Has the next boot, only, start the firmware's boot entry numbered by the instance (Boot####):
+# the power plugin starts eave-boot-efi@<####>.service for an `{ efi = "<description>" }`
+# target, then reboots (D-131). Installed as root, with 50-eave-boot.rules.
+
+[Unit]
+Description=Boot firmware entry %I next time
+Documentation=https://github.com/eaveshell/eave/blob/main/docs/running.md#rebooting-into-another-system
+AssertPathExists=/usr/bin/efibootmgr
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/efibootmgr --quiet --bootnext %I
+NoNewPrivileges=yes
+PrivateNetwork=yes
+ProtectHome=yes

@@ -1,0 +1,15 @@
+# Has the next boot, only, start macOS on Apple Silicon: the power plugin's "Reboot to macOS"
+# starts this, then reboots (D-131). Installed as root, with 50-eave-boot.rules.
+
+[Unit]
+Description=Boot macOS next time
+Documentation=https://github.com/eaveshell/eave/blob/main/docs/running.md#rebooting-into-another-system
+AssertPathExists=/usr/bin/asahi-bless
+
+[Service]
+Type=oneshot
+# Picks the macOS volume in Apple's NVRAM, if there's only one, for the next boot only.
+ExecStart=/usr/bin/asahi-bless --next --set-boot-macos --yes
+NoNewPrivileges=yes
+PrivateNetwork=yes
+ProtectHome=yes

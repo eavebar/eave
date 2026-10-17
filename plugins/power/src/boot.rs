@@ -24,6 +24,8 @@ const GLOBAL: &str = "8be4df61-93ca-11d2-aa0d-00e098032b8c";
 const LOADER: &str = "4a67b082-0a4c-41cf-b6c7-440b29bb8c4f";
 
 pub const MACOS_UNIT: &str = "eave-boot-macos.service";
+/// What the unit runs, which only Apple Silicon machines have.
+const ASAHI_BLESS: &str = "/usr/bin/asahi-bless";
 
 /// A system to reboot into.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,18 +82,24 @@ impl Configured {
     }
 }
 
+/// Whether this is Apple Silicon with macOS to pick: `asahi-bless` is there.
+pub fn asahi() -> bool {
+    Path::new(ASAHI_BLESS).exists()
+}
+
 /// The boot loader entry this system was started from, when the loader says.
 pub fn running_entry() -> Option<String> {
     read_string(&Path::new(EFIVARS).join(format!("LoaderEntrySelected-{LOADER}")))
 }
 
 /// Every target there is: the configured ones first, in their order, then the loader's entries
-/// config.toml didn't name, but the `running` one, then macOS. `entries` is what logind lists,
-/// and `unit_exists` says whether the system has a unit.
+/// config.toml didn't name, but the `running` one, then macOS on `asahi`. `entries` is what
+/// logind lists, and `unit_exists` says whether the system has a unit.
 pub async fn targets<F, Fut>(
     configured: &[Configured],
     entries: &[String],
     running: Option<&str>,
+    asahi: bool,
     unit_exists: F,
 ) -> Vec<Target>
 where
@@ -145,7 +153,7 @@ where
         }
     }
     let has_macos = targets.iter().any(|target| target.name == "macOS");
-    if !has_macos && unit_exists(MACOS_UNIT.into()).await {
+    if asahi && !has_macos && unit_exists(MACOS_UNIT.into()).await {
         targets.push(Target {
             name: "macOS".into(),
             via: Via::Unit(MACOS_UNIT.into()),
@@ -336,6 +344,7 @@ mod tests {
             &configured,
             &entries,
             Some("arch.conf"),
+            true,
             |_| async { true },
         ));
         let names: Vec<_> = found.iter().map(|target| target.name.as_str()).collect();
@@ -346,8 +355,15 @@ mod tests {
         );
 
         // Without the units installed, only the loader's entries are left.
-        let found = run(targets(&configured, &entries, None, |_| async { false }));
+        let found = run(targets(&configured, &entries, None, true, |_| async {
+            false
+        }));
         let names: Vec<_> = found.iter().map(|target| target.name.as_str()).collect();
         assert_eq!(names, ["Windows 11", "arch", "fedora"]);
+
+        // Not Apple Silicon: no macOS, even with the unit installed.
+        let found = run(targets(&configured, &[], None, false, |_| async { true }));
+        let names: Vec<_> = found.iter().map(|target| target.name.as_str()).collect();
+        assert_eq!(names, ["Fedora"]);
     }
 }

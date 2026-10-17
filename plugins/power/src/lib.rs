@@ -437,6 +437,7 @@ fn find(configured: Vec<Configured>) -> Task<Message> {
             &configured,
             &can.entries,
             running.as_deref(),
+            boot::asahi(),
             |unit| async move {
                 eave_dbus::systemd::system::unit(&unit)
                     .await

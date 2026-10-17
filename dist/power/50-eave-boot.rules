@@ -1,0 +1,15 @@
+// Lets the user at the machine start eave's boot helpers, which only pick what the next boot
+// starts, and nothing else: no other unit, and no stopping or editing them (D-131). They could
+// reboot anyway; this lets them pick into what without a password.
+polkit.addRule(function (action, subject) {
+    if (action.id != "org.freedesktop.systemd1.manage-units" ||
+        action.lookup("verb") != "start" ||
+        !subject.active || !subject.local) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var unit = action.lookup("unit") || "";
+    if (/^eave-boot-(macos|grub@.+|efi@[0-9A-Fa-f]{4})\.service$/.test(unit)) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});
